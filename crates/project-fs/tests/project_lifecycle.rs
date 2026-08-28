@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use project_core::{
     ContentType, CreationContent, CreationKind, IdGenerator, MaterialContent, ProjectContentStore,
@@ -155,6 +156,25 @@ fn tmp_dir(name: &str) -> PathBuf {
 
 fn project_json_path(base: &Path, id: &str) -> PathBuf {
     base.join("projects").join(id).join("project.json")
+}
+
+fn lock_path(base: &Path, id: &str) -> PathBuf {
+    base.join("projects").join(id).join("project.lock")
+}
+
+/// Open `project.lock` and take an exclusive kernel lock, simulating another
+/// live writer. The returned `File` must be kept alive to hold the lock.
+fn hold_advisory_lock(path: &Path) -> fs::File {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap();
+    file.try_lock()
+        .expect("test must acquire an exclusive lock on project.lock");
+    file
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,20 +1505,12 @@ fn replace_conflicts_when_lock_is_held() {
     let mut svc = make_service(&base);
     let p = svc.create_project("Test").unwrap();
 
-    // Hold the lock file to simulate a concurrent writer.
-    let lock = base
-        .join("projects")
-        .join(p.id.as_str())
-        .join("project.lock");
-    fs::write(&lock, b"").unwrap();
+    let _holder = hold_advisory_lock(&lock_path(&base, p.id.as_str()));
 
     let err = svc.rename_project(&p.id, "Should Conflict");
     assert!(
-        matches!(
-            err,
-            Err(ProjectCoreError::Conflict { .. }) | Err(ProjectCoreError::NotFound(_))
-        ),
-        "rename under a held lock must conflict, got: {:?}",
+        matches!(err, Err(ProjectCoreError::Conflict { .. })),
+        "rename under an active writer lock must conflict, got: {:?}",
         err
     );
 }
@@ -1544,14 +1556,12 @@ fn atomic_replacement_leaves_valid_json_and_no_temp_files() {
         assert_eq!(back.name.as_str(), name);
     }
 
-    // No temporary or lock files may remain in the project directory.
+    // Temporary files must not remain. The advisory lock file may remain
+    // because it is never unlinked (ownership-safe protocol).
     let pd = base.join("projects").join(p.id.as_str());
     for entry in fs::read_dir(&pd).unwrap() {
         let name = entry.unwrap().file_name().to_string_lossy().to_string();
-        assert!(
-            !name.starts_with(".tmp") && name != "project.lock",
-            "unexpected residue: {name}"
-        );
+        assert!(!name.starts_with(".tmp"), "unexpected residue: {name}");
     }
 }
 
@@ -1804,27 +1814,51 @@ fn read_rejects_symlink_into_workspace_even_when_still_inside_project() {
     );
 }
 
-// --- 4. RAII lock with crash-safe stale recovery ---
+// --- 4. Ownership-safe kernel lock (no time-based reclaim) ---
 
 #[test]
-fn stale_lock_is_reclaimed_and_replace_succeeds() {
-    let base = tmp_dir("stale-lock-recovery");
+fn orphaned_lock_file_without_holder_does_not_block() {
+    let base = tmp_dir("orphaned-lock-file");
     let mut svc = make_service(&base);
     let p = svc.create_project("Test").unwrap();
 
-    // Plant a lock with an old timestamp to simulate a crashed writer.
-    let lock = base
-        .join("projects")
-        .join(p.id.as_str())
-        .join("project.lock");
-    let old = now_secs() - 3600;
-    fs::write(&lock, old.to_string()).unwrap();
+    // Leftover file after a crash: no live kernel holder. Must not block.
+    let lock = lock_path(&base, p.id.as_str());
+    fs::write(&lock, "abandoned-after-crash").unwrap();
 
     svc.rename_project(&p.id, "Recovered").unwrap();
     let reloaded = svc.open_project(&p.id).unwrap();
     assert_eq!(reloaded.name.as_str(), "Recovered");
-    // RAII Drop removed the stale lock once reclaimed.
-    assert!(!lock.exists());
+}
+
+#[test]
+fn active_writer_lock_is_never_reclaimed() {
+    let base = tmp_dir("active-writer-never-reclaimed");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    let lock = lock_path(&base, p.id.as_str());
+    fs::write(&lock, "0").unwrap();
+    let holder = hold_advisory_lock(&lock);
+
+    let err = svc.rename_project(&p.id, "Stolen");
+    assert!(
+        matches!(err, Err(ProjectCoreError::Conflict { .. })),
+        "an active writer must never be reclaimed, got: {:?}",
+        err
+    );
+
+    // The original holder must still own the kernel lock.
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "holder must still exclusively own the lock"
+    );
+    drop(holder);
 }
 
 #[test]
@@ -1833,14 +1867,10 @@ fn lock_is_released_after_successful_replace() {
     let mut svc = make_service(&base);
     let p = svc.create_project("Test").unwrap();
     svc.rename_project(&p.id, "Renamed").unwrap();
-    let lock = base
-        .join("projects")
-        .join(p.id.as_str())
-        .join("project.lock");
-    assert!(
-        !lock.exists(),
-        "lock must be removed after a successful replace"
-    );
+    // Successor can acquire: the previous replace released the kernel lock.
+    svc.rename_project(&p.id, "Renamed Again").unwrap();
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(reloaded.name.as_str(), "Renamed Again");
 }
 
 #[test]
@@ -1856,13 +1886,103 @@ fn lock_is_released_after_conflict_replace() {
     let err = repo.replace(&proj, &stale);
     assert!(matches!(err, Err(ProjectCoreError::Conflict { .. })));
 
-    let lock = base
-        .join("projects")
-        .join(p.id.as_str())
-        .join("project.lock");
+    svc.rename_project(&p.id, "After Conflict").unwrap();
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(reloaded.name.as_str(), "After Conflict");
+}
+
+#[test]
+fn failed_acquire_does_not_unlink_holder_lock() {
+    let base = tmp_dir("lock-no-unlink-successor");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    let lock = lock_path(&base, p.id.as_str());
+    let holder = hold_advisory_lock(&lock);
+
+    assert!(matches!(
+        svc.rename_project(&p.id, "Should Conflict"),
+        Err(ProjectCoreError::Conflict { .. })
+    ));
     assert!(
-        !lock.exists(),
-        "RAII lock must be released after a conflicted replace"
+        lock.is_file(),
+        "failed acquire must not unlink the lock file"
+    );
+
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "holder lock must remain exclusive after a failed successor acquire"
+    );
+    drop(holder);
+    probe
+        .try_lock()
+        .expect("lock must be acquirable after holder drop");
+}
+
+#[test]
+fn lock_released_on_panic_unwind_allows_successor() {
+    let base = tmp_dir("lock-panic-release");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let lock = lock_path(&base, p.id.as_str());
+
+    let join = thread::spawn(move || {
+        let _holder = hold_advisory_lock(&lock);
+        panic!("simulated writer panic");
+    });
+    assert!(join.join().is_err());
+
+    svc.rename_project(&p.id, "After Panic").unwrap();
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(reloaded.name.as_str(), "After Panic");
+}
+
+#[test]
+fn concurrent_replace_exactly_one_writer_commits() {
+    let base = tmp_dir("concurrent-replace");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let expected = svc.open_project(&p.id).unwrap().updated_at;
+    let id = p.id.clone();
+
+    let results: Vec<_> = thread::scope(|s| {
+        let a = s.spawn(|| {
+            let mut repo = FilesystemProjectRepository::new(&base);
+            let mut proj = repo.get(&id).unwrap();
+            proj.name = ProjectName::parse("Alpha").unwrap();
+            proj.updated_at = Timestamp::parse("2026-08-28T15:00:01Z").unwrap();
+            repo.replace(&proj, &expected)
+        });
+        let b = s.spawn(|| {
+            let mut repo = FilesystemProjectRepository::new(&base);
+            let mut proj = repo.get(&id).unwrap();
+            proj.name = ProjectName::parse("Beta").unwrap();
+            proj.updated_at = Timestamp::parse("2026-08-28T15:00:02Z").unwrap();
+            repo.replace(&proj, &expected)
+        });
+        vec![a.join().unwrap(), b.join().unwrap()]
+    });
+
+    let wins = results.iter().filter(|r| r.is_ok()).count();
+    let conflicts = results
+        .iter()
+        .filter(|r| matches!(r, Err(ProjectCoreError::Conflict { .. })))
+        .count();
+    assert_eq!(
+        wins, 1,
+        "exactly one concurrent replace must commit: {results:?}"
+    );
+    assert_eq!(conflicts, 1, "the other writer must conflict: {results:?}");
+
+    let name = svc.open_project(&id).unwrap().name.as_str().to_owned();
+    assert!(
+        name == "Alpha" || name == "Beta",
+        "unexpected winner {name}"
     );
 }
 
@@ -1953,11 +2073,4 @@ fn padded_persisted_project_name_is_reparsed() {
         "Test",
         "reparsed ProjectName must be the trimmed canonical form"
     );
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

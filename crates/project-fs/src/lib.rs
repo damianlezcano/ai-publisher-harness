@@ -13,9 +13,8 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use project_core::{
     CoreResult, Creation, CreationContent, CreationId, Material, MaterialContent, MaterialId,
@@ -30,10 +29,6 @@ const PROJECT_JSON: &str = "project.json";
 const STAGING_PREFIX: &str = ".staging-";
 const LOCK_FILE: &str = "project.lock";
 const ROOTS: &[&str] = &["inputs", "workspace", "outputs", "publish"];
-/// A lock file older than this is considered stale (abandoned after a crash)
-/// and is reclaimed. A single `replace` is a fast metadata write, so 30s is a
-/// generous upper bound on legitimate hold time.
-const LOCK_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// Atomically write `content` to `path`.
 ///
@@ -208,11 +203,17 @@ fn sha256_hex(data: &[u8]) -> project_core::Sha256Digest {
         .expect("SHA-256 always yields a valid 64-char hex digest")
 }
 
-/// RAII lock guard that guarantees the lock file is removed on every exit path,
-/// including errors and panics, so a project can never remain permanently
-/// locked by this process.
+/// Ownership-safe single-writer lock for `replace`.
+///
+/// The kernel owns the exclusive lock on an open `project.lock` handle
+/// (`File::try_lock` / flock / LockFileEx). Closing the handle — Drop, panic
+/// unwind, or process exit — releases it. The lock file is never unlinked:
+/// unlinking would let a successor create a new inode, after which this
+/// guard's Drop could delete the successor's lock. An orphaned file from a
+/// crash is reusable because it has no live holder; an active writer is
+/// never reclaimed by a timeout.
 struct ProjectLock {
-    path: PathBuf,
+    file: fs::File,
 }
 
 impl ProjectLock {
@@ -224,66 +225,39 @@ impl ProjectLock {
         }
 
         let path = repo.lock_file(id);
-        for attempt in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    if write!(f, "{}", now_unix_secs()).is_err() || f.sync_all().is_err() {
-                        let _ = fs::remove_file(&path);
-                        return Err(ProjectCoreError::WriteFailed);
-                    }
-                    return Ok(Self { path });
-                }
-                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                    // A lock exists. Reclaim it only if provably stale (a
-                    // crashed writer left it behind); otherwise treat it as a
-                    // live concurrent writer and conflict.
-                    if attempt == 0 && lock_is_stale(&path) {
-                        let _ = fs::remove_file(&path);
-                        continue;
-                    }
-                    return Err(ProjectCoreError::Conflict {
-                        project_id: id.clone(),
-                    });
-                }
-                Err(_) => return Err(ProjectCoreError::WriteFailed),
-            }
+        reject_symlink_path(&path, &project_dir)?;
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|_| ProjectCoreError::WriteFailed)?;
+
+        if fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(ProjectCoreError::SymlinkRejected);
         }
-        Err(ProjectCoreError::Conflict {
-            project_id: id.clone(),
-        })
+
+        match file.try_lock() {
+            Ok(()) => Ok(Self { file }),
+            Err(fs::TryLockError::WouldBlock) => Err(ProjectCoreError::Conflict {
+                project_id: id.clone(),
+            }),
+            Err(_) => Err(ProjectCoreError::WriteFailed),
+        }
     }
 }
 
 impl Drop for ProjectLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        // Unlock explicitly; the File drop also releases the kernel lock.
+        // Never remove the lock path: that would race a successor's inode.
+        let _ = self.file.unlock();
     }
-}
-
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// True if the lock file was created more than `LOCK_MAX_AGE` ago. Returns
-/// false for missing or malformed content (treated as a live, unknown-age
-/// lock), which never causes a write to proceed against it.
-fn lock_is_stale(path: &Path) -> bool {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let created = match content.trim().parse::<u64>() {
-        Ok(secs) => secs,
-        Err(_) => return false,
-    };
-    now_unix_secs().saturating_sub(created) >= LOCK_MAX_AGE.as_secs()
 }
 
 // ---------------------------------------------------------------------------
@@ -414,9 +388,8 @@ impl ProjectRepository for FilesystemProjectRepository {
         let id = &project.id;
         let pj = self.project_json(id);
 
-        // Take the single-writer lock (RAII: released on every exit path,
-        // including errors and panics) and validate the project directory
-        // chain before writing project.json.
+        // Kernel-owned exclusive lock: released on Drop, panic, and process
+        // exit. Never reclaimed from an active writer.
         let _lock = ProjectLock::acquire(self, id)?;
         let canon_project = canon_project_dir(&self.base, id)?;
         reject_symlink_path(&pj, &self.project_dir(id))?;
