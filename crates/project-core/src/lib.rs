@@ -263,39 +263,57 @@ pub enum CreationKind {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Material {
+    #[serde(rename = "materialId")]
     pub id: MaterialId,
+    #[serde(rename = "displayName")]
     pub display_name: String,
+    #[serde(rename = "originalFileName")]
     pub original_file_name: String,
+    #[serde(rename = "relativePath")]
     pub relative_path: RelativeProjectPath,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
+    #[serde(rename = "byteSize")]
     pub byte_size: u64,
     pub sha256: Sha256Digest,
+    #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Creation {
+    #[serde(rename = "creationId")]
     pub id: CreationId,
+    #[serde(rename = "displayName")]
     pub display_name: String,
     pub kind: CreationKind,
+    #[serde(rename = "relativePath")]
     pub relative_path: RelativeProjectPath,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
+    #[serde(rename = "byteSize")]
     pub byte_size: u64,
     pub revision: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentCreationId", skip_serializing_if = "Option::is_none")]
     pub parent_creation_id: Option<CreationId>,
+    #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct Project {
+    #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
+    #[serde(rename = "projectId")]
     pub id: ProjectId,
     pub name: ProjectName,
+    #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
+    #[serde(rename = "updatedAt")]
     pub updated_at: Timestamp,
     pub state: ProjectState,
     pub materials: Vec<Material>,

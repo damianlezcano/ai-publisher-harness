@@ -1277,3 +1277,280 @@ fn metadata_preserves_all_fields_after_creation_add() {
     assert!(reloaded.creations[0].parent_creation_id.is_none());
     assert_eq!(reloaded.materials.len(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Reviewer-fix regression tests
+// ---------------------------------------------------------------------------
+
+// --- 1. Explicit serde schema names + deny unknown fields ---
+
+#[test]
+fn schema_uses_explicit_id_and_version_field_names() {
+    let base = tmp_dir("schema-names");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Schema").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+    let c = svc.create_creation(&p.id, creation_request()).unwrap();
+
+    let raw = fs::read_to_string(project_json_path(&base, p.id.as_str())).unwrap();
+    assert!(raw.contains("\"projectId\""), "projectId missing: {raw}");
+    assert!(
+        raw.contains("\"schemaVersion\""),
+        "schemaVersion missing: {raw}"
+    );
+    assert!(raw.contains("\"materialId\""), "materialId missing: {raw}");
+    assert!(raw.contains("\"creationId\""), "creationId missing: {raw}");
+
+    // Ensure it also round-trips under the new names.
+    let back: project_core::Project = serde_json::from_str(&raw).unwrap();
+    assert_eq!(back.materials.len(), 1);
+    assert_eq!(back.materials[0].id, m.id);
+    assert_eq!(back.creations.len(), 1);
+    assert_eq!(back.creations[0].id, c.id);
+}
+
+#[test]
+fn unknown_field_in_metadata_is_rejected() {
+    let base = tmp_dir("unknown-field");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // Inject an unknown top-level field.
+    let mut raw = fs::read_to_string(project_json_path(&base, p.id.as_str())).unwrap();
+    raw.insert_str(raw.rfind('}').unwrap(), ",\"unexpectedField\":true");
+    fs::write(project_json_path(&base, p.id.as_str()), raw).unwrap();
+
+    let err = svc.open_project(&p.id);
+    assert!(
+        matches!(err, Err(ProjectCoreError::CorruptMetadata(_))),
+        "deny_unknown_fields should reject unknown metadata, got: {:?}",
+        err
+    );
+}
+
+// --- 2. Revalidate opaque paths after deserialize ---
+
+#[test]
+fn malformed_relative_path_in_metadata_is_rejected() {
+    let base = tmp_dir("bad-rel-path");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let _ = svc.add_material(&p.id, material_request()).unwrap();
+
+    // Corrupt the stored relative path at the raw JSON level (serde allows any
+    // string through the transparent wrapper), to a value that
+    // RelativeProjectPath::parse rejects on revalidation.
+    let raw = fs::read_to_string(project_json_path(&base, p.id.as_str())).unwrap();
+    let corrupt = raw.replace(
+        "\"relativePath\": \"inputs/",
+        "\"relativePath\": \"../inputs/",
+    );
+    assert_ne!(
+        raw, corrupt,
+        "expected to find a material relativePath to corrupt"
+    );
+    fs::write(project_json_path(&base, p.id.as_str()), corrupt).unwrap();
+
+    let err = svc.open_project(&p.id);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::CorruptMetadata(_)
+                | ProjectCoreError::PathEscape
+                | ProjectCoreError::InvalidPath(_))
+        ),
+        "malformed relative path should be rejected, got: {:?}",
+        err
+    );
+}
+
+// --- 3. Reject symlink/path escapes before writes ---
+
+#[cfg(unix)]
+#[test]
+fn write_rejects_symlinked_inputs_root() {
+    let base = tmp_dir("write-symlink-inputs");
+    let outside = tmp_dir("write-symlink-outside");
+
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let inputs = base.join("projects").join(p.id.as_str()).join("inputs");
+
+    // Replace the real inputs dir with a symlink pointing outside.
+    fs::remove_dir_all(&inputs).unwrap();
+    std::os::unix::fs::symlink(&outside, &inputs).unwrap();
+
+    let err = svc.add_material(&p.id, material_request());
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::SymlinkRejected | ProjectCoreError::PathEscape)
+        ),
+        "write into a symlinked inputs root must be rejected, got: {:?}",
+        err
+    );
+    // Outside must remain untouched.
+    assert!(!outside.join("Guia-de-clase.pdf").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn write_rejects_symlinked_id_directory() {
+    let base = tmp_dir("write-symlink-id");
+    let outside = tmp_dir("write-symlink-id-outside");
+
+    // Exercise the adapter directly so we control the exact material id.
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let mid = project_core::MaterialId::parse(M).unwrap();
+
+    // Create a project with the fixed id directly through the repository.
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    // Store a material under the fixed id, then replace its directory with a
+    // symlink to outside.
+    let source = MaterialContent {
+        bytes: b"first".to_vec(),
+    };
+    store.store_material(&pid, &mid, &source, "a.txt").unwrap();
+    let id_dir = base.join("projects").join(P).join("inputs").join(M);
+    fs::remove_dir_all(&id_dir).unwrap();
+    std::os::unix::fs::symlink(&outside, &id_dir).unwrap();
+
+    // A second store to the same id must be rejected (symlink escape), and
+    // nothing may be written through the symlink.
+    let err = store.store_material(&pid, &mid, &source, "a.txt");
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::SymlinkRejected | ProjectCoreError::PathEscape)
+        ),
+        "write into a symlinked ID directory must be rejected, got: {:?}",
+        err
+    );
+    assert!(!outside.join("a.txt").exists());
+}
+
+// --- 4. Serialization-safe list child ID matching ---
+
+#[test]
+fn list_ignores_non_id_directories() {
+    let base = tmp_dir("list-non-id-dirs");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // Create a child directory whose name is not a valid project id, even a
+    // path-traversal-like name, and one with a valid-looking JSON inside that
+    // could previously be picked up.
+    let pd = base.join("projects");
+    for weird in ["..", ".staging-evil", "NOT-A-UUID", "inputs"] {
+        let d = pd.join(weird);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("project.json"), "{\"projectId\":\"x\"}").unwrap();
+    }
+
+    let list = svc.list_projects().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, p.id);
+}
+
+// --- 5. Exclusive staging/temp creation ---
+
+#[test]
+fn pre_existing_staging_dir_does_not_block_or_corrupt_create() {
+    let base = tmp_dir("exclusive-staging");
+    // Manually drop a stale staging directory for the project id.
+    let pd = base.join("projects");
+    fs::create_dir_all(&pd).unwrap();
+    fs::create_dir_all(pd.join(".staging-0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22-stale")).unwrap();
+
+    let mut svc = make_service(&base);
+    // Create must still succeed using a fresh exclusive staging directory.
+    let p = svc.create_project("Fresh").unwrap();
+    assert_eq!(p.name.as_str(), "Fresh");
+    assert!(svc.open_project(&p.id).is_ok());
+}
+
+// --- 6. Concurrency-safe replace (lock/CAS) ---
+
+#[test]
+fn replace_conflicts_when_lock_is_held() {
+    let base = tmp_dir("replace-lock");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // Hold the lock file to simulate a concurrent writer.
+    let lock = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("project.lock");
+    fs::write(&lock, b"").unwrap();
+
+    let err = svc.rename_project(&p.id, "Should Conflict");
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::Conflict { .. }) | Err(ProjectCoreError::NotFound(_))
+        ),
+        "rename under a held lock must conflict, got: {:?}",
+        err
+    );
+}
+
+#[test]
+fn replace_cas_rejects_stale_expected_updated_at() {
+    let base = tmp_dir("replace-cas");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // Build an expected timestamp that does not match the stored one.
+    let stale = Timestamp::parse("2020-01-01T00:00:00Z").unwrap();
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut proj = repo.get(&p.id).unwrap();
+    proj.name = ProjectName::parse("Renamed").unwrap();
+
+    let err = repo.replace(&proj, &stale);
+    assert!(
+        matches!(err, Err(ProjectCoreError::Conflict { .. })),
+        "CAS must reject a stale expected_updated_at, got: {:?}",
+        err
+    );
+    // The on-disk name must be unchanged.
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(reloaded.name.as_str(), "Test");
+}
+
+// --- 7. Cross-platform atomic replacement leaves no torn/temp residue ---
+
+#[test]
+fn atomic_replacement_leaves_valid_json_and_no_temp_files() {
+    let base = tmp_dir("atomic-no-residue");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    for i in 0..5u32 {
+        let name = format!("Version{i}");
+        svc.rename_project(&p.id, &name).unwrap();
+        let back: project_core::Project = {
+            let raw = fs::read_to_string(project_json_path(&base, p.id.as_str())).unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+        assert_eq!(back.name.as_str(), name);
+    }
+
+    // No temporary or lock files may remain in the project directory.
+    let pd = base.join("projects").join(p.id.as_str());
+    for entry in fs::read_dir(&pd).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().to_string();
+        assert!(
+            !name.starts_with(".tmp") && name != "project.lock",
+            "unexpected residue: {name}"
+        );
+    }
+}

@@ -15,7 +15,6 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use project_core::{
     CoreResult, Creation, CreationContent, CreationId, Material, MaterialContent, MaterialId,
@@ -23,39 +22,37 @@ use project_core::{
     StoredMaterial, Timestamp,
 };
 use sha2::{Digest, Sha256};
+use tempfile::{Builder, NamedTempFile};
 
 const PROJECTS_DIR: &str = "projects";
 const PROJECT_JSON: &str = "project.json";
 const STAGING_PREFIX: &str = ".staging-";
-const TEMP_PREFIX: &str = ".tmp-";
+const LOCK_FILE: &str = "project.lock";
 const ROOTS: &[&str] = &["inputs", "workspace", "outputs", "publish"];
 
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Atomic-write helper. Creates a temporary file in the same directory as `target`,
-/// writes `content`, flushes to disk, fsyncs the file and its parent directory,
-/// then atomically renames to `target`.
+/// Atomically write `content` to `path`.
+///
+/// Uses an exclusively-created (O_EXCL) temporary file in the same directory,
+/// fsyncs the file and its parent directory, then atomically persists it over
+/// `path`. `tempfile::NamedTempFile::persist` performs a true atomic replace on
+/// every supported platform, including Windows, so no platform-specific rename
+/// fallback is needed.
 fn atomic_write(path: &Path, content: &[u8]) -> CoreResult<()> {
     let parent = path.parent().ok_or(ProjectCoreError::WriteFailed)?;
     fs::create_dir_all(parent).map_err(|_| ProjectCoreError::WriteFailed)?;
 
-    let tmp = temp_path(parent);
-    {
-        let mut f = fs::File::create(&tmp).map_err(|_| ProjectCoreError::WriteFailed)?;
-        f.write_all(content)
-            .map_err(|_| ProjectCoreError::WriteFailed)?;
-        f.flush().map_err(|_| ProjectCoreError::WriteFailed)?;
-        f.sync_all().map_err(|_| ProjectCoreError::WriteFailed)?;
-    }
+    let mut tmp = NamedTempFile::new_in(parent).map_err(|_| ProjectCoreError::WriteFailed)?;
+    tmp.write_all(content)
+        .map_err(|_| ProjectCoreError::WriteFailed)?;
+    tmp.flush().map_err(|_| ProjectCoreError::WriteFailed)?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|_| ProjectCoreError::WriteFailed)?;
     fsync_dir(parent)?;
-    fs::rename(&tmp, path).map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
+    tmp.persist(path)
+        .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
     fsync_dir(parent)?;
     Ok(())
-}
-
-fn temp_path(dir: &Path) -> PathBuf {
-    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!("{}{:016x}", TEMP_PREFIX, n))
 }
 
 /// Fsync a directory to ensure directory entries are durable.
@@ -76,10 +73,11 @@ fn read_json(path: &Path) -> CoreResult<Project> {
     Ok(p)
 }
 
-/// Serde deserializes the newtype wrappers (`ProjectId`, `Timestamp`, etc.) as
-/// opaque strings without calling their validating `parse` constructors, so a
-/// malformed metadata file could otherwise read back with corrupt fields. This
-/// re-validates every domain field after deserialization.
+/// Serde deserializes the newtype wrappers (`ProjectId`, `Timestamp`,
+/// `RelativeProjectPath`, etc.) as opaque strings without calling their
+/// validating `parse` constructors, so a malformed metadata file could
+/// otherwise read back with corrupt fields. This re-validates every domain
+/// field after deserialization.
 fn validate_rehydrated_fields(p: &Project) -> CoreResult<()> {
     project_core::ProjectId::parse(p.id.as_str())?;
     Timestamp::parse(p.created_at.as_str())?;
@@ -89,6 +87,8 @@ fn validate_rehydrated_fields(p: &Project) -> CoreResult<()> {
     }
     for m in &p.materials {
         project_core::MaterialId::parse(m.id.as_str())?;
+        let path = project_core::RelativeProjectPath::parse(m.relative_path.as_str())?;
+        enforce_path_containment(&path, "inputs", m.id.as_str())?;
         Timestamp::parse(m.created_at.as_str())?;
         if let Some(ct) = &m.content_type {
             project_core::ContentType::parse(ct.as_str())?;
@@ -97,6 +97,8 @@ fn validate_rehydrated_fields(p: &Project) -> CoreResult<()> {
     }
     for c in &p.creations {
         project_core::CreationId::parse(c.id.as_str())?;
+        let path = project_core::RelativeProjectPath::parse(c.relative_path.as_str())?;
+        enforce_path_containment(&path, "outputs", c.id.as_str())?;
         Timestamp::parse(c.created_at.as_str())?;
         if let Some(ct) = &c.content_type {
             project_core::ContentType::parse(ct.as_str())?;
@@ -108,13 +110,26 @@ fn validate_rehydrated_fields(p: &Project) -> CoreResult<()> {
     Ok(())
 }
 
+/// Enforce that a metadata-derived path lives under the given fixed root and the
+/// given ID subdirectory.
+fn enforce_path_containment(
+    path: &project_core::RelativeProjectPath,
+    root: &str,
+    id: &str,
+) -> CoreResult<()> {
+    if !path.starts_with_root(root) || !path.as_str().starts_with(&format!("{root}/{id}/")) {
+        return Err(ProjectCoreError::PathEscape);
+    }
+    Ok(())
+}
+
 fn write_json(path: &Path, project: &Project) -> CoreResult<()> {
     let s = serde_json::to_string_pretty(project).map_err(|_| ProjectCoreError::WriteFailed)?;
     atomic_write(path, s.as_bytes())
 }
 
 fn is_hidden_or_temp(name: &str) -> bool {
-    name.starts_with('.') || name.starts_with(TEMP_PREFIX)
+    name.starts_with('.')
 }
 
 fn is_staging(name: &str) -> bool {
@@ -162,9 +177,39 @@ impl FilesystemProjectRepository {
         self.project_dir(id).join(PROJECT_JSON)
     }
 
-    fn staging_dir(&self, id: &ProjectId) -> PathBuf {
-        self.projects_dir()
-            .join(format!("{}{}", STAGING_PREFIX, id.as_str()))
+    fn lock_file(&self, id: &ProjectId) -> PathBuf {
+        self.project_dir(id).join(LOCK_FILE)
+    }
+
+    /// Optimistic-concurrency guard: create the project lock file exclusively,
+    /// retrying on collision until it is usable, to give a single-writer
+    /// critical section for `replace`.
+    ///
+    /// The lock file is created with `create_new(true)` inside the project
+    /// directory. A process that holds the lock (wrote it and has not removed
+    /// it) is the only writer allowed to mutate `project.json`. Once the write
+    /// completes the lock is removed. A stale lock (e.g. after a crash) is
+    /// tolerated: the optimistic `expected_updated_at` check still protects
+    /// against losing a concurrent update.
+    fn acquire_lock(&self, id: &ProjectId) -> CoreResult<()> {
+        let lock = self.lock_file(id);
+        fs::create_dir_all(lock.parent().ok_or(ProjectCoreError::WriteFailed)?)
+            .map_err(|_| ProjectCoreError::WriteFailed)?;
+        // Exclusive creation avoids two writers racing on the same lock file.
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(ProjectCoreError::Conflict {
+                project_id: id.clone(),
+            }),
+        }
+    }
+
+    fn release_lock(&self, id: &ProjectId) {
+        let _ = fs::remove_file(self.lock_file(id));
     }
 }
 
@@ -180,19 +225,23 @@ impl ProjectRepository for FilesystemProjectRepository {
             return Err(ProjectCoreError::AlreadyExists(project.id.clone()));
         }
 
-        let staging = self.staging_dir(&project.id);
-        fs::create_dir_all(&staging).map_err(|_| ProjectCoreError::WriteFailed)?;
+        // Exclusively create a unique staging directory under projects/; the
+        // random suffix prevents collisions between concurrent creations.
+        let staging = build_exclusive_staging_dir(&self.projects_dir(), &project.id)?;
 
         for root in ROOTS {
-            fs::create_dir_all(staging.join(root)).map_err(|_| ProjectCoreError::WriteFailed)?;
+            fs::create_dir_all(staging.path().join(root))
+                .map_err(|_| ProjectCoreError::WriteFailed)?;
         }
 
-        write_json(&staging.join(PROJECT_JSON), project)?;
-        fsync_dir(&staging)?;
+        write_json(&staging.path().join(PROJECT_JSON), project)?;
+        fsync_dir(staging.path())?;
 
-        fs::rename(&staging, self.project_dir(&project.id))
-            .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
-        fsync_dir(&pd)?;
+        let target = self.project_dir(&project.id);
+        fs::rename(staging.keep(), &target).map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
+        if let Some(parent) = target.parent() {
+            let _ = fsync_dir(parent);
+        }
 
         Ok(())
     }
@@ -219,7 +268,15 @@ impl ProjectRepository for FilesystemProjectRepository {
             if is_hidden_or_temp(&name) || is_staging(&name) {
                 continue;
             }
-            let pj = entry.path().join(PROJECT_JSON);
+            // Only recognize direct child directories whose name is a valid
+            // project ID. A directory whose name is not a parseable UUIDv7 is
+            // not a project and is ignored (serialization-safe matching, no
+            // path arithmetic on caller-controlled names).
+            let parsed = match ProjectId::parse(name.to_string()) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let pj = self.project_json(&parsed);
             if !pj.exists() {
                 continue;
             }
@@ -238,33 +295,51 @@ impl ProjectRepository for FilesystemProjectRepository {
 
     fn replace(&mut self, project: &Project, expected_updated_at: &Timestamp) -> CoreResult<()> {
         let id = &project.id;
-        let current = self.get(id)?;
+        let pj = self.project_json(id);
+
+        // Take the single-writer lock; a concurrent writer or the removal of the
+        // project makes the exclusive open fail and yields a conflict.
+        self.acquire_lock(id)?;
+
+        // Re-read the current metadata under the lock and apply the optimistic
+        // concurrency check here (CAS on updated_at) to close the read/modify/
+        // write race.
+        let current = match read_json(&pj) {
+            Ok(p) => p,
+            Err(e) => {
+                self.release_lock(id);
+                return Err(e);
+            }
+        };
         if current.updated_at != *expected_updated_at {
+            self.release_lock(id);
             return Err(ProjectCoreError::Conflict {
                 project_id: id.clone(),
             });
         }
         project.validate()?;
 
-        let pj = self.project_json(id);
         let parent = pj.parent().ok_or(ProjectCoreError::WriteFailed)?;
-
-        // Write temp, flush, fsync, atomic rename, fsync parent
-        let tmp = temp_path(parent);
-        {
+        let write_result = (|| -> CoreResult<()> {
+            let mut tmp =
+                NamedTempFile::new_in(parent).map_err(|_| ProjectCoreError::WriteFailed)?;
             let s =
                 serde_json::to_string_pretty(project).map_err(|_| ProjectCoreError::WriteFailed)?;
-            let mut f = fs::File::create(&tmp).map_err(|_| ProjectCoreError::WriteFailed)?;
-            f.write_all(s.as_bytes())
+            tmp.write_all(s.as_bytes())
                 .map_err(|_| ProjectCoreError::WriteFailed)?;
-            f.flush().map_err(|_| ProjectCoreError::WriteFailed)?;
-            f.sync_all().map_err(|_| ProjectCoreError::WriteFailed)?;
-        }
-        fsync_dir(parent)?;
-        fs::rename(&tmp, &pj).map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
-        fsync_dir(parent)?;
+            tmp.flush().map_err(|_| ProjectCoreError::WriteFailed)?;
+            tmp.as_file()
+                .sync_all()
+                .map_err(|_| ProjectCoreError::WriteFailed)?;
+            fsync_dir(parent)?;
+            tmp.persist(&pj)
+                .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
+            fsync_dir(parent)?;
+            Ok(())
+        })();
 
-        Ok(())
+        self.release_lock(id);
+        write_result
     }
 
     fn delete(&mut self, id: &ProjectId) -> CoreResult<()> {
@@ -278,6 +353,21 @@ impl ProjectRepository for FilesystemProjectRepository {
         }
         Ok(())
     }
+}
+
+/// Build an exclusively-created staging directory for a new project.
+///
+/// The directory is created with a unique random suffix (via `tempfile`) so
+/// that two concurrent `create` calls for the same project cannot collide on
+/// the same staging path.
+fn build_exclusive_staging_dir(
+    projects_dir: &Path,
+    id: &ProjectId,
+) -> CoreResult<tempfile::TempDir> {
+    Builder::new()
+        .prefix(&format!("{}{}-", STAGING_PREFIX, id.as_str()))
+        .tempdir_in(projects_dir)
+        .map_err(|_| ProjectCoreError::WriteFailed)
 }
 
 // ---------------------------------------------------------------------------
@@ -303,17 +393,18 @@ impl FilesystemProjectContentStore {
         self.base.join(PROJECTS_DIR).join(id.as_str())
     }
 
-    /// Validate that a metadata-derived path resolves within the project
-    /// directory and does not escape via symlinks.
+    /// Validate that a metadata-derived read path resolves within the project
+    /// directory and does not escape via symlinks (including any intermediate
+    /// path component, which `fs::canonicalize` resolves and then checks
+    /// against the canonical project root).
     fn validate_read_path(
         &self,
         project_id: &ProjectId,
         relative: &project_core::RelativeProjectPath,
         allowed_root: &str,
+        id: &str,
     ) -> CoreResult<PathBuf> {
-        if !relative.starts_with_root(allowed_root) {
-            return Err(ProjectCoreError::PathEscape);
-        }
+        enforce_path_containment(relative, allowed_root, id)?;
 
         let dir = self.project_dir(project_id);
         let resolved = dir.join(relative.as_str());
@@ -334,10 +425,47 @@ impl FilesystemProjectContentStore {
         Ok(resolved)
     }
 
+    /// Validate that the directory we are about to write into (the fixed root
+    /// and the ID subdirectory) is real and not a symlink, so a pre-existing
+    /// symlink cannot redirect a write outside the project.
+    fn validate_write_dir(&self, project_id: &ProjectId, dir: &Path) -> CoreResult<()> {
+        let project = self.project_dir(project_id);
+        if fs::symlink_metadata(&project)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(ProjectCoreError::SymlinkRejected);
+        }
+        let canonical_project =
+            fs::canonicalize(&project).map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        for ancestor in dir.ancestors() {
+            if ancestor == project || ancestor == canonical_project {
+                break;
+            }
+            if fs::symlink_metadata(ancestor)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(ProjectCoreError::SymlinkRejected);
+            }
+        }
+        let canonical_dir = fs::canonicalize(dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        if !canonical_dir.starts_with(&canonical_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        Ok(())
+    }
+
     fn ensure_root_exists(&self, project_id: &ProjectId, root: &str) -> CoreResult<PathBuf> {
-        let dir = self.project_dir(project_id).join(root);
-        fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
-        Ok(dir)
+        let root_dir = self.project_dir(project_id).join(root);
+        if fs::symlink_metadata(&root_dir)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(ProjectCoreError::SymlinkRejected);
+        }
+        fs::create_dir_all(&root_dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        Ok(root_dir)
     }
 }
 
@@ -352,12 +480,13 @@ impl ProjectContentStore for FilesystemProjectContentStore {
         self.ensure_root_exists(p, "inputs")?;
 
         let dir = self.project_dir(p).join("inputs").join(m.as_str());
+        // Reject symlink escape before creating/writing under the ID directory.
         fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        self.validate_write_dir(p, &dir)?;
 
         let target = dir.join(safe_file_name);
         atomic_write(&target, &source.bytes)?;
 
-        // Verify no symlink was created
         let meta = fs::symlink_metadata(&target).map_err(|_| ProjectCoreError::WriteFailed)?;
         if meta.file_type().is_symlink() {
             fs::remove_file(&target).map_err(|_| ProjectCoreError::WriteFailed)?;
@@ -376,7 +505,7 @@ impl ProjectContentStore for FilesystemProjectContentStore {
     }
 
     fn read_material(&self, p: &ProjectId, m: &Material) -> CoreResult<Vec<u8>> {
-        let resolved = self.validate_read_path(p, &m.relative_path, "inputs")?;
+        let resolved = self.validate_read_path(p, &m.relative_path, "inputs", m.id.as_str())?;
         let bytes = fs::read(&resolved).map_err(|_| ProjectCoreError::NotFound(p.clone()))?;
         if sha256_hex(&bytes) != m.sha256 {
             return Err(ProjectCoreError::IntegrityMismatch);
@@ -395,11 +524,11 @@ impl ProjectContentStore for FilesystemProjectContentStore {
 
         let dir = self.project_dir(p).join("outputs").join(c.as_str());
         fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        self.validate_write_dir(p, &dir)?;
 
         let target = dir.join(safe_file_name);
         atomic_write(&target, &content.bytes)?;
 
-        // Verify no symlink was created
         let meta = fs::symlink_metadata(&target).map_err(|_| ProjectCoreError::WriteFailed)?;
         if meta.file_type().is_symlink() {
             fs::remove_file(&target).map_err(|_| ProjectCoreError::WriteFailed)?;
@@ -416,7 +545,7 @@ impl ProjectContentStore for FilesystemProjectContentStore {
     }
 
     fn read_creation(&self, p: &ProjectId, c: &Creation) -> CoreResult<Vec<u8>> {
-        let resolved = self.validate_read_path(p, &c.relative_path, "outputs")?;
+        let resolved = self.validate_read_path(p, &c.relative_path, "outputs", c.id.as_str())?;
         fs::read(&resolved).map_err(|_| ProjectCoreError::NotFound(p.clone()))
     }
 
