@@ -7,11 +7,13 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 pub const PROJECT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_PROJECT_NAME_CHARS: usize = 120;
 pub const MAX_FILE_NAME_CHARS: usize = 180;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectCoreError {
     InvalidId { kind: &'static str, value: String },
     InvalidName(String),
@@ -74,7 +76,8 @@ pub type CoreResult<T> = Result<T, ProjectCoreError>;
 
 macro_rules! uuid_id {
     ($name:ident, $kind:literal) => {
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(transparent)]
         pub struct $name(String);
         impl $name {
             pub fn parse(value: impl Into<String>) -> CoreResult<Self> {
@@ -110,7 +113,8 @@ fn is_uuid_v7(v: &str) -> bool {
         })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Timestamp(String);
 impl Timestamp {
     pub fn parse(value: impl Into<String>) -> CoreResult<Self> {
@@ -156,7 +160,8 @@ fn is_rfc3339_utc_second(v: &str) -> bool {
     d >= 1 && d <= dim && h < 24 && mi < 60 && s < 60
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ProjectName(String);
 impl ProjectName {
     pub fn parse(value: impl AsRef<str>) -> CoreResult<Self> {
@@ -174,7 +179,8 @@ impl ProjectName {
         &self.0
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RelativeProjectPath(String);
 impl RelativeProjectPath {
     pub fn parse(value: impl Into<String>) -> CoreResult<Self> {
@@ -200,7 +206,8 @@ impl RelativeProjectPath {
             .is_some_and(|r| r.starts_with('/'))
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ContentType(String);
 impl ContentType {
     pub fn parse(value: impl Into<String>) -> CoreResult<Self> {
@@ -221,7 +228,8 @@ impl ContentType {
         &self.0
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Sha256Digest(String);
 impl Sha256Digest {
     pub fn parse(value: impl Into<String>) -> CoreResult<Self> {
@@ -240,41 +248,49 @@ impl Sha256Digest {
         &self.0
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProjectState {
     Local,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CreationKind {
     Web,
     Document,
     Image,
     File,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Material {
     pub id: MaterialId,
     pub display_name: String,
     pub original_file_name: String,
     pub relative_path: RelativeProjectPath,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
     pub byte_size: u64,
     pub sha256: Sha256Digest,
     pub created_at: Timestamp,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Creation {
     pub id: CreationId,
     pub display_name: String,
     pub kind: CreationKind,
     pub relative_path: RelativeProjectPath,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
     pub byte_size: u64,
     pub revision: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_creation_id: Option<CreationId>,
     pub created_at: Timestamp,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub schema_version: u32,
     pub id: ProjectId,
