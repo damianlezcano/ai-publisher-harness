@@ -53,3 +53,38 @@ if (( failures > 0 )); then
 fi
 
 printf 'verify: M0 harness contract passed\n'
+
+for file in Cargo.toml Cargo.lock rust-toolchain.toml; do
+  [[ -f "$file" ]] || fail "missing required Rust workspace file: $file"
+done
+
+if (( failures > 0 )); then
+  printf 'verify: %d M1 bootstrap contract failure(s)\n' "$failures" >&2
+  exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  fail 'cargo is required for M1 Rust verification'
+  exit 1
+fi
+
+printf 'verify: cargo fmt --all -- --check\n'
+cargo fmt --all -- --check
+
+printf 'verify: cargo clippy --workspace --all-targets -- -D warnings\n'
+cargo clippy --workspace --all-targets -- -D warnings
+
+printf 'verify: cargo test --workspace --all-targets\n'
+cargo test --workspace --all-targets
+
+if [[ -f crates/project-fs/tests/project_lifecycle.rs ]]; then
+  printf 'verify: cargo test -p project-fs --test project_lifecycle\n'
+  cargo test -p project-fs --test project_lifecycle
+else
+  printf 'verify: SKIP: project-fs filesystem integration suite is not introduced yet\n'
+fi
+
+printf 'verify: git diff --check\n'
+git diff --check
+
+printf 'verify: M1 bootstrap contract passed\n'

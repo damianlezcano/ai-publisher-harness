@@ -25,6 +25,14 @@ Any new toolchain must add its exact commands to this document and wire them
 into `scripts/verify` in the same change. Release-only external smoke checks
 are documented separately and never replace the local gate.
 
+## M1 bootstrap behavior
+
+The M1 bootstrap pins Rust in `rust-toolchain.toml` and provides the
+`project-core` and `project-fs` workspace crates. Until the filesystem adapter
+introduces `crates/project-fs/tests/project_lifecycle.rs`, verification prints
+`SKIP` for that named integration suite; all available workspace Rust checks
+remain required. M1 does not introduce or invoke Node/npm tooling.
+
 Frontend/package-manager checks are introduced only with a real frontend
 workspace in its milestone. M1 must not install or invoke Node tooling merely
 because the accepted architecture reserves TypeScript for the future UI.
