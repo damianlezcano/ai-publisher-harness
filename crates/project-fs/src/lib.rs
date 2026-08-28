@@ -12,6 +12,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod publish_root;
+pub use publish_root::ProjectPublishRootProvider;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -24,8 +27,8 @@ use project_core::{
 use sha2::{Digest, Sha256};
 use tempfile::{Builder, NamedTempFile};
 
-const PROJECTS_DIR: &str = "projects";
-const PROJECT_JSON: &str = "project.json";
+pub(crate) const PROJECTS_DIR: &str = "projects";
+pub(crate) const PROJECT_JSON: &str = "project.json";
 const STAGING_PREFIX: &str = ".staging-";
 const LOCK_FILE: &str = "project.lock";
 const ROOTS: &[&str] = &["inputs", "workspace", "outputs", "publish"];
@@ -71,7 +74,7 @@ fn fsync_dir(dir: &Path) -> CoreResult<()> {
         .map_err(|_| ProjectCoreError::WriteFailed)
 }
 
-fn read_json(path: &Path) -> CoreResult<Project> {
+pub(crate) fn read_json(path: &Path) -> CoreResult<Project> {
     let bytes = fs::read(path).map_err(|_| ProjectCoreError::StorageUnavailable)?;
     let s =
         String::from_utf8(bytes).map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
@@ -155,7 +158,7 @@ fn validate_file_name(name: &str) -> CoreResult<()> {
 /// Reject any symlink on `path` or any of its ancestor components down to (and
 /// including) the `stem` directory. Components that do not yet exist are
 /// ignored: they will be created fresh and re-verified after creation.
-fn reject_symlink_path(path: &Path, stem: &Path) -> CoreResult<()> {
+pub(crate) fn reject_symlink_path(path: &Path, stem: &Path) -> CoreResult<()> {
     let mut current = Some(path);
     while let Some(component) = current {
         if let Ok(m) = fs::symlink_metadata(component)
@@ -171,7 +174,7 @@ fn reject_symlink_path(path: &Path, stem: &Path) -> CoreResult<()> {
     Err(ProjectCoreError::PathEscape)
 }
 
-fn canon_project_dir(base: &Path, id: &ProjectId) -> CoreResult<PathBuf> {
+pub(crate) fn canon_project_dir(base: &Path, id: &ProjectId) -> CoreResult<PathBuf> {
     let projects = base.join(PROJECTS_DIR);
     let proj = projects.join(id.as_str());
     // Reject intermediate symlinks on the base -> projects -> project chain.

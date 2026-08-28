@@ -97,9 +97,16 @@ impl AsRef<str> for PublicationRoute {
 pub struct PublishRoot(PathBuf);
 
 impl PublishRoot {
-    /// Crate-internal constructor for validated publish roots.
-    #[allow(dead_code)]
-    pub(crate) fn from_path_buf_unchecked(path: PathBuf) -> Self {
+    /// Narrow infrastructure bridge constructor for a verified canonical publish root.
+    ///
+    /// This constructor is restricted to trusted filesystem adapters (e.g. `ProjectPublishRootProvider`)
+    /// that have already verified existence, directory type, symlink absence, and canonical containment.
+    pub fn from_verified_path(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// Infrastructure constructor for validated canonical publish roots.
+    pub fn from_path_buf_unchecked(path: PathBuf) -> Self {
         Self(path)
     }
 
