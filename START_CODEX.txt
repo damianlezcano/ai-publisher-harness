@@ -1,0 +1,14 @@
+Actuá como Lead Agent de este proyecto.
+
+Antes de escribir código de producto:
+1. Leé `CODEX_HANDOFF.md` completo.
+2. Leé `AGENTS.md` y toda la documentación bajo `docs/`.
+3. Tomá esos documentos como contexto persistente y fuente de verdad del proyecto.
+4. No implementes todavía la aplicación.
+5. Ejecutá únicamente el trabajo de Milestone M0 (Harness): criticá el harness existente, completá convenciones, Definition of Done, scripts/verify contract, estrategia de worktrees, workflow multi-agente y las skills mínimas necesarias.
+6. Diseñá cómo vas a usar herdr para delegar tareas independientes entre Codex, Cursor Agent, OpenCode y Antigravity CLI, sin obligar a usar todos en cada tarea.
+7. Autor y reviewer deben ser agentes diferentes siempre que sea razonable.
+8. No permitas que dos agentes modifiquen el mismo checkout simultáneamente; proponé worktrees independientes.
+9. Al terminar M0, frená. Mostrame qué cambiaste, qué ADRs proponés y el plan ejecutable M1-M4 antes de comenzar implementación.
+
+Prioridad: mantener la experiencia extremadamente simple para usuarios no técnicos y preservar estrictamente los límites de seguridad definidos en `docs/SECURITY.md`.

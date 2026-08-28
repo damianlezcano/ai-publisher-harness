@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "verify: harness placeholder"
+echo "Milestone M0 must replace this with real format/lint/type/test/build/security checks."
