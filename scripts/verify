@@ -63,23 +63,29 @@ if (( failures > 0 )); then
   exit 1
 fi
 
-if ! command -v cargo >/dev/null 2>&1; then
-  fail 'cargo is required for M1 Rust verification'
+for command in cargo rustfmt cargo-clippy; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    fail "required M1 Rust command is unavailable: $command"
+  fi
+done
+
+if (( failures > 0 )); then
+  printf 'verify: %d M1 Rust toolchain prerequisite failure(s)\n' "$failures" >&2
   exit 1
 fi
 
 printf 'verify: cargo fmt --all -- --check\n'
 cargo fmt --all -- --check
 
-printf 'verify: cargo clippy --workspace --all-targets -- -D warnings\n'
-cargo clippy --workspace --all-targets -- -D warnings
+printf 'verify: cargo clippy --locked --workspace --all-targets -- -D warnings\n'
+cargo clippy --locked --workspace --all-targets -- -D warnings
 
-printf 'verify: cargo test --workspace --all-targets\n'
-cargo test --workspace --all-targets
+printf 'verify: cargo test --locked --workspace --all-targets\n'
+cargo test --locked --workspace --all-targets
 
 if [[ -f crates/project-fs/tests/project_lifecycle.rs ]]; then
-  printf 'verify: cargo test -p project-fs --test project_lifecycle\n'
-  cargo test -p project-fs --test project_lifecycle
+  printf 'verify: cargo test --locked -p project-fs --test project_lifecycle\n'
+  cargo test --locked -p project-fs --test project_lifecycle
 else
   printf 'verify: SKIP: project-fs filesystem integration suite is not introduced yet\n'
 fi

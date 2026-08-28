@@ -62,8 +62,9 @@ once a UI exists. External processes use controlled fakes in automated tests.
 - Rust is used where durable local storage, atomic I/O, path safety, and future
   sidecar supervision matter; TypeScript is used where browser UI ergonomics
   matter. Neither language crosses into the other's responsibility by default.
-- The project has Rust and Node/TypeScript toolchains. `scripts/verify` must
-  pin and run both once M1 implementation begins.
+- The project has Rust and Node/TypeScript toolchains. `scripts/verify` pins
+  and runs Rust checks for M1; Node/frontend checks begin only when a real
+  frontend workspace is introduced in its applicable milestone.
 - Tauri capabilities and a narrow command layer create an auditable boundary.
 - Target-specific sidecar artifacts and signing/release automation are deferred
   to M4/M10. M5 must pin and contract-test the chosen OpenCode HTTP API rather

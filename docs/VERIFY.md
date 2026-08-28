@@ -31,7 +31,9 @@ The M1 bootstrap pins Rust in `rust-toolchain.toml` and provides the
 `project-core` and `project-fs` workspace crates. Until the filesystem adapter
 introduces `crates/project-fs/tests/project_lifecycle.rs`, verification prints
 `SKIP` for that named integration suite; all available workspace Rust checks
-remain required. M1 does not introduce or invoke Node/npm tooling.
+remain required. Cargo commands that resolve packages use `--locked`; `cargo
+fmt` does not resolve packages. M1 does not introduce or invoke Node/npm
+tooling.
 
 Frontend/package-manager checks are introduced only with a real frontend
 workspace in its milestone. M1 must not install or invoke Node tooling merely

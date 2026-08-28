@@ -275,9 +275,9 @@ The exact commands become mandatory when Task 1 installs the toolchain:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-cargo test -p project-fs --test project_lifecycle
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace --all-targets
+cargo test --locked -p project-fs --test project_lifecycle
 git diff --check
 ```
 
