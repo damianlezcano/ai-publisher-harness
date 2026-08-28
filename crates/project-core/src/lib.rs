@@ -93,12 +93,12 @@ mod tests {
     fn time() -> Timestamp { Timestamp::parse("2026-08-28T15:00:00Z").unwrap() }
     #[derive(Clone)] struct TestClock; impl Clock for TestClock { fn now(&self) -> Timestamp { time() } }
     struct TestIds; impl IdGenerator for TestIds { fn project_id(&self)->ProjectId{pid()} fn material_id(&self)->MaterialId{MaterialId::parse(M).unwrap()} fn creation_id(&self)->CreationId{CreationId::parse(C).unwrap()} }
-    #[derive(Default)] struct Repo { values:BTreeMap<ProjectId,Project>, fail:bool }
+    #[derive(Default)] struct Repo { values:BTreeMap<ProjectId,Project>, fail:bool, conflict:bool }
     impl ProjectRepository for Repo {
         fn create(&mut self,p:&Project)->CoreResult<()>{p.validate()?;if self.values.contains_key(&p.id){return Err(ProjectCoreError::AlreadyExists(p.id.clone()))}self.values.insert(p.id.clone(),p.clone());Ok(())}
         fn get(&self,id:&ProjectId)->CoreResult<Project>{self.values.get(id).cloned().ok_or_else(||ProjectCoreError::NotFound(id.clone()))}
         fn list(&self)->CoreResult<Vec<Project>>{let mut v:Vec<_>=self.values.values().cloned().collect();v.sort_by(|a,b|b.updated_at.cmp(&a.updated_at).then_with(||a.id.cmp(&b.id)));Ok(v)}
-        fn replace(&mut self,p:&Project,e:&Timestamp)->CoreResult<()>{if self.fail{return Err(ProjectCoreError::AtomicWriteFailed)}if self.get(&p.id)?.updated_at!=*e{return Err(ProjectCoreError::Conflict{project_id:p.id.clone()})}p.validate()?;self.values.insert(p.id.clone(),p.clone());Ok(())}
+        fn replace(&mut self,p:&Project,e:&Timestamp)->CoreResult<()>{if self.fail{return Err(ProjectCoreError::AtomicWriteFailed)}if self.conflict||self.get(&p.id)?.updated_at!=*e{return Err(ProjectCoreError::Conflict{project_id:p.id.clone()})}p.validate()?;self.values.insert(p.id.clone(),p.clone());Ok(())}
         fn delete(&mut self,id:&ProjectId)->CoreResult<()>{self.values.remove(id).map(|_|()).ok_or_else(||ProjectCoreError::NotFound(id.clone()))}
     }
     #[derive(Default)] struct Store { materials:BTreeMap<(ProjectId,MaterialId),Vec<u8>>, creations:BTreeMap<(ProjectId,CreationId),Vec<u8>>, invalid_path:bool, fail_remove:bool, deleted:Vec<ProjectId> }
@@ -124,5 +124,6 @@ mod tests {
     #[test] fn delete_removes_metadata_before_tree_and_never_restores_it(){let mut s=service();s.create_project("one").unwrap();let(r,mut c,k,i)=s.into_parts();c.fail_remove=true;let mut s=ProjectService::new(r,c,k,i);assert!(matches!(s.delete_project(&pid()),Err(ProjectCoreError::WriteFailed)));assert!(matches!(s.open_project(&pid()),Err(ProjectCoreError::NotFound(_))))}
     #[test] fn missing_material_and_creation_have_distinct_typed_errors(){let mut s=service();s.create_project("one").unwrap();assert!(matches!(s.read_material(&pid(),&MaterialId::parse(M).unwrap()),Err(ProjectCoreError::MissingMaterial(_))));assert!(matches!(s.read_creation(&pid(),&CreationId::parse(C).unwrap()),Err(ProjectCoreError::MissingCreation(_))))}
     #[test] fn create_and_rename_reject_blank_overlong_and_path_like_names(){let mut s=service();assert!(matches!(s.create_project(" "),Err(ProjectCoreError::InvalidName(_))));assert!(matches!(s.create_project("x".repeat(MAX_PROJECT_NAME_CHARS+1)),Err(ProjectCoreError::InvalidName(_))));s.create_project("one").unwrap();assert!(matches!(s.rename_project(&pid(),"a/b"),Err(ProjectCoreError::InvalidName(_))))}
+    #[test] fn rename_conflict_preserves_existing_project(){let mut s=service();s.create_project("one").unwrap();let(mut r,c,k,i)=s.into_parts();r.conflict=true;let mut s=ProjectService::new(r,c,k,i);assert!(matches!(s.rename_project(&pid(),"two"),Err(ProjectCoreError::Conflict{..})));assert_eq!(s.open_project(&pid()).unwrap().name.as_str(),"one")}
     #[test] fn parent_creation_reference_must_exist_in_aggregate(){let mut p=Project::new(pid(),ProjectName::parse("one").unwrap(),time());p.creations.push(Creation{id:CreationId::parse(C).unwrap(),display_name:"x".into(),kind:CreationKind::File,relative_path:RelativeProjectPath::parse(format!("outputs/{C}/x.txt")).unwrap(),content_type:None,byte_size:0,revision:1,parent_creation_id:Some(CreationId::parse("0198e4a6-86d6-7c16-b4c4-3197b355cf11").unwrap()),created_at:time()});assert!(matches!(p.validate(),Err(ProjectCoreError::InvalidCreation(_))))}
 }
