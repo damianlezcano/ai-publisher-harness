@@ -13,8 +13,9 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use project_core::{
     CoreResult, Creation, CreationContent, CreationId, Material, MaterialContent, MaterialId,
@@ -29,6 +30,10 @@ const PROJECT_JSON: &str = "project.json";
 const STAGING_PREFIX: &str = ".staging-";
 const LOCK_FILE: &str = "project.lock";
 const ROOTS: &[&str] = &["inputs", "workspace", "outputs", "publish"];
+/// A lock file older than this is considered stale (abandoned after a crash)
+/// and is reclaimed. A single `replace` is a fast metadata write, so 30s is a
+/// generous upper bound on legitimate hold time.
+const LOCK_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// Atomically write `content` to `path`.
 ///
@@ -39,7 +44,16 @@ const ROOTS: &[&str] = &["inputs", "workspace", "outputs", "publish"];
 /// fallback is needed.
 fn atomic_write(path: &Path, content: &[u8]) -> CoreResult<()> {
     let parent = path.parent().ok_or(ProjectCoreError::WriteFailed)?;
-    fs::create_dir_all(parent).map_err(|_| ProjectCoreError::WriteFailed)?;
+    // Callers must create and validate the parent. Never create_dir_all here:
+    // it follows symlink ancestors and would undo the pre-write chain check.
+    if let Ok(m) = fs::symlink_metadata(parent)
+        && m.file_type().is_symlink()
+    {
+        return Err(ProjectCoreError::SymlinkRejected);
+    }
+    if !parent.is_dir() {
+        return Err(ProjectCoreError::WriteFailed);
+    }
 
     let mut tmp = NamedTempFile::new_in(parent).map_err(|_| ProjectCoreError::WriteFailed)?;
     tmp.write_all(content)
@@ -66,20 +80,22 @@ fn read_json(path: &Path) -> CoreResult<Project> {
     let bytes = fs::read(path).map_err(|_| ProjectCoreError::StorageUnavailable)?;
     let s =
         String::from_utf8(bytes).map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
-    let p: Project =
+    let mut p: Project =
         serde_json::from_str(&s).map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
     p.validate()?;
-    validate_rehydrated_fields(&p)?;
+    validate_rehydrated_fields(&mut p)?;
     Ok(p)
 }
 
-/// Serde deserializes the newtype wrappers (`ProjectId`, `Timestamp`,
-/// `RelativeProjectPath`, etc.) as opaque strings without calling their
-/// validating `parse` constructors, so a malformed metadata file could
+/// Serde deserializes the newtype wrappers (`ProjectId`, `ProjectName`,
+/// `Timestamp`, `RelativeProjectPath`, etc.) as opaque strings without calling
+/// their validating `parse` constructors, so a malformed metadata file could
 /// otherwise read back with corrupt fields. This re-validates every domain
-/// field after deserialization.
-fn validate_rehydrated_fields(p: &Project) -> CoreResult<()> {
+/// field after deserialization and reparses `ProjectName` through its
+/// constructor so trimmed/canonical form is what the adapter emits.
+fn validate_rehydrated_fields(p: &mut Project) -> CoreResult<()> {
     project_core::ProjectId::parse(p.id.as_str())?;
+    p.name = project_core::ProjectName::parse(p.name.as_str())?;
     Timestamp::parse(p.created_at.as_str())?;
     Timestamp::parse(p.updated_at.as_str())?;
     match p.state {
@@ -123,6 +139,51 @@ fn enforce_path_containment(
     Ok(())
 }
 
+/// Validate that `name` is a single, safe file-system path component that
+/// cannot escape its parent directory.
+///
+/// Must be called before any path is built from `name`. Rejects empty names,
+/// path separators, traversal components, and control bytes.
+fn validate_file_name(name: &str) -> CoreResult<()> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name == "."
+        || name == ".."
+        || name.bytes().any(|b| b == 0 || b.is_ascii_control())
+    {
+        return Err(ProjectCoreError::InvalidName(name.to_owned()));
+    }
+    Ok(())
+}
+
+/// Reject any symlink on `path` or any of its ancestor components down to (and
+/// including) the `stem` directory. Components that do not yet exist are
+/// ignored: they will be created fresh and re-verified after creation.
+fn reject_symlink_path(path: &Path, stem: &Path) -> CoreResult<()> {
+    let mut current = Some(path);
+    while let Some(component) = current {
+        if let Ok(m) = fs::symlink_metadata(component)
+            && m.file_type().is_symlink()
+        {
+            return Err(ProjectCoreError::SymlinkRejected);
+        }
+        if component == stem {
+            return Ok(());
+        }
+        current = component.parent();
+    }
+    Err(ProjectCoreError::PathEscape)
+}
+
+fn canon_project_dir(base: &Path, id: &ProjectId) -> CoreResult<PathBuf> {
+    let projects = base.join(PROJECTS_DIR);
+    let proj = projects.join(id.as_str());
+    // Reject intermediate symlinks on the base -> projects -> project chain.
+    reject_symlink_path(&proj, base)?;
+    fs::canonicalize(&proj).map_err(|_| ProjectCoreError::StorageUnavailable)
+}
+
 fn write_json(path: &Path, project: &Project) -> CoreResult<()> {
     let s = serde_json::to_string_pretty(project).map_err(|_| ProjectCoreError::WriteFailed)?;
     atomic_write(path, s.as_bytes())
@@ -145,6 +206,84 @@ fn sha256_hex(data: &[u8]) -> project_core::Sha256Digest {
     }
     project_core::Sha256Digest::parse(hex)
         .expect("SHA-256 always yields a valid 64-char hex digest")
+}
+
+/// RAII lock guard that guarantees the lock file is removed on every exit path,
+/// including errors and panics, so a project can never remain permanently
+/// locked by this process.
+struct ProjectLock {
+    path: PathBuf,
+}
+
+impl ProjectLock {
+    fn acquire(repo: &FilesystemProjectRepository, id: &ProjectId) -> CoreResult<Self> {
+        let project_dir = repo.project_dir(id);
+        reject_symlink_path(&project_dir, &repo.base)?;
+        if !project_dir.is_dir() {
+            return Err(ProjectCoreError::NotFound(id.clone()));
+        }
+
+        let path = repo.lock_file(id);
+        for attempt in 0..2 {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    if write!(f, "{}", now_unix_secs()).is_err() || f.sync_all().is_err() {
+                        let _ = fs::remove_file(&path);
+                        return Err(ProjectCoreError::WriteFailed);
+                    }
+                    return Ok(Self { path });
+                }
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // A lock exists. Reclaim it only if provably stale (a
+                    // crashed writer left it behind); otherwise treat it as a
+                    // live concurrent writer and conflict.
+                    if attempt == 0 && lock_is_stale(&path) {
+                        let _ = fs::remove_file(&path);
+                        continue;
+                    }
+                    return Err(ProjectCoreError::Conflict {
+                        project_id: id.clone(),
+                    });
+                }
+                Err(_) => return Err(ProjectCoreError::WriteFailed),
+            }
+        }
+        Err(ProjectCoreError::Conflict {
+            project_id: id.clone(),
+        })
+    }
+}
+
+impl Drop for ProjectLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// True if the lock file was created more than `LOCK_MAX_AGE` ago. Returns
+/// false for missing or malformed content (treated as a live, unknown-age
+/// lock), which never causes a write to proceed against it.
+fn lock_is_stale(path: &Path) -> bool {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let created = match content.trim().parse::<u64>() {
+        Ok(secs) => secs,
+        Err(_) => return false,
+    };
+    now_unix_secs().saturating_sub(created) >= LOCK_MAX_AGE.as_secs()
 }
 
 // ---------------------------------------------------------------------------
@@ -180,37 +319,6 @@ impl FilesystemProjectRepository {
     fn lock_file(&self, id: &ProjectId) -> PathBuf {
         self.project_dir(id).join(LOCK_FILE)
     }
-
-    /// Optimistic-concurrency guard: create the project lock file exclusively,
-    /// retrying on collision until it is usable, to give a single-writer
-    /// critical section for `replace`.
-    ///
-    /// The lock file is created with `create_new(true)` inside the project
-    /// directory. A process that holds the lock (wrote it and has not removed
-    /// it) is the only writer allowed to mutate `project.json`. Once the write
-    /// completes the lock is removed. A stale lock (e.g. after a crash) is
-    /// tolerated: the optimistic `expected_updated_at` check still protects
-    /// against losing a concurrent update.
-    fn acquire_lock(&self, id: &ProjectId) -> CoreResult<()> {
-        let lock = self.lock_file(id);
-        fs::create_dir_all(lock.parent().ok_or(ProjectCoreError::WriteFailed)?)
-            .map_err(|_| ProjectCoreError::WriteFailed)?;
-        // Exclusive creation avoids two writers racing on the same lock file.
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-        {
-            Ok(_) => Ok(()),
-            Err(_) => Err(ProjectCoreError::Conflict {
-                project_id: id.clone(),
-            }),
-        }
-    }
-
-    fn release_lock(&self, id: &ProjectId) {
-        let _ = fs::remove_file(self.lock_file(id));
-    }
 }
 
 impl ProjectRepository for FilesystemProjectRepository {
@@ -218,7 +326,10 @@ impl ProjectRepository for FilesystemProjectRepository {
         project.validate()?;
 
         let pd = self.projects_dir();
+        // Reject a symlinked/untrusted projects directory before writing.
+        reject_symlink_path(&pd, &self.base)?;
         fs::create_dir_all(&pd).map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        reject_symlink_path(&pd, &self.base)?;
 
         let pj = self.project_json(&project.id);
         if pj.exists() {
@@ -251,7 +362,13 @@ impl ProjectRepository for FilesystemProjectRepository {
         if !pj.exists() {
             return Err(ProjectCoreError::NotFound(id.clone()));
         }
-        read_json(&pj)
+        let p = read_json(&pj)?;
+        if p.id != *id {
+            return Err(ProjectCoreError::CorruptMetadata(
+                "directory name does not match projectId".into(),
+            ));
+        }
+        Ok(p)
     }
 
     fn list(&self) -> CoreResult<Vec<Project>> {
@@ -269,9 +386,8 @@ impl ProjectRepository for FilesystemProjectRepository {
                 continue;
             }
             // Only recognize direct child directories whose name is a valid
-            // project ID. A directory whose name is not a parseable UUIDv7 is
-            // not a project and is ignored (serialization-safe matching, no
-            // path arithmetic on caller-controlled names).
+            // project ID (serialization-safe matching, no path arithmetic on
+            // caller-controlled names).
             let parsed = match ProjectId::parse(name.to_string()) {
                 Ok(id) => id,
                 Err(_) => continue,
@@ -281,8 +397,9 @@ impl ProjectRepository for FilesystemProjectRepository {
                 continue;
             }
             match read_json(&pj) {
-                Ok(p) => projects.push(p),
-                Err(_) => continue,
+                // Require the on-disk project id to match the directory name.
+                Ok(p) if p.id == parsed => projects.push(p),
+                _ => continue,
             }
         }
         projects.sort_by(|a, b| {
@@ -297,22 +414,18 @@ impl ProjectRepository for FilesystemProjectRepository {
         let id = &project.id;
         let pj = self.project_json(id);
 
-        // Take the single-writer lock; a concurrent writer or the removal of the
-        // project makes the exclusive open fail and yields a conflict.
-        self.acquire_lock(id)?;
+        // Take the single-writer lock (RAII: released on every exit path,
+        // including errors and panics) and validate the project directory
+        // chain before writing project.json.
+        let _lock = ProjectLock::acquire(self, id)?;
+        let canon_project = canon_project_dir(&self.base, id)?;
+        reject_symlink_path(&pj, &self.project_dir(id))?;
 
         // Re-read the current metadata under the lock and apply the optimistic
         // concurrency check here (CAS on updated_at) to close the read/modify/
         // write race.
-        let current = match read_json(&pj) {
-            Ok(p) => p,
-            Err(e) => {
-                self.release_lock(id);
-                return Err(e);
-            }
-        };
+        let current = read_json(&pj)?;
         if current.updated_at != *expected_updated_at {
-            self.release_lock(id);
             return Err(ProjectCoreError::Conflict {
                 project_id: id.clone(),
             });
@@ -335,10 +448,15 @@ impl ProjectRepository for FilesystemProjectRepository {
             tmp.persist(&pj)
                 .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
             fsync_dir(parent)?;
+            // Containment re-check after the rename is complete.
+            let canon_now = fs::canonicalize(&pj).map_err(|_| ProjectCoreError::WriteFailed)?;
+            if !canon_now.starts_with(&canon_project) {
+                return Err(ProjectCoreError::PathEscape);
+            }
             Ok(())
         })();
 
-        self.release_lock(id);
+        drop(_lock);
         write_result
     }
 
@@ -393,10 +511,12 @@ impl FilesystemProjectContentStore {
         self.base.join(PROJECTS_DIR).join(id.as_str())
     }
 
-    /// Validate that a metadata-derived read path resolves within the project
-    /// directory and does not escape via symlinks (including any intermediate
-    /// path component, which `fs::canonicalize` resolves and then checks
-    /// against the canonical project root).
+    /// Validate that a metadata-derived read path is a real (non-symlinked)
+    /// file inside the canonical fixed root (`inputs/` or `outputs/`).
+    ///
+    /// Rejects every intermediate symlink from the project directory down to
+    /// the target and requires canonical fixed-root containment (not merely
+    /// project-directory containment).
     fn validate_read_path(
         &self,
         project_id: &ProjectId,
@@ -409,63 +529,55 @@ impl FilesystemProjectContentStore {
         let dir = self.project_dir(project_id);
         let resolved = dir.join(relative.as_str());
 
-        if resolved.is_symlink() {
-            return Err(ProjectCoreError::SymlinkRejected);
+        // Reject any symlink component from the configured base down to the file.
+        reject_symlink_path(&resolved, &self.base)?;
+
+        let canon_project = canon_project_dir(&self.base, project_id)?;
+        let canon_root = fs::canonicalize(dir.join(allowed_root))
+            .map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        if !canon_root.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
         }
 
-        let canonical_project =
-            fs::canonicalize(&dir).map_err(|_| ProjectCoreError::StorageUnavailable)?;
-        let canonical_resolved = fs::canonicalize(&resolved)
+        let canon_resolved = fs::canonicalize(&resolved)
             .map_err(|_| ProjectCoreError::NotFound(project_id.clone()))?;
-
-        if !canonical_resolved.starts_with(&canonical_project) {
+        if !canon_resolved.starts_with(&canon_root) {
             return Err(ProjectCoreError::PathEscape);
         }
 
-        Ok(resolved)
+        Ok(canon_resolved)
     }
 
-    /// Validate that the directory we are about to write into (the fixed root
-    /// and the ID subdirectory) is real and not a symlink, so a pre-existing
-    /// symlink cannot redirect a write outside the project.
-    fn validate_write_dir(&self, project_id: &ProjectId, dir: &Path) -> CoreResult<()> {
-        let project = self.project_dir(project_id);
-        if fs::symlink_metadata(&project)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return Err(ProjectCoreError::SymlinkRejected);
-        }
-        let canonical_project =
-            fs::canonicalize(&project).map_err(|_| ProjectCoreError::StorageUnavailable)?;
-        for ancestor in dir.ancestors() {
-            if ancestor == project || ancestor == canonical_project {
-                break;
-            }
-            if fs::symlink_metadata(ancestor)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false)
-            {
-                return Err(ProjectCoreError::SymlinkRejected);
-            }
-        }
-        let canonical_dir = fs::canonicalize(dir).map_err(|_| ProjectCoreError::WriteFailed)?;
-        if !canonical_dir.starts_with(&canonical_project) {
+    /// Validate the entire base -> project -> fixed-root -> id ancestor chain
+    /// *before* any directory is created, then create the target ID directory
+    /// and re-verify the full chain (preventing symlink-injection between
+    /// validation and creation and rejecting intermediate symlinks).
+    fn prepare_write_dir(
+        &self,
+        project_id: &ProjectId,
+        root: &str,
+        id: &str,
+    ) -> CoreResult<PathBuf> {
+        let canon_project = canon_project_dir(&self.base, project_id)?;
+        let project_dir = self.project_dir(project_id);
+        let root_dir = project_dir.join(root);
+        let dir = root_dir.join(id);
+
+        // Pre-creation: reject any symlink on the entire ancestor chain.
+        reject_symlink_path(&dir, &self.base)?;
+
+        fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+
+        // Post-creation: re-verify that no component became a symlink and the
+        // directory remains inside the canonical fixed root.
+        reject_symlink_path(&dir, &self.base)?;
+        let canon_root = fs::canonicalize(&root_dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        let canon_dir = fs::canonicalize(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        if !canon_root.starts_with(&canon_project) || !canon_dir.starts_with(&canon_root) {
             return Err(ProjectCoreError::PathEscape);
         }
-        Ok(())
-    }
 
-    fn ensure_root_exists(&self, project_id: &ProjectId, root: &str) -> CoreResult<PathBuf> {
-        let root_dir = self.project_dir(project_id).join(root);
-        if fs::symlink_metadata(&root_dir)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return Err(ProjectCoreError::SymlinkRejected);
-        }
-        fs::create_dir_all(&root_dir).map_err(|_| ProjectCoreError::WriteFailed)?;
-        Ok(root_dir)
+        Ok(dir)
     }
 }
 
@@ -477,13 +589,10 @@ impl ProjectContentStore for FilesystemProjectContentStore {
         source: &MaterialContent,
         safe_file_name: &str,
     ) -> CoreResult<StoredMaterial> {
-        self.ensure_root_exists(p, "inputs")?;
+        // Validate the file name before constructing any path.
+        validate_file_name(safe_file_name)?;
 
-        let dir = self.project_dir(p).join("inputs").join(m.as_str());
-        // Reject symlink escape before creating/writing under the ID directory.
-        fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
-        self.validate_write_dir(p, &dir)?;
-
+        let dir = self.prepare_write_dir(p, "inputs", m.as_str())?;
         let target = dir.join(safe_file_name);
         atomic_write(&target, &source.bytes)?;
 
@@ -520,12 +629,10 @@ impl ProjectContentStore for FilesystemProjectContentStore {
         content: &CreationContent,
         safe_file_name: &str,
     ) -> CoreResult<StoredCreation> {
-        self.ensure_root_exists(p, "outputs")?;
+        // Validate the file name before constructing any path.
+        validate_file_name(safe_file_name)?;
 
-        let dir = self.project_dir(p).join("outputs").join(c.as_str());
-        fs::create_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
-        self.validate_write_dir(p, &dir)?;
-
+        let dir = self.prepare_write_dir(p, "outputs", c.as_str())?;
         let target = dir.join(safe_file_name);
         atomic_write(&target, &content.bytes)?;
 

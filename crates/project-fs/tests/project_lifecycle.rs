@@ -1554,3 +1554,410 @@ fn atomic_replacement_leaves_valid_json_and_no_temp_files() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Second-review regression tests
+// ---------------------------------------------------------------------------
+
+// --- 1. safe_file_name validated before any path construction ---
+
+#[test]
+fn unsafe_file_name_rejected_before_any_directory_created() {
+    let base = tmp_dir("unsafe-fname");
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let mid = project_core::MaterialId::parse(M).unwrap();
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    for evil in ["../evil", "a/b", "a\\b", "..", ".", ""] {
+        let err = store.store_material(
+            &pid,
+            &mid,
+            &MaterialContent {
+                bytes: b"x".to_vec(),
+            },
+            evil,
+        );
+        assert!(
+            matches!(err, Err(ProjectCoreError::InvalidName(_))),
+            "filename {evil:?} must be rejected before any path use, got: {:?}",
+            err
+        );
+        // Validation happens before create_dir_all, so no ID directory exists.
+        let id_dir = base.join("projects").join(P).join("inputs").join(M);
+        assert!(
+            !id_dir.exists(),
+            "ID directory must not be created for unsafe name {evil:?}"
+        );
+    }
+
+    for evil in ["a\nb", "foo\0bar", "\u{1f}"] {
+        let err = store.store_material(
+            &pid,
+            &mid,
+            &MaterialContent {
+                bytes: b"x".to_vec(),
+            },
+            evil,
+        );
+        assert!(
+            matches!(err, Err(ProjectCoreError::InvalidName(_))),
+            "control-byte filename {evil:?} must be rejected, got: {:?}",
+            err
+        );
+        let id_dir = base.join("projects").join(P).join("inputs").join(M);
+        assert!(!id_dir.exists());
+    }
+}
+
+#[test]
+fn unsafe_creation_file_name_rejected_before_any_directory_created() {
+    let base = tmp_dir("unsafe-creation-fname");
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let cid = project_core::CreationId::parse(C).unwrap();
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    let err = store.store_creation(
+        &pid,
+        &cid,
+        &CreationContent {
+            bytes: b"x".to_vec(),
+            file_name: "../evil".into(),
+        },
+        "../evil",
+    );
+    assert!(
+        matches!(err, Err(ProjectCoreError::InvalidName(_))),
+        "unsafe creation filename must be rejected, got: {:?}",
+        err
+    );
+    assert!(
+        !base
+            .join("projects")
+            .join(P)
+            .join("outputs")
+            .join(C)
+            .exists()
+    );
+}
+
+// --- 2. validate project -> target ancestor chain before create_dir_all ---
+
+#[cfg(unix)]
+#[test]
+fn write_rejects_symlinked_project_directory() {
+    let base = tmp_dir("write-symlink-project");
+    let outside = tmp_dir("write-symlink-project-outside");
+
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    // Replace the project directory with a symlink elsewhere.
+    let proj = base.join("projects").join(P);
+    fs::remove_dir_all(&proj).unwrap();
+    std::os::unix::fs::symlink(&outside, &proj).unwrap();
+
+    let mid = project_core::MaterialId::parse(M).unwrap();
+    let err = store.store_material(
+        &pid,
+        &mid,
+        &MaterialContent {
+            bytes: b"x".to_vec(),
+        },
+        "a.txt",
+    );
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::SymlinkRejected
+                | ProjectCoreError::PathEscape
+                | ProjectCoreError::StorageUnavailable)
+        ),
+        "write through a symlinked project dir must be rejected, got: {:?}",
+        err
+    );
+    // Nothing may have been written through the symlink.
+    assert!(!outside.join("inputs").exists());
+}
+
+// --- 3. reject every intermediate symlink on reads ---
+
+#[cfg(unix)]
+#[test]
+fn read_rejects_symlinked_intermediate_directory() {
+    let base = tmp_dir("read-symlink-id");
+    let outside = tmp_dir("read-symlink-id-outside");
+
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let mid = project_core::MaterialId::parse(M).unwrap();
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    let src = MaterialContent {
+        bytes: b"hello".to_vec(),
+    };
+    let stored = store.store_material(&pid, &mid, &src, "a.txt").unwrap();
+    let m = project_core::Material {
+        id: mid,
+        display_name: "A".into(),
+        original_file_name: "a.txt".into(),
+        relative_path: stored.relative_path.clone(),
+        content_type: None,
+        byte_size: stored.byte_size,
+        sha256: stored.sha256,
+        created_at: Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    };
+    assert_eq!(store.read_material(&pid, &m).unwrap(), b"hello".to_vec());
+
+    // Replace the ID directory with a symlink to an outside dir that contains
+    // a matching file; the read must be rejected rather than follow the link.
+    let id_dir = base.join("projects").join(P).join("inputs").join(M);
+    fs::remove_dir_all(&id_dir).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("a.txt"), b"hello").unwrap();
+    std::os::unix::fs::symlink(&outside, &id_dir).unwrap();
+
+    let err = store.read_material(&pid, &m);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::SymlinkRejected | ProjectCoreError::PathEscape)
+        ),
+        "read through a symlinked intermediate must be rejected, got: {:?}",
+        err
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_rejects_symlink_into_workspace_even_when_still_inside_project() {
+    let base = tmp_dir("read-symlink-workspace");
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let mid = project_core::MaterialId::parse(M).unwrap();
+    let project = project_core::Project::new(
+        pid.clone(),
+        ProjectName::parse("Test").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    repo.create(&project).unwrap();
+
+    let src = MaterialContent {
+        bytes: b"hello".to_vec(),
+    };
+    let stored = store.store_material(&pid, &mid, &src, "a.txt").unwrap();
+    let m = project_core::Material {
+        id: mid,
+        display_name: "A".into(),
+        original_file_name: "a.txt".into(),
+        relative_path: stored.relative_path.clone(),
+        content_type: None,
+        byte_size: stored.byte_size,
+        sha256: stored.sha256,
+        created_at: Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    };
+
+    // Point the ID directory at workspace/<id>/. Canonical project containment
+    // would still pass; canonical fixed-root (inputs/) containment must not.
+    let workspace_id = base.join("projects").join(P).join("workspace").join(M);
+    fs::create_dir_all(&workspace_id).unwrap();
+    fs::write(workspace_id.join("a.txt"), b"hello").unwrap();
+    let id_dir = base.join("projects").join(P).join("inputs").join(M);
+    fs::remove_dir_all(&id_dir).unwrap();
+    std::os::unix::fs::symlink(&workspace_id, &id_dir).unwrap();
+
+    let err = store.read_material(&pid, &m);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::SymlinkRejected | ProjectCoreError::PathEscape)
+        ),
+        "read must require canonical fixed-root containment, got: {:?}",
+        err
+    );
+}
+
+// --- 4. RAII lock with crash-safe stale recovery ---
+
+#[test]
+fn stale_lock_is_reclaimed_and_replace_succeeds() {
+    let base = tmp_dir("stale-lock-recovery");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // Plant a lock with an old timestamp to simulate a crashed writer.
+    let lock = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("project.lock");
+    let old = now_secs() - 3600;
+    fs::write(&lock, old.to_string()).unwrap();
+
+    svc.rename_project(&p.id, "Recovered").unwrap();
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(reloaded.name.as_str(), "Recovered");
+    // RAII Drop removed the stale lock once reclaimed.
+    assert!(!lock.exists());
+}
+
+#[test]
+fn lock_is_released_after_successful_replace() {
+    let base = tmp_dir("lock-released");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    svc.rename_project(&p.id, "Renamed").unwrap();
+    let lock = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("project.lock");
+    assert!(
+        !lock.exists(),
+        "lock must be removed after a successful replace"
+    );
+}
+
+#[test]
+fn lock_is_released_after_conflict_replace() {
+    let base = tmp_dir("lock-released-conflict");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    let stale = Timestamp::parse("2020-01-01T00:00:00Z").unwrap();
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let mut proj = repo.get(&p.id).unwrap();
+    proj.name = ProjectName::parse("Renamed").unwrap();
+    let err = repo.replace(&proj, &stale);
+    assert!(matches!(err, Err(ProjectCoreError::Conflict { .. })));
+
+    let lock = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("project.lock");
+    assert!(
+        !lock.exists(),
+        "RAII lock must be released after a conflicted replace"
+    );
+}
+
+// --- 5. list requires directory id == JSON projectId ---
+
+#[test]
+fn list_requires_directory_id_to_match_json_project_id() {
+    let base = tmp_dir("list-id-match");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // A directory named with valid project id C but holding metadata for a
+    // different id P must be ignored by list.
+    let misdir = base.join("projects").join(C);
+    fs::create_dir_all(&misdir).unwrap();
+    let other_id = ProjectId::parse(P).unwrap();
+    let other = project_core::Project::new(
+        other_id,
+        ProjectName::parse("Other").unwrap(),
+        Timestamp::parse("2026-08-28T15:00:00Z").unwrap(),
+    );
+    fs::write(
+        misdir.join("project.json"),
+        serde_json::to_string_pretty(&other).unwrap(),
+    )
+    .unwrap();
+
+    let list = svc.list_projects().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, p.id);
+
+    // Opening the mismatched directory must not emit the JSON's other id.
+    let mismatched = ProjectId::parse(C).unwrap();
+    let err = svc.open_project(&mismatched);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::CorruptMetadata(_) | ProjectCoreError::NotFound(_))
+        ),
+        "directory/json id mismatch must not open as a project, got: {:?}",
+        err
+    );
+}
+
+// --- 6. reparse persisted ProjectName ---
+
+#[test]
+fn invalid_persisted_project_name_is_rejected_on_read() {
+    let base = tmp_dir("bad-persisted-name");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    let path = project_json_path(&base, p.id.as_str());
+    let raw = fs::read_to_string(&path).unwrap();
+    let corrupt = raw.replacen("\"name\": \"Test\"", "\"name\": \"\"", 1);
+    assert_ne!(
+        raw, corrupt,
+        "expected to find the persisted name to corrupt"
+    );
+    fs::write(&path, corrupt).unwrap();
+
+    let err = svc.open_project(&p.id);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::CorruptMetadata(_) | ProjectCoreError::InvalidName(_))
+        ),
+        "invalid persisted project name must be rejected, got: {:?}",
+        err
+    );
+}
+
+#[test]
+fn padded_persisted_project_name_is_reparsed() {
+    let base = tmp_dir("padded-persisted-name");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    let path = project_json_path(&base, p.id.as_str());
+    let raw = fs::read_to_string(&path).unwrap();
+    let padded = raw.replacen("\"name\": \"Test\"", "\"name\": \"  Test  \"", 1);
+    assert_ne!(raw, padded);
+    fs::write(&path, padded).unwrap();
+
+    let reloaded = svc.open_project(&p.id).unwrap();
+    assert_eq!(
+        reloaded.name.as_str(),
+        "Test",
+        "reparsed ProjectName must be the trimmed canonical form"
+    );
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
