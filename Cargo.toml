@@ -2,6 +2,7 @@
 members = [
     "crates/project-core",
     "crates/project-fs",
+    "crates/project-publisher",
 ]
 resolver = "3"
 
