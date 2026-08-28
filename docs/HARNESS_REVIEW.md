@@ -27,6 +27,16 @@ or external sidecar has been selected or installed in M0. Those choices belong
 to a later ADR or the relevant milestone and must update `docs/VERIFY.md` when
 they introduce a toolchain.
 
+## M1 operational lesson
+
+Worker reliability is not an architectural dependency. A failed worker may be
+replaced without changing approved contracts or milestones. The mandatory
+operating policy is now `docs/AGENT_POLICY.md`: classify work LOW/MEDIUM/HIGH,
+delegate the lowest-cost sufficient agent, use separate author/reviewer
+worktrees, and **FAIL TWICE -> SWITCH AGENT** after reviewing the prompt or
+contract. The Big Pickle experience is retained as the operational example;
+the remedy is replacing the worker, not changing the approved design.
+
 ## M0 acceptance evidence
 
 Run `./scripts/bootstrap` and `./scripts/verify`. Both must pass without

@@ -20,3 +20,6 @@ security invariant. Do not create ADRs for scoped implementation details.
 
 Filename numbers are four digits, monotonically increasing, and never reused.
 Start from `0001` when the first decision is accepted.
+
+Current proposed decisions are design inputs only and must be accepted by the
+human owner before the implementation task they govern begins.

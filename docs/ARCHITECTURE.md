@@ -36,6 +36,12 @@ Example route table:
 
 Cloudflare sees only one local origin, e.g. `localhost:<publisher-port>`.
 
+M2's publisher is a read-only adapter: it receives only registered canonical
+`publish/` roots and opaque route keys, never a general project root. It serves
+content already prepared under `publish/`; the application decision to publish,
+route persistence, and content preparation belong to M3. See proposed
+ADR-0003 and `docs/M2_DESIGN.md`.
+
 ## Dependency rules
 - UI does not invoke OpenCode/cloudflared directly.
 - Core does not import Tauri APIs.

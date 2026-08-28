@@ -17,6 +17,9 @@ If implementation conflicts with these documents, stop and resolve the discrepan
 - Author and reviewer should differ when practical.
 - Avoid speculative abstractions beyond the next milestone.
 - Update docs when architectural or product behavior changes.
+- Apply the role, cost, retry, and Herdr delegation policy in
+  `docs/AGENT_POLICY.md` and `docs/MULTI_AGENT_WORKFLOW.md`.
+- Apply the primary-platform and portability policy in `docs/PLATFORM_POLICY.md`.
 - Follow `docs/WORKTREES.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
   `docs/TESTING.md` for execution details.
 - Before editing, state the milestone, exact file ownership, acceptance

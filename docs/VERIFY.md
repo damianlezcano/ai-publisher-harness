@@ -16,7 +16,7 @@ required check is a failure once that milestone introduces the relevant stack.
 | --- | --- |
 | M0 | Required harness documents and skills exist; shell scripts parse; no placeholder verification contract remains |
 | M1 | Harness/documentation validation; Rust format, lint, and test checks; filesystem/security integration tests for immutable inputs, atomic metadata, corrupt metadata, path boundaries, and directory separation; `git diff --check` |
-| M2 | M1 checks plus publisher integration and every applicable HTTP security invariant |
+| M2 | M1 checks plus `project-publisher` functional integration (`publisher_http`) and adversarial HTTP/filesystem security (`publisher_security`) suites, loopback binding assertion, and every applicable HTTP security invariant; no frontend tooling |
 | M3 | M2 checks plus multi-project publication lifecycle integration tests |
 | M4 | M3 checks plus controlled tunnel-adapter contract tests and URL/QR behavior tests |
 | M5+ | All applicable prior checks plus adapter/UI/end-to-end checks introduced by the milestone |
@@ -38,3 +38,11 @@ tooling.
 Frontend/package-manager checks are introduced only with a real frontend
 workspace in its milestone. M1 must not install or invoke Node tooling merely
 because the accepted architecture reserves TypeScript for the future UI.
+
+## M2 publisher behavior
+
+M2 adds Rust-only publisher checks after its crate and named integration suites
+exist. The exact intended commands are recorded in `docs/M2_DESIGN.md`:
+workspace format/lint/tests, `publisher_http`, `publisher_security`, and
+`git diff --check`. Before M2 implementation they are documentation, not
+placeholder commands: `scripts/verify` must not invoke nonexistent targets.
