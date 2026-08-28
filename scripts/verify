@@ -93,4 +93,4 @@ fi
 printf 'verify: git diff --check\n'
 git diff --check
 
-printf 'verify: M1 bootstrap contract passed\n'
+printf 'verify: M1 contract passed\n'
