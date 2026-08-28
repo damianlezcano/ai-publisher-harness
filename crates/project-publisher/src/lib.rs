@@ -121,6 +121,36 @@ mod tests {
     }
 
     #[test]
+    fn publication_route_serde_rejects_invalid_routes() {
+        let invalid_json_cases = [
+            "\"\"",
+            "\"-abc\"",
+            "\"abc-\"",
+            "\"a--b\"",
+            "\"Fotosintesis\"",
+            "\"a/b\"",
+            "\"a.b\"",
+            "\"a\\b\"",
+            "\"a%20b\"",
+            "\"café\"",
+            "\"../publish\"",
+            "\"a b\"",
+        ];
+
+        for case in invalid_json_cases {
+            let result: Result<PublicationRoute, _> = serde_json::from_str(case);
+            assert!(
+                result.is_err(),
+                "expected serde deserialization to reject {case}"
+            );
+        }
+
+        // Exceeding length limit in JSON
+        let over_80 = format!("\"{}\"", "a".repeat(81));
+        assert!(serde_json::from_str::<PublicationRoute>(&over_80).is_err());
+    }
+
+    #[test]
     fn publish_root_is_opaque_and_retains_path() {
         let path = PathBuf::from("/srv/storage/projects/p1/publish");
         let root = PublishRoot::from_path_buf_unchecked(path.clone());

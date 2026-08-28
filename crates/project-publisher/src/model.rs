@@ -41,7 +41,7 @@ fn is_valid_route_segment(s: &str) -> bool {
 }
 
 /// An opaque, canonical publication route conforming to `[a-z0-9]+(?:-[a-z0-9]+)*` (max 80 chars).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct PublicationRoute(String);
 
@@ -62,6 +62,16 @@ impl PublicationRoute {
     }
 }
 
+impl<'de> Deserialize<'de> for PublicationRoute {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::parse(s).map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Display for PublicationRoute {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -78,6 +88,11 @@ impl AsRef<str> for PublicationRoute {
 ///
 /// This type has no public constructor taking arbitrary `Path` or `PathBuf` instances;
 /// it can only be constructed by crate-internal/infrastructure validation seams.
+///
+/// # Task 2 Bridge Note
+/// In Task 2 (`project-fs`), `ProjectPublishRootProvider` will provide the bridge to
+/// construct validated `PublishRoot` instances for existing projects' fixed `publish/`
+/// directories.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PublishRoot(PathBuf);
 
