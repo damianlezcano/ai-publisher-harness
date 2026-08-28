@@ -17,6 +17,15 @@ If implementation conflicts with these documents, stop and resolve the discrepan
 - Author and reviewer should differ when practical.
 - Avoid speculative abstractions beyond the next milestone.
 - Update docs when architectural or product behavior changes.
+- Follow `docs/WORKTREES.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
+  `docs/TESTING.md` for execution details.
+- Before editing, state the milestone, exact file ownership, acceptance
+  criteria, and the planned author/reviewer. An agent owns a checkout for the
+  duration of its task; reviewers inspect a committed diff from another
+  checkout and do not edit the author's checkout.
+- Treat a security-invariant change as a security-review task, not a routine
+  implementation task. Resolve any conflict with the source-of-truth order
+  before writing code.
 
 ## Mandatory completion checks
 Before claiming a task is complete:
@@ -26,6 +35,7 @@ Before claiming a task is complete:
 - run integration checks where applicable
 - run `./scripts/verify` once implemented
 - ensure no security invariant regressed
+- record the commands and their result in the task handoff or pull request
 
 ## User-facing philosophy
 The user is non-technical. Internal technical power must not leak into default UX.

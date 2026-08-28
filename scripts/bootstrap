@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "bootstrap: no implementation dependencies yet"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+echo "bootstrap: M0 harness has no product dependencies to install"
+echo "bootstrap: validating repository contract"
+./scripts/verify

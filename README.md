@@ -13,4 +13,6 @@ OpenCode is the AI/agent engine. The desktop application owns projects, material
 1. Read `CODEX_HANDOFF.md`.
 2. Read `AGENTS.md`.
 3. Read `docs/PRODUCT.md`, `docs/ARCHITECTURE.md`, `docs/UX.md`, and `docs/SECURITY.md`.
-4. Do not start implementation until Milestone M0 is complete.
+4. Read `docs/WORKTREES.md`, `docs/MULTI_AGENT_WORKFLOW.md`, `docs/TESTING.md`,
+   and `docs/VERIFY.md` before assigning implementation work.
+5. Do not start implementation until Milestone M0 is complete.

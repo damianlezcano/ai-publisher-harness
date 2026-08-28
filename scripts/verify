@@ -1,5 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "verify: harness placeholder"
-echo "Milestone M0 must replace this with real format/lint/type/test/build/security checks."
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+failures=0
+
+fail() {
+  printf 'verify: FAIL: %s\n' "$1" >&2
+  failures=$((failures + 1))
+}
+
+require_file() {
+  [[ -f "$1" ]] || fail "missing required file: $1"
+}
+
+require_heading() {
+  local file="$1"
+  local heading="$2"
+  rg -Fq "$heading" "$file" || fail "missing heading '$heading' in $file"
+}
+
+for file in \
+  CODEX_HANDOFF.md AGENTS.md README.md \
+  docs/PRODUCT.md docs/ARCHITECTURE.md docs/SECURITY.md docs/UX.md \
+  docs/DEFINITION_OF_DONE.md docs/TESTING.md docs/VERIFY.md \
+  docs/WORKTREES.md docs/MULTI_AGENT_WORKFLOW.md docs/HARNESS_REVIEW.md \
+  docs/decisions/README.md \
+  skills/implement-feature/SKILL.md skills/review-feature/SKILL.md \
+  skills/review-architecture/SKILL.md skills/verify-ui/SKILL.md; do
+  require_file "$file"
+done
+
+for script in scripts/bootstrap scripts/verify; do
+  [[ -x "$script" ]] || fail "script is not executable: $script"
+  bash -n "$script" || fail "shell syntax check failed: $script"
+done
+
+require_heading docs/TESTING.md '## Required test levels'
+require_heading docs/VERIFY.md '## Contract by milestone'
+require_heading docs/WORKTREES.md '## Checkout ownership'
+require_heading docs/MULTI_AGENT_WORKFLOW.md '## Herdr delegation'
+require_heading docs/HARNESS_REVIEW.md '## Resolved gaps'
+
+if rg -n -i 'place[h]older|to[d]o|tb[d]' scripts/verify skills/*/SKILL.md; then
+  fail 'M0 verification and skills must not contain unresolved markers'
+fi
+
+if (( failures > 0 )); then
+  printf 'verify: %d harness contract failure(s)\n' "$failures" >&2
+  exit 1
+fi
+
+printf 'verify: M0 harness contract passed\n'
