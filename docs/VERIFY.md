@@ -17,7 +17,7 @@ required check is a failure once that milestone introduces the relevant stack.
 | M0 | Required harness documents and skills exist; shell scripts parse; no placeholder verification contract remains |
 | M1 | Harness/documentation validation; Rust format, lint, and test checks; filesystem/security integration tests for immutable inputs, atomic metadata, corrupt metadata, path boundaries, and directory separation; `git diff --check` |
 | M2 | M1 checks plus `project-publisher` functional integration (`publisher_http`) and adversarial HTTP/filesystem security (`publisher_security`) suites, loopback binding assertion, and every applicable HTTP security invariant; no frontend tooling |
-| M3 | M2 checks plus multi-project publication lifecycle integration tests |
+| M3 | M2 checks plus named publication lifecycle, snapshot-security, and schema-migration integration suites; all run locally without tunnel/UI/AI dependencies |
 | M4 | M3 checks plus controlled tunnel-adapter contract tests and URL/QR behavior tests |
 | M5+ | All applicable prior checks plus adapter/UI/end-to-end checks introduced by the milestone |
 
