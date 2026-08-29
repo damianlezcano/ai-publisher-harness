@@ -103,4 +103,8 @@ fi
 printf 'verify: git diff --check\n'
 git diff --check
 
-printf 'verify: M1 contract passed\n'
+if [[ -f crates/project-publisher/tests/publisher_http.rs ]]; then
+  printf 'verify: M2 contract passed\n'
+else
+  printf 'verify: M1 contract passed\n'
+fi
