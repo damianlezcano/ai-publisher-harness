@@ -12,7 +12,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod publication_snapshot;
 pub mod publish_root;
+pub use publication_snapshot::{PublicationSnapshot, PublicationSnapshotStore, SnapshotFault};
 pub use publish_root::ProjectPublishRootProvider;
 
 use std::fs;
