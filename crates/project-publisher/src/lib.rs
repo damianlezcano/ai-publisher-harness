@@ -355,6 +355,134 @@ mod tests {
     }
 
     #[test]
+    fn route_registry_replace_swaps_root_without_unregistering() {
+        let registry = RouteRegistry::new();
+        let route = PublicationRoute::parse("route-a").unwrap();
+        let old_root = sample_root("old");
+        let new_root = sample_root("new");
+        let other = PublicationRoute::parse("route-b").unwrap();
+
+        // Replace of an unregistered route is typed NotRegistered and inserts nothing.
+        let missing = registry.replace(PublishedProject::new(route.clone(), new_root.clone()));
+        assert!(matches!(
+            missing,
+            Err(PublisherError::NotRegistered(ref r)) if r == &route
+        ));
+        assert!(registry.is_empty());
+
+        registry
+            .reserve(PublishedProject::new(route.clone(), old_root.clone()))
+            .unwrap();
+        registry
+            .reserve(PublishedProject::new(other.clone(), sample_root("other")))
+            .unwrap();
+
+        // Same-route replace succeeds and keeps the route registered.
+        registry
+            .replace(PublishedProject::new(route.clone(), new_root.clone()))
+            .unwrap();
+        assert!(registry.contains(&route));
+        assert_eq!(registry.len(), 2);
+        let replaced = registry.lookup(&route).unwrap();
+        assert_eq!(replaced.publish_root(), &new_root);
+        assert_ne!(replaced.publish_root(), &old_root);
+
+        // Sibling route is untouched.
+        assert_eq!(
+            registry.lookup(&other).unwrap().publish_root(),
+            &sample_root("other")
+        );
+
+        // Register of the still-registered route remains a conflict.
+        let conflict = registry.reserve(PublishedProject::new(route.clone(), sample_root("x")));
+        assert!(matches!(
+            conflict,
+            Err(PublisherError::RouteConflict(ref r)) if r == &route
+        ));
+        assert_eq!(registry.len(), 2);
+
+        // Replace still does not create a third route.
+        let unknown = PublicationRoute::parse("route-c").unwrap();
+        let not_registered =
+            registry.replace(PublishedProject::new(unknown.clone(), sample_root("c")));
+        assert!(matches!(
+            not_registered,
+            Err(PublisherError::NotRegistered(ref r)) if r == &unknown
+        ));
+        assert!(!registry.contains(&unknown));
+        assert_eq!(registry.len(), 2);
+    }
+
+    #[test]
+    fn route_registry_replace_has_no_unregister_register_gap() {
+        let registry = Arc::new(RouteRegistry::new());
+        let route = PublicationRoute::parse("live-route").unwrap();
+        let old_project = PublishedProject::new(route.clone(), sample_root("old"));
+        let new_project = PublishedProject::new(route.clone(), sample_root("new"));
+        registry.reserve(old_project.clone()).unwrap();
+
+        let old_root = old_project.publish_root().clone();
+        let new_root = new_project.publish_root().clone();
+
+        let mut lookup_handles = vec![];
+        for _ in 0..16 {
+            let reg = Arc::clone(&registry);
+            let route = route.clone();
+            let old_root = old_root.clone();
+            let new_root = new_root.clone();
+            lookup_handles.push(thread::spawn(move || {
+                for _ in 0..2_000 {
+                    let found = reg
+                        .lookup(&route)
+                        .expect("replace must not leave the route unregistered");
+                    let root = found.publish_root();
+                    assert!(
+                        root == &old_root || root == &new_root,
+                        "lookup must observe a complete old or new root"
+                    );
+                }
+            }));
+        }
+
+        let mut reserve_handles = vec![];
+        for _ in 0..8 {
+            let reg = Arc::clone(&registry);
+            let route = route.clone();
+            reserve_handles.push(thread::spawn(move || {
+                for i in 0..500 {
+                    let attempt =
+                        PublishedProject::new(route.clone(), sample_root(&format!("conflict-{i}")));
+                    assert!(
+                        matches!(reg.reserve(attempt), Err(PublisherError::RouteConflict(_))),
+                        "same-route reserve must stay a conflict during replace"
+                    );
+                }
+            }));
+        }
+
+        for _ in 0..200 {
+            registry.replace(new_project.clone()).unwrap();
+            registry.replace(old_project.clone()).unwrap();
+        }
+        registry.replace(new_project.clone()).unwrap();
+
+        for handle in lookup_handles {
+            handle.join().unwrap();
+        }
+        for handle in reserve_handles {
+            handle.join().unwrap();
+        }
+
+        assert!(registry.contains(&route));
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.lookup(&route).unwrap().publish_root(), &new_root);
+        assert!(matches!(
+            registry.reserve(old_project),
+            Err(PublisherError::RouteConflict(_))
+        ));
+    }
+
+    #[test]
     fn route_registry_concurrent_access() {
         let registry = Arc::new(RouteRegistry::new());
         let mut handles = vec![];
@@ -438,6 +566,13 @@ mod tests {
             self.registry.reserve(project)
         }
 
+        fn replace(&mut self, project: PublishedProject) -> PublisherResult<()> {
+            if self.endpoint.is_none() {
+                return Err(PublisherError::NotRunning);
+            }
+            self.registry.replace(project)
+        }
+
         fn unregister(&mut self, route: &PublicationRoute) -> PublisherResult<()> {
             if self.endpoint.is_none() {
                 return Err(PublisherError::NotRunning);
@@ -478,6 +613,10 @@ mod tests {
             Err(PublisherError::NotRunning)
         ));
         assert!(matches!(
+            publ.replace(proj.clone()),
+            Err(PublisherError::NotRunning)
+        ));
+        assert!(matches!(
             publ.unregister(&r),
             Err(PublisherError::NotRunning)
         ));
@@ -500,12 +639,31 @@ mod tests {
 
         // Duplicate register fails with conflict
         assert!(matches!(
-            publ.register(proj),
+            publ.register(proj.clone()),
             Err(PublisherError::RouteConflict(_))
+        ));
+
+        // Same-route replace succeeds and does not open a register gap.
+        let replaced = PublishedProject::new(r.clone(), sample_root("proj1-next"));
+        assert!(publ.replace(replaced).is_ok());
+        assert!(matches!(
+            publ.register(proj.clone()),
+            Err(PublisherError::RouteConflict(_))
+        ));
+
+        // Replace of an unregistered route is typed NotRegistered.
+        let other = PublicationRoute::parse("other-route").unwrap();
+        assert!(matches!(
+            publ.replace(PublishedProject::new(other.clone(), sample_root("x"))),
+            Err(PublisherError::NotRegistered(_))
         ));
 
         // Unregister
         assert!(publ.unregister(&r).is_ok());
+        assert!(matches!(
+            publ.replace(proj),
+            Err(PublisherError::NotRegistered(_))
+        ));
         assert!(matches!(
             publ.unregister(&r),
             Err(PublisherError::NotRegistered(_))

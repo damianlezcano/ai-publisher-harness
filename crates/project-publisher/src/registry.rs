@@ -48,6 +48,25 @@ impl RouteRegistry {
             .map(|(_, project)| project.publish_root.clone())
     }
 
+    /// Atomically replaces the publish root of an already registered same route.
+    ///
+    /// The route identity stays present for the entire write-lock critical
+    /// section; this is not an unregister/register pair. Concurrent lookups
+    /// therefore observe either the previous `PublishedProject` or the new one,
+    /// never a missing registration.
+    ///
+    /// Returns `PublisherError::NotRegistered` if the route is not currently
+    /// registered. Does not insert a new route.
+    pub fn replace(&self, project: PublishedProject) -> PublisherResult<()> {
+        let mut routes = self.routes.write().expect("lock poisoned");
+        if let Some(existing) = routes.get_mut(&project.route) {
+            *existing = project;
+            Ok(())
+        } else {
+            Err(PublisherError::NotRegistered(project.route))
+        }
+    }
+
     /// Atomically releases (unregisters) a publication route and returns the unregistered project.
     ///
     /// Returns `PublisherError::NotRegistered` if the route is not currently registered.

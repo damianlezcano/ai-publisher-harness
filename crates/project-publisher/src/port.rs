@@ -12,6 +12,13 @@ pub trait LocalPublisher {
     /// Registers a published project route with its validated publish root.
     fn register(&mut self, project: PublishedProject) -> PublisherResult<()>;
 
+    /// Atomically replaces the `PublishRoot` of an already registered same route.
+    ///
+    /// The route stays registered for the entire operation; this is not an
+    /// unregister/register pair. Returns `PublisherError::NotRegistered` if the
+    /// route is not currently registered.
+    fn replace(&mut self, project: PublishedProject) -> PublisherResult<()>;
+
     /// Unregisters an existing publication route.
     fn unregister(&mut self, route: &PublicationRoute) -> PublisherResult<()>;
 

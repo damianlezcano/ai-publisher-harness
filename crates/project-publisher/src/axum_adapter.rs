@@ -2,7 +2,7 @@
 //!
 //! Binds exactly `127.0.0.1:0` (OS-assigned ephemeral port), runs a background
 //! Tokio runtime serving an Axum router, and provides atomic route
-//! register/unregister semantics backed by the shared [`RouteRegistry`].
+//! register/replace/unregister semantics backed by the shared [`RouteRegistry`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,6 +94,13 @@ impl LocalPublisher for AxumLocalPublisher {
             return Err(PublisherError::NotRunning);
         }
         self.registry.reserve(project)
+    }
+
+    fn replace(&mut self, project: PublishedProject) -> PublisherResult<()> {
+        if self.runtime.is_none() {
+            return Err(PublisherError::NotRunning);
+        }
+        self.registry.replace(project)
     }
 
     fn unregister(&mut self, route: &PublicationRoute) -> PublisherResult<()> {

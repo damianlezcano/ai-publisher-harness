@@ -52,6 +52,17 @@ impl RunningServer {
         format!("{}{}", self.base_url(), route)
     }
 
+    /// Atomically replaces the publish root of an already registered route.
+    ///
+    /// The previous `TempDir` is retained so in-flight reads of the old root
+    /// are not deleted out from under the server.
+    fn replace(&mut self, route: &str, files: &[(&str, &[u8])]) {
+        let (dir, root) = Self::make_publish_root(files);
+        let project = PublishedProject::new(PublicationRoute::parse(route).unwrap(), root);
+        self.publisher.replace(project).expect("replace route");
+        self._dirs.push(dir);
+    }
+
     /// Creates a temporary `publish/` tree with the given files and returns both the
     /// owning `TempDir` (kept alive by the caller) and a canonical `PublishRoot`.
     fn make_publish_root(files: &[(&str, &[u8])]) -> (TempDir, PublishRoot) {
@@ -412,6 +423,181 @@ fn removing_a_leaves_b_served() {
 }
 
 // ---------------------------------------------------------------------------
+// Atomic same-route replace
+// ---------------------------------------------------------------------------
+
+#[test]
+fn replace_serves_new_root_and_keeps_sibling_isolated() {
+    let mut server = RunningServer::new();
+    let a = server.publish(
+        "route-a",
+        &[
+            ("index.html", b"OLD-COMPLETE"),
+            ("only-old.txt", b"old-only"),
+        ],
+    );
+    let b = server.publish("route-b", &[("index.html", b"B-UNCHANGED")]);
+
+    server.replace(
+        "route-a",
+        &[
+            ("index.html", b"NEW-COMPLETE"),
+            ("only-new.txt", b"new-only"),
+        ],
+    );
+
+    assert_eq!(server.get(&format!("{a}/")).body(), b"NEW-COMPLETE");
+    assert_eq!(server.get(&format!("{a}/only-new.txt")).body(), b"new-only");
+    assert_eq!(server.get(&format!("{a}/only-old.txt")).status, 404);
+    assert_eq!(server.get(&format!("{b}/")).body(), b"B-UNCHANGED");
+    assert_eq!(server.get(&format!("{b}/only-new.txt")).status, 404);
+}
+
+#[test]
+fn replace_keeps_route_conflict_and_does_not_register_missing_routes() {
+    let mut server = RunningServer::new();
+    let (_dir, root) = RunningServer::make_publish_root(&[("index.html", b"x")]);
+    let route_a = PublicationRoute::parse("route-a").unwrap();
+    let route_c = PublicationRoute::parse("route-c").unwrap();
+
+    server.publish("route-a", &[("index.html", b"OLD")]);
+    server.replace("route-a", &[("index.html", b"NEW")]);
+
+    let conflict = server
+        .publisher
+        .register(PublishedProject::new(route_a, root.clone()));
+    assert!(matches!(
+        conflict,
+        Err(project_publisher::PublisherError::RouteConflict(_))
+    ));
+
+    let missing = server
+        .publisher
+        .replace(PublishedProject::new(route_c.clone(), root));
+    assert!(matches!(
+        missing,
+        Err(project_publisher::PublisherError::NotRegistered(_))
+    ));
+    assert_eq!(
+        server.get(&format!("{}route-c/", server.base_url())).status,
+        404
+    );
+    assert_eq!(
+        server.get(&format!("{}route-a/", server.base_url())).body(),
+        b"NEW"
+    );
+}
+
+#[test]
+fn http_during_replace_sees_complete_old_or_new_root() {
+    const OLD: &[u8] = b"OLD-COMPLETE-ROOT-AAAAAAAA";
+    const NEW: &[u8] = b"NEW-COMPLETE-ROOT-BBBBBBBB";
+
+    let mut server = RunningServer::new();
+    let a = server.publish(
+        "live-route",
+        &[("index.html", OLD), ("only-old.txt", b"old-only")],
+    );
+    server.publish("other-route", &[("index.html", b"OTHER")]);
+
+    let (_new_dir, new_root) =
+        RunningServer::make_publish_root(&[("index.html", NEW), ("only-new.txt", b"new-only")]);
+    let replace_project =
+        PublishedProject::new(PublicationRoute::parse("live-route").unwrap(), new_root);
+
+    let index_url = format!("{a}/");
+    let old_only_url = format!("{a}/only-old.txt");
+    let new_only_url = format!("{a}/only-new.txt");
+    let other_url = format!("{}other-route/", server.base_url());
+    let agent = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handles: Vec<_> = (0..24)
+        .map(|_| {
+            let index_url = index_url.clone();
+            let old_only_url = old_only_url.clone();
+            let new_only_url = new_only_url.clone();
+            let other_url = other_url.clone();
+            let agent = agent.clone();
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let index = resp_of(agent.get(&index_url).send().expect("get index"));
+                    assert_eq!(index.status, 200, "replace must not 404 the live route");
+                    assert!(
+                        index.body() == OLD || index.body() == NEW,
+                        "index must be a complete old or new root, got {:?}",
+                        String::from_utf8_lossy(index.body())
+                    );
+
+                    let old_only = resp_of(agent.get(&old_only_url).send().expect("get old-only"));
+                    match old_only.status {
+                        200 => assert_eq!(old_only.body(), b"old-only"),
+                        404 => {}
+                        status => panic!("old-only must be complete old or gone, got {status}"),
+                    }
+
+                    let new_only = resp_of(agent.get(&new_only_url).send().expect("get new-only"));
+                    match new_only.status {
+                        200 => assert_eq!(new_only.body(), b"new-only"),
+                        404 => {}
+                        status => panic!("new-only must be complete new or absent, got {status}"),
+                    }
+
+                    let other = resp_of(agent.get(&other_url).send().expect("get other"));
+                    assert_eq!(other.body(), b"OTHER");
+                }
+                true
+            })
+        })
+        .collect();
+
+    // Alternate roots so lookups overlapping the write lock observe both sides.
+    for _ in 0..80 {
+        server
+            .publisher
+            .replace(replace_project.clone())
+            .expect("replace to new");
+        server.replace(
+            "live-route",
+            &[("index.html", OLD), ("only-old.txt", b"old-only")],
+        );
+    }
+    server
+        .publisher
+        .replace(replace_project)
+        .expect("final replace to new");
+    server._dirs.push(_new_dir);
+
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for h in handles {
+        assert!(h.join().expect("http worker"));
+    }
+
+    assert_eq!(server.get(&format!("{a}/")).body(), NEW);
+    assert_eq!(server.get(&format!("{a}/only-new.txt")).body(), b"new-only");
+    assert_eq!(server.get(&format!("{a}/only-old.txt")).status, 404);
+    assert_eq!(
+        server
+            .get(&format!("{}other-route/", server.base_url()))
+            .body(),
+        b"OTHER"
+    );
+
+    let conflict = server.publisher.register(PublishedProject::new(
+        PublicationRoute::parse("live-route").unwrap(),
+        RunningServer::make_publish_root(&[("index.html", b"steal")]).1,
+    ));
+    assert!(matches!(
+        conflict,
+        Err(project_publisher::PublisherError::RouteConflict(_))
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // Unicode / conflicting filenames
 // ---------------------------------------------------------------------------
 
@@ -555,6 +741,13 @@ fn stop_disallows_register_and_serving() {
     match publisher.register(project) {
         Err(project_publisher::PublisherError::NotRunning) => {}
         other => panic!("expected NotRunning, got {other:?}"),
+    }
+
+    let (_dir2, root2) = RunningServer::make_publish_root(&[("index.html", b"n")]);
+    let replace_project = PublishedProject::new(PublicationRoute::parse("a").unwrap(), root2);
+    match publisher.replace(replace_project) {
+        Err(project_publisher::PublisherError::NotRunning) => {}
+        other => panic!("expected NotRunning on replace, got {other:?}"),
     }
 
     // The old endpoint is no longer bound.
