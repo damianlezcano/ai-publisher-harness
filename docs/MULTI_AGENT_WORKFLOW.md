@@ -1,23 +1,25 @@
 # Multi-Agent Workflow
 
 Use multiple agents only when tasks are independent enough to have separate
-file ownership and checkout boundaries. The lead may choose any suitable
-combination of Codex, Cursor Agent, OpenCode, and Antigravity CLI; none is
-mandatory for a task. The role and retry policy is normative in
-`docs/AGENT_POLICY.md`.
+file ownership and checkout boundaries. The lead selects the cheapest reliable
+pool using `docs/AGENT_POLICY.md`; no provider, model, or Antigravity is
+mandatory for a task. OpenCode Go must use only its approved non-GPT/non-Grok
+models.
 
 ## Roles
 
 | Role | Best fit | Typical work |
 | --- | --- | --- |
 | Lead/integrator | Codex Tierra | Decomposition, boundary decisions, integration, final verification, high-impact debugging |
-| Preferred builder | Cursor Agent + Grok | Closed implementation tasks, bounded refactors, tests |
-| Independent author, tester, or reviewer | Antigravity CLI / AGY Flash | Low-risk implementation, research, security tests, independent review |
-| Other agents | As justified | Only when their capability is materially useful |
+| Cheap implementation | Cursor Composer 2.5 / OpenCode Go MiMo | LOW code, tests, docs, boilerplate |
+| Normal implementation/review | OpenCode Go DeepSeek V4 Flash | MEDIUM Rust, filesystem, adapters, tests, review |
+| Complex coding | Cursor Grok 4.6 standard / OpenCode Go Kimi fallback | MEDIUM_HIGH/HIGH_CODING |
+| Optional worker | Antigravity CLI / AGY | Only when available and clearly useful |
 | Reviewer | Different agent than author | Architecture, security, tests, and acceptance-criteria review |
 
-Assignments follow the task, not tool preference. The lead records why a role
-was selected and ensures author and reviewer differ whenever practical.
+Assignments follow the task, not a rigid tool preference. The lead records the
+reasoning class and selected pool, and ensures author and reviewer differ,
+preferably across model/provider families, whenever practical.
 
 ## Herdr delegation
 
@@ -49,9 +51,10 @@ owns integration and runs `./scripts/verify` after every integration batch.
 
 ## Example task sequence
 
-1. Lead creates `m2/publisher-route-guard` worktree and assigns only publisher
-   files to a Cursor/Grok author.
-2. Lead assigns a separate worktree/diff review to Antigravity CLI,
+1. Lead classifies the task and creates `m2/publisher-route-guard` worktree,
+   assigning only publisher files to the cheapest reliable author (for example
+   Composer for LOW or DeepSeek for MEDIUM).
+2. Lead assigns a separate worktree/diff review to a different pool,
    with `docs/SECURITY.md` invariants 1–7 and 9–11 as explicit review criteria.
 3. Author resolves material findings in its worktree and reports the amended
    SHA. Reviewer rechecks the material changes.

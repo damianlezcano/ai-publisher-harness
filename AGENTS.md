@@ -19,6 +19,9 @@ If implementation conflicts with these documents, stop and resolve the discrepan
 - Update docs when architectural or product behavior changes.
 - Apply the role, cost, retry, and Herdr delegation policy in
   `docs/AGENT_POLICY.md` and `docs/MULTI_AGENT_WORKFLOW.md`.
+- Use the active model matrix rather than a fixed provider: Antigravity is
+  optional, OpenCode Go never uses GPT/Grok, and Codex Tierra is not the
+  default builder.
 - Apply the primary-platform and portability policy in `docs/PLATFORM_POLICY.md`.
 - Follow `docs/WORKTREES.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
   `docs/TESTING.md` for execution details.

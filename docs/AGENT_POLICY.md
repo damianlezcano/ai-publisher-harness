@@ -1,75 +1,100 @@
-# Agent Cost and Token Policy
+# Active Agent Cost, Reliability, and Token Policy
 
-This policy makes the harness resilient to a worker/model being unreliable.
-Agent choice is an execution concern: replacing a worker must not change an
-approved architecture, contract, or milestone. The Big Pickle experience is a
-concrete reminder that the workflow must not be coupled to one model.
+This is the active harness policy. Agent/model selection is an execution
+decision, never an architectural or milestone dependency. A worker may be
+replaced without changing approved contracts. Big Pickle is retained only as a
+historical failure example; it is not a current dependency.
 
-## Roles
+## Principle
 
-| Agent | Primary role | Do not use by default for |
+Use the cheapest reliable model that can complete the task. Codex Tierra is a
+scarce orchestration resource and is not the default builder.
+
+## Agent pools and roles
+
+| Pool/model | Level | Preferred use |
 | --- | --- | --- |
-| Codex Tierra | Tech lead: orchestration, architecture, planning, integration, conflict resolution, high-impact debugging, and final review of critical boundaries | Boilerplate, routine tests, simple specified modules, and trivial edits |
-| Cursor Agent + Grok | Preferred builder for specified code, tests, bounded refactors, and medium-complexity modules | Redesigning approved architecture or contracts |
-| Antigravity CLI / AGY Flash | Low-risk implementation, focused research, security tests, repetitive validation, and independent review | Broad, ambiguous ownership or unapproved architectural decisions |
-| Other agents | Only when a specific capability provides clear value | Default use or duplicated work |
+| Codex Tierra | HIGH_ARCHITECTURE | Orchestration, architecture, decomposition, contracts, integration, critical security decisions, conflicts, final gate |
+| Cursor Composer 2.5 | LOW/MEDIUM | Primary cheap implementation worker: specified code, structs, adapters, tests, refactors, docs, boilerplate |
+| Cursor Grok 4.6 standard | MEDIUM_HIGH/HIGH_CODING | Complex coding, concurrency, difficult bugs, cross-module integration, security fixes; do not use Fast by default |
+| OpenCode Go MiMo-V2.5 | LOW | Simple tests, boilerplate, docs, repetitive corrections |
+| OpenCode Go DeepSeek V4 Flash | MEDIUM | Default OpenCode Go implementation/review worker for Rust, tests, filesystem, adapters, and moderate security |
+| OpenCode Go Qwen3.8 Flash | MEDIUM fallback | Use after DeepSeek failure/degradation or for a deliberate second family opinion |
+| OpenCode Go Kimi K2.7 Code | HIGH_CODING fallback | Difficult code after medium workers fail, or when Grok is unavailable/inappropriate |
+| Antigravity CLI / AGY | Optional | Use only when available and clearly useful; never required by a workflow because of quota limits |
 
-Cursor/Grok should use the least costly reasoning configuration that can meet a
-closed contract. Antigravity Flash/free is preferred when its capability is
-sufficient. Codex Tierra remains the project context holder and is not the
-default implementation worker.
+OpenCode Go must not use GPT or Grok models. Cursor Grok is reserved for
+MEDIUM_HIGH/HIGH_CODING work; Composer and DeepSeek should absorb most normal
+work. HIGH_ARCHITECTURE remains Codex Tierra.
 
-## Reasoning classification
+## Reasoning matrix
 
-| Level | Meaning | Default delegation |
-| --- | --- | --- |
-| LOW | Boilerplate, simple tests, small fully specified change | Cursor/Grok low reasoning or Antigravity Flash |
-| MEDIUM | Bounded module, moderate logic, local integration, known security tests | Cursor/Grok or Antigravity; Codex supervises |
-| HIGH | Architecture, critical security, cross-module integration, conflict, complex debugging | Codex Tierra; first split into LOW/MEDIUM tasks when safe |
+| Classification | Preference order |
+| --- | --- |
+| LOW | Composer 2.5 → MiMo-V2.5 |
+| MEDIUM | DeepSeek V4 Flash → Composer 2.5 → Qwen3.8 Flash |
+| MEDIUM_HIGH | Grok 4.6 standard → DeepSeek V4 Flash → Kimi K2.7 Code |
+| HIGH_CODING | Grok 4.6 standard → Kimi K2.7 Code → Codex only if delegation is unreasonable |
+| HIGH_ARCHITECTURE | Codex Tierra |
 
-Before Codex Tierra writes implementation code, it asks whether a clear
-contract lets a lower-cost worker complete it safely. If yes, delegate.
+These are preferences, not rigid dependencies. Availability and reliability
+may justify switching workers.
 
-## Delegation contract and handoff
+## Task contracts and worker behavior
 
-Give a worker only: objective, allowed files/modules, relevant constraints and
-contracts, Definition of Done, and exact verification commands. Do not flood a
-worker with global project context. Every worker prompt includes:
+Each worker receives only the objective, allowed files/modules, forbidden scope,
+relevant contract and invariants, Definition of Done, and verification
+commands. The lead retains global project context.
+
+Every implementation prompt includes:
 
 ```
 DO NOT REDESIGN THE TASK.
 DO NOT EXPLORE UNRELATED ALTERNATIVES.
-IMPLEMENT THE CONTRACT PROVIDED.
-IF THE CONTRACT IS AMBIGUOUS, STOP AND ASK THE ORCHESTRATOR.
+IMPLEMENT THE PROVIDED CONTRACT.
+DO NOT MODIFY FILES OUTSIDE YOUR OWNERSHIP.
+IF THE CONTRACT IS AMBIGUOUS: STOP AND ASK THE ORCHESTRATOR.
+RUN THE REQUIRED CHECKS BEFORE HANDOFF.
+RETURN A SHORT REPORT.
 ```
 
-The handoff is short: changed files, tests and result, blockers/risks, and
-commit SHA. The integration checkout is lead-only; each author has one
-exclusive worktree. Reviewers use a separate checkout or read-only diff.
+Required handoff format:
 
-## Failure policy
+```
+STATUS: PASS / BLOCKED / FAIL
+CHANGES:
+- ...
+TESTS:
+- command — result
+FINDINGS:
+- ... (if any)
+COMMIT:
+- SHA
+```
 
-1. Assess whether the prompt or supplied contract was ambiguous; fix it first
-   if necessary.
-2. Permit at most one retry with the same agent type when the failure appears
-   recoverable.
-3. On the second failure, switch agent type.
-4. Escalate implementation to Codex Tierra only when no reasonable delegated
-   alternative remains.
+## Review, sessions, and failure
 
-**FAIL TWICE -> SWITCH AGENT.** Do not spend repeated iterations attempting to
-make one unreliable worker succeed.
+Author and reviewer must differ whenever practical, preferably across model or
+provider families. Codex reviews directly only for architecture, critical
+security, integration, cross-module changes, or reviewer conflicts.
 
-## Review and Herdr sequence
+Reuse a healthy session for a small finding. Stop and switch when a worker
+deviates, repeats an error, or produces unrelated changes. Keep **FAIL TWICE →
+SWITCH AGENT**: assess prompt ambiguity, allow one retry, then switch model;
+escalate to Codex only when appropriate workers cannot solve the task.
 
-Author and reviewer are different agents whenever reasonable. Preferred
-combinations are Cursor/Grok author plus Antigravity reviewer, or Antigravity
-author plus Cursor/Grok reviewer. Codex Tierra reviews directly only for
-architecture, critical security, cross-module integration, or unresolved
-reviewer conflict.
+## Token efficiency
 
-When Herdr adds value: Codex Tierra defines the contract, creates the author
-worktree, opens a non-focused pane, delegates, waits for the concise handoff,
-runs task checks, delegates independent review, has the author resolve material
-findings, integrates on the reserved checkout, and runs the milestone gate.
-Never require every available agent for a task.
+1. Small context over full-repository context.
+2. Contract-first delegation over exploratory workers.
+3. Cheap model first for clear tasks.
+4. Escalate capability only when necessary.
+5. Do not use multiple models for one task unless review, failure, or uncertainty justifies it.
+6. Reuse healthy sessions for small fixes.
+7. Switch quickly from unreliable workers.
+8. Treat Codex Tierra as a scarce orchestration resource.
+
+## Platform
+
+The active platform policy remains Fedora 44 x86_64 for development and the
+initial Linux MVP. Preserve portability; do not add Windows-specific work yet.
