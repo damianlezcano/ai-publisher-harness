@@ -36,6 +36,18 @@ impl RouteRegistry {
         routes.get(route).cloned()
     }
 
+    /// Looks up a publish root by a raw (still-encoded) request-path route segment.
+    ///
+    /// Matching is a byte-stable comparison against canonical lowercase ASCII routes,
+    /// so percent-encoded or otherwise malformed route segments never match.
+    pub fn lookup_by_str(&self, raw: &str) -> Option<crate::model::PublishRoot> {
+        let routes = self.routes.read().expect("lock poisoned");
+        routes
+            .iter()
+            .find(|(route, _)| route.as_str() == raw)
+            .map(|(_, project)| project.publish_root.clone())
+    }
+
     /// Atomically releases (unregisters) a publication route and returns the unregistered project.
     ///
     /// Returns `PublisherError::NotRegistered` if the route is not currently registered.

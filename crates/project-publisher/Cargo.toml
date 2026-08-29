@@ -7,10 +7,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+axum = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

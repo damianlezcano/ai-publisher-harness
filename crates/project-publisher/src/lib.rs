@@ -1,15 +1,20 @@
-//! Framework-free contracts, models, and registry for the local-only project publisher.
+//! Contracts, models, registry, and the Axum/Tokio adapter for the local-only
+//! project publisher.
 //!
-//! This crate deliberately contains no filesystem I/O, HTTP/Tokio/Axum, M3 policy/persistence,
-//! or Unix API dependencies.
+//! The framework-free contracts and registry contain no filesystem I/O, M3
+//! policy/persistence, or Unix API dependencies; the HTTP adapter in
+//! [`axum_adapter`] supplies Tokio/Axum serving bound only to loopback.
 
 #![forbid(unsafe_code)]
 
+pub mod axum_adapter;
 pub mod error;
 pub mod model;
 pub mod port;
 pub mod registry;
+pub mod serve;
 
+pub use axum_adapter::AxumLocalPublisher;
 pub use error::{PublisherError, PublisherResult};
 pub use model::{
     LoopbackUrl, MAX_ROUTE_CHARS, PublicationRoute, PublishRoot, PublishedProject,
