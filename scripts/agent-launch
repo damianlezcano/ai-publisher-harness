@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$repo_root/config/agent-models.env"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/agent-launch --role ROLE --provider cursor|opencode [options]
+
+Roles: low, medium, medium-fallback, medium-high, high-coding
+Options:
+  --worktree PATH  Required for --launch.
+  --pane ID        Required for --launch; Herdr pane ID.
+  --name NAME      Required for --launch; Herdr agent name.
+  --launch         Start through Herdr with an explicit native --model argument.
+  --dry-run        Resolve and verify the exact configured model without launch.
+  --check-config   Resolve the mapping only; offline and safe for scripts/verify.
+EOF
+}
+
+role=""
+provider=""
+worktree=""
+pane=""
+name=""
+mode=""
+
+while (($#)); do
+  case "$1" in
+    --role) role=${2:?}; shift 2 ;;
+    --provider) provider=${2:?}; shift 2 ;;
+    --worktree) worktree=${2:?}; shift 2 ;;
+    --pane) pane=${2:?}; shift 2 ;;
+    --name) name=${2:?}; shift 2 ;;
+    --launch|--dry-run|--check-config) mode=$1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "agent-launch: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[[ -n $role && -n $provider && -n $mode ]] || { usage >&2; exit 2; }
+
+case "$role/$provider" in
+  low/cursor) model=$LOW_CURSOR_MODEL ;;
+  low/opencode) model=$LOW_OPENCODE_MODEL ;;
+  medium/cursor) model=$MEDIUM_CURSOR_MODEL ;;
+  medium/opencode) model=$MEDIUM_OPENCODE_MODEL ;;
+  medium-fallback/opencode) model=$MEDIUM_FALLBACK_OPENCODE_MODEL ;;
+  medium-high/cursor) model=$MEDIUM_HIGH_CURSOR_MODEL ;;
+  medium-high/opencode) model=$MEDIUM_HIGH_OPENCODE_MODEL ;;
+  high-coding/cursor) model=$HIGH_CODING_CURSOR_MODEL ;;
+  high-coding/opencode) model=$HIGH_CODING_OPENCODE_MODEL ;;
+  *) echo "agent-launch: unsupported role/provider: $role/$provider" >&2; exit 2 ;;
+esac
+
+[[ -n $model ]] || {
+  echo "agent-launch: FAIL CLOSED: $role/$provider has no configured available model" >&2
+  exit 3
+}
+
+if [[ $mode != --check-config && $provider == cursor ]]; then
+  cursor-agent models | awk '{print $1}' | grep -Fxq "$model" || {
+    echo "agent-launch: FAIL CLOSED: configured Cursor model unavailable: $model" >&2
+    exit 4
+  }
+elif [[ $mode != --check-config ]]; then
+  opencode models | awk 'NF { print $1 }' | grep -Fxq "$model" || {
+    echo "agent-launch: FAIL CLOSED: configured OpenCode model unavailable: $model" >&2
+    exit 4
+  }
+fi
+
+printf 'TASK: %s\nREASONING_LEVEL: %s\nAGENT_PROVIDER: %s\nMODEL_REQUESTED: %s\nMODEL_ACTUAL: %s\nWORKTREE: %s\n' \
+  "${name:-dry-run}" "$role" "$provider" "$model" "$model" "${worktree:-dry-run}"
+
+if [[ $mode == --dry-run || $mode == --check-config ]]; then
+  exit 0
+fi
+
+[[ -n $worktree && -n $pane && -n $name ]] || {
+  echo "agent-launch: --worktree, --pane, and --name are required for --launch" >&2
+  exit 2
+}
+[[ ${HERDR_ENV:-} == 1 ]] || {
+  echo "agent-launch: must run inside a Herdr session" >&2
+  exit 5
+}
+
+# The native CLI receives --model at process creation. Herdr only manages the
+# pane lifecycle; it never chooses a provider default for this harness.
+herdr agent start "$name" --kind "$provider" --pane "$pane" -- --model "$model"

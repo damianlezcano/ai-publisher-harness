@@ -40,6 +40,30 @@ work. HIGH_ARCHITECTURE remains Codex Tierra.
 These are preferences, not rigid dependencies. Availability and reliability
 may justify switching workers.
 
+## Executable model enforcement
+
+`config/agent-models.env` is the canonical mapping from reasoning role and
+provider to the exact CLI model ID. `scripts/agent-launch` is mandatory for
+every future Cursor or OpenCode worker; direct generic `herdr agent start` is
+forbidden for harness work. It discovers the configured ID from the provider
+CLI before launch, prints TASK/REASONING_LEVEL/AGENT_PROVIDER/MODEL_REQUESTED/
+MODEL_ACTUAL/WORKTREE, and fails closed if a mapping is empty or unavailable.
+
+For a Herdr worker it passes the native `--model <id>` during `agent start`.
+The worker prompt is sent only after this pre-launch verification. The launcher
+does not rely on provider defaults, prior sessions, prompt prose, or interactive
+selection. Cursor's canonical standard Grok ID is `cursor-grok-4.6-medium`;
+`cursor-grok-4.6-high` is not a default or an automatic fallback.
+
+`--check-config` is offline and is the deterministic `scripts/verify` gate.
+`--dry-run` performs live CLI availability discovery and is required as the
+pre-launch check; `--launch` repeats it immediately before Herdr starts a pane.
+
+At present only OpenCode Go MiMo is available as
+`opencode/mimo-v2.5-free`. The required DeepSeek, Qwen, and Kimi IDs are empty
+until `opencode models --refresh` actually exposes them. Such roles must fail
+closed rather than silently using Big Pickle, GPT, Grok, or another default.
+
 ## Task contracts and worker behavior
 
 Each worker receives only the objective, allowed files/modules, forbidden scope,

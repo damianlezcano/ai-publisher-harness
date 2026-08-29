@@ -24,7 +24,9 @@ preferably across model/provider families, whenever practical.
 ## Herdr delegation
 
 Before controlling Herdr, confirm `HERDR_ENV=1` and inspect the installed
-commands. Keep the lead in the current pane. For a bounded task, create a
+commands. Resolve the worker through `scripts/agent-launch --dry-run` first;
+only its `--launch` path may start a Cursor/OpenCode worker, because it injects
+and verifies the exact model ID. Keep the lead in the current pane. For a bounded task, create a
 sibling pane with `--current`, the current working directory, and `--no-focus`;
 then start the selected recognized agent in that explicit pane. Use the agent's
 unique name for prompts, waits, reads, and lifecycle checks.

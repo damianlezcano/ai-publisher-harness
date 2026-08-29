@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+output=$(./scripts/agent-launch --role low --provider cursor --check-config)
+grep -Fxq 'MODEL_REQUESTED: composer-2.5' <<<"$output"
+grep -Fxq 'MODEL_ACTUAL: composer-2.5' <<<"$output"
+
+output=$(./scripts/agent-launch --role low --provider opencode --check-config)
+grep -Fxq 'MODEL_REQUESTED: opencode/mimo-v2.5-free' <<<"$output"
+grep -Fxq 'MODEL_ACTUAL: opencode/mimo-v2.5-free' <<<"$output"
+
+for role in medium medium-fallback high-coding; do
+  if ./scripts/agent-launch --role "$role" --provider opencode --check-config >/dev/null 2>&1; then
+    echo "test-agent-launch: expected unavailable OpenCode $role role to fail closed" >&2
+    exit 1
+  fi
+done
+
+output=$(./scripts/agent-launch --role medium-high --provider cursor --check-config)
+grep -Fxq 'MODEL_REQUESTED: cursor-grok-4.6-medium' <<<"$output"
+grep -Fxq 'MODEL_ACTUAL: cursor-grok-4.6-medium' <<<"$output"
