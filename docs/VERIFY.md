@@ -46,3 +46,10 @@ exist. The exact intended commands are recorded in `docs/M2_DESIGN.md`:
 workspace format/lint/tests, `publisher_http`, `publisher_security`, and
 `git diff --check`. Before M2 implementation they are documentation, not
 placeholder commands: `scripts/verify` must not invoke nonexistent targets.
+
+## M3 publication behavior
+
+M3 adds named `project-publication` suites after that crate exists:
+`publication_lifecycle`, `publication_security`, plus `project-fs`
+`project_migration`. Commands match `docs/M3_DESIGN.md`. The script skips a
+named suite only while its file is absent.

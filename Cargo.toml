@@ -3,6 +3,7 @@ members = [
     "crates/project-core",
     "crates/project-fs",
     "crates/project-publisher",
+    "crates/project-publication",
 ]
 resolver = "3"
 
@@ -19,3 +20,5 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+getrandom = "0.4"
+unicode-normalization = "0.1"

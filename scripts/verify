@@ -103,10 +103,27 @@ if [[ -f crates/project-publisher/tests/publisher_security.rs ]]; then
   cargo test --locked -p project-publisher --test publisher_security
 fi
 
+if [[ -f crates/project-publication/tests/publication_lifecycle.rs ]]; then
+  printf 'verify: cargo test --locked -p project-publication --test publication_lifecycle\n'
+  cargo test --locked -p project-publication --test publication_lifecycle
+fi
+
+if [[ -f crates/project-publication/tests/publication_security.rs ]]; then
+  printf 'verify: cargo test --locked -p project-publication --test publication_security\n'
+  cargo test --locked -p project-publication --test publication_security
+fi
+
+if [[ -f crates/project-fs/tests/project_migration.rs ]]; then
+  printf 'verify: cargo test --locked -p project-fs --test project_migration\n'
+  cargo test --locked -p project-fs --test project_migration
+fi
+
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f crates/project-publisher/tests/publisher_http.rs ]]; then
+if [[ -f crates/project-publication/tests/publication_lifecycle.rs ]]; then
+  printf 'verify: M3 contract passed\n'
+elif [[ -f crates/project-publisher/tests/publisher_http.rs ]]; then
   printf 'verify: M2 contract passed\n'
 else
   printf 'verify: M1 contract passed\n'

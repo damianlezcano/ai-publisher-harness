@@ -1,0 +1,20 @@
+[package]
+name = "project-publication"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom = { workspace = true }
+project-core = { path = "../project-core" }
+project-fs = { path = "../project-fs" }
+project-publisher = { path = "../project-publisher" }
+unicode-normalization = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
