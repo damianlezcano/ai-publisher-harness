@@ -114,6 +114,7 @@ pub(crate) fn handle(
                     Err(_) => {
                         return Response::builder()
                             .status(StatusCode::NOT_FOUND)
+                            .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
                             .body(Body::empty())
                             .expect("static 404 response is valid");
                     }

@@ -90,6 +90,16 @@ else
   printf 'verify: SKIP: project-fs filesystem integration suite is not introduced yet\n'
 fi
 
+if [[ -f crates/project-publisher/tests/publisher_http.rs ]]; then
+  printf 'verify: cargo test --locked -p project-publisher --test publisher_http\n'
+  cargo test --locked -p project-publisher --test publisher_http
+fi
+
+if [[ -f crates/project-publisher/tests/publisher_security.rs ]]; then
+  printf 'verify: cargo test --locked -p project-publisher --test publisher_security\n'
+  cargo test --locked -p project-publisher --test publisher_security
+fi
+
 printf 'verify: git diff --check\n'
 git diff --check
 
