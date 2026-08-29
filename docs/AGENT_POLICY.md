@@ -15,11 +15,11 @@ scarce orchestration resource and is not the default builder.
 | Pool/model | Level | Preferred use |
 | --- | --- | --- |
 | Codex Tierra | HIGH_ARCHITECTURE | Orchestration, architecture, decomposition, contracts, integration, critical security decisions, conflicts, final gate |
-| Cursor Composer 2.5 | LOW/MEDIUM | Primary cheap implementation worker: specified code, structs, adapters, tests, refactors, docs, boilerplate |
+| Cursor Composer 2.5 | LOW; MEDIUM fallback | Primary LOW worker and MEDIUM fallback for specified code, structs, adapters, tests, refactors, docs, boilerplate |
 | Cursor Grok 4.6 standard | MEDIUM_HIGH/HIGH_CODING | Complex coding, concurrency, difficult bugs, cross-module integration, security fixes; do not use Fast by default |
 | OpenCode Go MiMo-V2.5 | LOW | Simple tests, boilerplate, docs, repetitive corrections |
 | OpenCode Go DeepSeek V4 Flash | MEDIUM | Default OpenCode Go implementation/review worker for Rust, tests, filesystem, adapters, and moderate security |
-| OpenCode Go Qwen3.8 Flash | MEDIUM fallback | Use after DeepSeek failure/degradation or for a deliberate second family opinion |
+| OpenCode Go Qwen3.8 Max | MEDIUM fallback | Use after DeepSeek failure/degradation or for a deliberate second family opinion |
 | OpenCode Go Kimi K2.7 Code | HIGH_CODING fallback | Difficult code after medium workers fail, or when Grok is unavailable/inappropriate |
 | Antigravity CLI / AGY | Optional | Use only when available and clearly useful; never required by a workflow because of quota limits |
 
@@ -32,9 +32,9 @@ work. HIGH_ARCHITECTURE remains Codex Tierra.
 | Classification | Preference order |
 | --- | --- |
 | LOW | Composer 2.5 → MiMo-V2.5 |
-| MEDIUM | DeepSeek V4 Flash → Composer 2.5 → Qwen3.8 Flash |
+| MEDIUM | DeepSeek V4 Flash → Composer 2.5 → Qwen3.8 Max |
 | MEDIUM_HIGH | Grok 4.6 standard → DeepSeek V4 Flash → Kimi K2.7 Code |
-| HIGH_CODING | Grok 4.6 standard → Kimi K2.7 Code → Codex only if delegation is unreasonable |
+| HIGH_CODING | Grok 4.6 standard/medium → Kimi K2.7 Code |
 | HIGH_ARCHITECTURE | Codex Tierra |
 
 These are preferences, not rigid dependencies. Availability and reliability
@@ -58,11 +58,19 @@ selection. Cursor's canonical standard Grok ID is `cursor-grok-4.6-medium`;
 `--check-config` is offline and is the deterministic `scripts/verify` gate.
 `--dry-run` performs live CLI availability discovery and is required as the
 pre-launch check; `--launch` repeats it immediately before Herdr starts a pane.
+Its pre-launch `MODEL_ACTUAL` is intentionally `UNVERIFIED`: an available ID
+does not prove the running agent accepted it. For `--launch`, the launcher waits
+for the provider UI to report the exact configured active-model display name;
+only then does it print `MODEL_ACTUAL` equal to `MODEL_REQUESTED` and return
+success. The orchestrator may send a product task only after that success. A
+mismatch or an unavailable ID fails closed; the worker is terminated or
+reconfigured and only the documented fallback may be attempted.
 
-At present only OpenCode Go MiMo is available as
-`opencode/mimo-v2.5-free`. The required DeepSeek, Qwen, and Kimi IDs are empty
-until `opencode models --refresh` actually exposes them. Such roles must fail
-closed rather than silently using Big Pickle, GPT, Grok, or another default.
+The approved OpenCode Go IDs are `opencode-go/mimo-v2.5`,
+`opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max`, and
+`opencode-go/kimi-k2.7-code`. `opencode/mimo-v2.5-free` is not equivalent to
+the OpenCode Go MiMo ID and is never an automatic substitute. Big Pickle, GPT,
+Grok, provider defaults, and last-used OpenCode models are prohibited.
 
 ## Task contracts and worker behavior
 

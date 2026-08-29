@@ -26,7 +26,10 @@ preferably across model/provider families, whenever practical.
 Before controlling Herdr, confirm `HERDR_ENV=1` and inspect the installed
 commands. Resolve the worker through `scripts/agent-launch --dry-run` first;
 only its `--launch` path may start a Cursor/OpenCode worker, because it injects
-and verifies the exact model ID. Keep the lead in the current pane. For a bounded task, create a
+the exact model ID, rejects unavailable mappings, and waits for the provider UI
+to confirm the active model before returning success. Before a product prompt,
+require `MODEL_ACTUAL == MODEL_REQUESTED`; a mismatch fails closed and may use
+only the documented fallback. Keep the lead in the current pane. For a bounded task, create a
 sibling pane with `--current`, the current working directory, and `--no-focus`;
 then start the selected recognized agent in that explicit pane. Use the agent's
 unique name for prompts, waits, reads, and lifecycle checks.
