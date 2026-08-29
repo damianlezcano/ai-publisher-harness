@@ -15,6 +15,15 @@ before work starts. No two agents may edit the same checkout simultaneously.
 - The lead integrates only reviewed commits after verification. Delete a
   worktree only after the branch is merged or its work is explicitly abandoned.
 
+## Worktree lifecycle
+
+- During a milestone, author and reviewer worktrees may remain open for audit.
+- After the milestone is integrated, verified, and approved, audit and clean
+  historical worktrees.
+- Never remove a worktree with unintegrated commits or uncommitted changes.
+- The integration checkout remains reserved for the lead.
+- Worktree cleanup is part of milestone closure.
+
 ## Branch naming and handoff
 
 Use `m<milestone>/<short-task>` branches, e.g. `m2/publisher-route-guard`.
