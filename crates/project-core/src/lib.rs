@@ -9,9 +9,11 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 1;
+pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const LEGACY_PROJECT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_PROJECT_NAME_CHARS: usize = 120;
 pub const MAX_FILE_NAME_CHARS: usize = 180;
+pub const MAX_PUBLICATION_ROUTE_CHARS: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectCoreError {
@@ -22,6 +24,7 @@ pub enum ProjectCoreError {
     InvalidContentType(String),
     InvalidDigest(String),
     InvalidCreation(String),
+    InvalidPublicationRoute(String),
     DuplicateMaterial(MaterialId),
     DuplicateCreation(CreationId),
     MissingMaterial(MaterialId),
@@ -51,6 +54,7 @@ impl fmt::Display for ProjectCoreError {
             InvalidContentType(_) => f.write_str("invalid content type"),
             InvalidDigest(_) => f.write_str("invalid SHA-256 digest"),
             InvalidCreation(_) => f.write_str("invalid creation"),
+            InvalidPublicationRoute(_) => f.write_str("invalid publication route"),
             DuplicateMaterial(_) => f.write_str("duplicate material"),
             DuplicateCreation(_) => f.write_str("duplicate creation"),
             MissingMaterial(_) => f.write_str("material not found"),
@@ -206,6 +210,53 @@ impl RelativeProjectPath {
             .is_some_and(|r| r.starts_with('/'))
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PublicationRoute(String);
+impl PublicationRoute {
+    pub fn parse(value: impl AsRef<str>) -> CoreResult<Self> {
+        let s = value.as_ref();
+        if is_valid_publication_route(s) {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(ProjectCoreError::InvalidPublicationRoute(s.into()))
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Display for PublicationRoute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+fn is_valid_publication_route(s: &str) -> bool {
+    if s.is_empty() || s.len() > MAX_PUBLICATION_ROUTE_CHARS {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_lowercase() && !bytes[0].is_ascii_digit() {
+        return false;
+    }
+    if !bytes[bytes.len() - 1].is_ascii_lowercase() && !bytes[bytes.len() - 1].is_ascii_digit() {
+        return false;
+    }
+    let mut prev_hyphen = false;
+    for &b in bytes {
+        if b.is_ascii_lowercase() || b.is_ascii_digit() {
+            prev_hyphen = false;
+        } else if b == b'-' {
+            if prev_hyphen {
+                return false;
+            }
+            prev_hyphen = true;
+        } else {
+            return false;
+        }
+    }
+    true
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ContentType(String);
@@ -261,6 +312,13 @@ pub enum CreationKind {
     Image,
     File,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CreationVisibility {
+    Public,
+    #[default]
+    Private,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -290,6 +348,7 @@ pub struct Creation {
     #[serde(rename = "displayName")]
     pub display_name: String,
     pub kind: CreationKind,
+    pub visibility: CreationVisibility,
     #[serde(rename = "relativePath")]
     pub relative_path: RelativeProjectPath,
     #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
@@ -316,6 +375,8 @@ pub struct Project {
     #[serde(rename = "updatedAt")]
     pub updated_at: Timestamp,
     pub state: ProjectState,
+    #[serde(rename = "publicationRoute", skip_serializing_if = "Option::is_none")]
+    pub publication_route: Option<PublicationRoute>,
     pub materials: Vec<Material>,
     pub creations: Vec<Creation>,
 }
@@ -328,13 +389,61 @@ impl Project {
             created_at: now.clone(),
             updated_at: now,
             state: ProjectState::Local,
+            publication_route: None,
             materials: vec![],
             creations: vec![],
         }
     }
-    pub fn validate(&self) -> CoreResult<()> {
+    pub fn from_json(s: &str) -> CoreResult<Self> {
+        let value: serde_json::Value = serde_json::from_str(s)
+            .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
+        let version = schema_version_of(&value)?;
+        let project = match version {
+            LEGACY_PROJECT_SCHEMA_VERSION => {
+                let v1: SchemaV1Project = serde_json::from_value(value)
+                    .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
+                v1.into_project()
+            }
+            PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
+                .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?,
+            other => return Err(ProjectCoreError::UnsupportedSchema(other)),
+        };
+        project.validate()?;
+        Ok(project)
+    }
+    pub fn migrate_to_v2(&mut self) -> CoreResult<()> {
+        match self.schema_version {
+            PROJECT_SCHEMA_VERSION => Ok(()),
+            LEGACY_PROJECT_SCHEMA_VERSION => {
+                for creation in &mut self.creations {
+                    creation.visibility = CreationVisibility::Private;
+                }
+                self.publication_route = None;
+                self.schema_version = PROJECT_SCHEMA_VERSION;
+                Ok(())
+            }
+            other => Err(ProjectCoreError::UnsupportedSchema(other)),
+        }
+    }
+    pub fn validate_for_persist(&self) -> CoreResult<()> {
         if self.schema_version != PROJECT_SCHEMA_VERSION {
             return Err(ProjectCoreError::UnsupportedSchema(self.schema_version));
+        }
+        self.validate()
+    }
+    pub fn validate(&self) -> CoreResult<()> {
+        match self.schema_version {
+            LEGACY_PROJECT_SCHEMA_VERSION | PROJECT_SCHEMA_VERSION => {}
+            other => return Err(ProjectCoreError::UnsupportedSchema(other)),
+        }
+        if self.schema_version == LEGACY_PROJECT_SCHEMA_VERSION && self.publication_route.is_some()
+        {
+            return Err(ProjectCoreError::CorruptMetadata(
+                "schema v1 cannot carry publicationRoute".into(),
+            ));
+        }
+        if let Some(route) = &self.publication_route {
+            PublicationRoute::parse(route.as_str())?;
         }
         let mut ms = HashSet::new();
         for m in &self.materials {
@@ -395,6 +504,81 @@ fn validate_file_metadata(
         return Err(ProjectCoreError::PathEscape);
     }
     Ok(())
+}
+
+fn schema_version_of(value: &serde_json::Value) -> CoreResult<u32> {
+    match value.get("schemaVersion") {
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| ProjectCoreError::CorruptMetadata("invalid schemaVersion".into())),
+        Some(_) => Err(ProjectCoreError::CorruptMetadata(
+            "invalid schemaVersion".into(),
+        )),
+        None => Err(ProjectCoreError::CorruptMetadata(
+            "missing schemaVersion".into(),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct SchemaV1Project {
+    schema_version: u32,
+    #[serde(rename = "projectId")]
+    id: ProjectId,
+    name: ProjectName,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    state: ProjectState,
+    materials: Vec<Material>,
+    creations: Vec<SchemaV1Creation>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct SchemaV1Creation {
+    #[serde(rename = "creationId")]
+    id: CreationId,
+    display_name: String,
+    kind: CreationKind,
+    relative_path: RelativeProjectPath,
+    content_type: Option<ContentType>,
+    byte_size: u64,
+    revision: u32,
+    parent_creation_id: Option<CreationId>,
+    created_at: Timestamp,
+}
+impl SchemaV1Project {
+    fn into_project(self) -> Project {
+        Project {
+            schema_version: self.schema_version,
+            id: self.id,
+            name: self.name,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            state: self.state,
+            publication_route: None,
+            materials: self.materials,
+            creations: self
+                .creations
+                .into_iter()
+                .map(|c| Creation {
+                    id: c.id,
+                    display_name: c.display_name,
+                    kind: c.kind,
+                    visibility: CreationVisibility::Private,
+                    relative_path: c.relative_path,
+                    content_type: c.content_type,
+                    byte_size: c.byte_size,
+                    revision: c.revision,
+                    parent_creation_id: c.parent_creation_id,
+                    created_at: c.created_at,
+                })
+                .collect(),
+        }
+    }
 }
 
 pub trait Clock {
@@ -463,6 +647,7 @@ pub struct AddMaterial {
 pub struct CreateCreation {
     pub display_name: String,
     pub kind: CreationKind,
+    pub visibility: CreationVisibility,
     pub content_type: Option<ContentType>,
     pub content: CreationContent,
     pub parent_creation_id: Option<CreationId>,
@@ -510,6 +695,7 @@ where
     pub fn rename_project(&mut self, id: &ProjectId, name: impl AsRef<str>) -> CoreResult<Project> {
         let mut p = self.repository.get(id)?;
         let e = p.updated_at.clone();
+        p.migrate_to_v2()?;
         p.name = ProjectName::parse(name)?;
         p.updated_at = self.clock.now();
         self.repository.replace(&p, &e)?;
@@ -525,6 +711,8 @@ where
             return Err(ProjectCoreError::InvalidName(r.display_name));
         }
         let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v2()?;
         let id = self.ids.material_id();
         if p.materials.iter().any(|m| m.id == id) {
             return Err(ProjectCoreError::DuplicateMaterial(id));
@@ -542,7 +730,6 @@ where
             sha256: stored.sha256,
             created_at: self.clock.now(),
         };
-        let e = p.updated_at.clone();
         p.materials.push(m.clone());
         p.updated_at = m.created_at.clone();
         self.repository.replace(&p, &e)?;
@@ -562,6 +749,8 @@ where
             return Err(ProjectCoreError::InvalidCreation(r.display_name));
         }
         let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v2()?;
         if let Some(parent) = &r.parent_creation_id
             && !p.creations.iter().any(|c| &c.id == parent)
         {
@@ -580,6 +769,7 @@ where
             id,
             display_name: r.display_name,
             kind: r.kind,
+            visibility: r.visibility,
             relative_path: stored.relative_path,
             content_type: r.content_type,
             byte_size: stored.byte_size,
@@ -587,7 +777,6 @@ where
             parent_creation_id: r.parent_creation_id,
             created_at: self.clock.now(),
         };
-        let e = p.updated_at.clone();
         p.creations.push(c.clone());
         p.updated_at = c.created_at.clone();
         self.repository.replace(&p, &e)?;
@@ -665,7 +854,7 @@ mod tests {
     }
     impl ProjectRepository for Repo {
         fn create(&mut self, p: &Project) -> CoreResult<()> {
-            p.validate()?;
+            p.validate_for_persist()?;
             if self.values.contains_key(&p.id) {
                 return Err(ProjectCoreError::AlreadyExists(p.id.clone()));
             }
@@ -696,7 +885,7 @@ mod tests {
                     project_id: p.id.clone(),
                 });
             }
-            p.validate()?;
+            p.validate_for_persist()?;
             self.values.insert(p.id.clone(), p.clone());
             Ok(())
         }
@@ -849,6 +1038,7 @@ mod tests {
                 CreateCreation {
                     display_name: "Activity".into(),
                     kind: CreationKind::Web,
+                    visibility: CreationVisibility::Private,
                     content_type: Some(ContentType::parse("text/html").unwrap()),
                     content: CreationContent {
                         bytes: b"<h1>x</h1>".to_vec(),
@@ -863,6 +1053,7 @@ mod tests {
             "outputs/0198e4a6-86d6-7c16-b4c4-3197b355cf10/index.html"
         );
         assert_eq!(c.revision, 1);
+        assert_eq!(c.visibility, CreationVisibility::Private);
         assert_eq!(s.read_creation(&pid(), &c.id).unwrap(), b"<h1>x</h1>")
     }
     #[test]
@@ -993,6 +1184,7 @@ mod tests {
             id: CreationId::parse(C).unwrap(),
             display_name: "x".into(),
             kind: CreationKind::File,
+            visibility: CreationVisibility::Private,
             relative_path: RelativeProjectPath::parse(format!("outputs/{C}/x.txt")).unwrap(),
             content_type: None,
             byte_size: 0,
@@ -1006,5 +1198,212 @@ mod tests {
             p.validate(),
             Err(ProjectCoreError::InvalidCreation(_))
         ))
+    }
+    fn v1_json_with_creation(display_name: &str, kind: &str, file_name: &str) -> String {
+        format!(
+            r#"{{
+  "schemaVersion": 1,
+  "projectId": "{P}",
+  "name": "Fotosintesis",
+  "createdAt": "2026-08-28T15:00:00Z",
+  "updatedAt": "2026-08-28T15:00:00Z",
+  "state": "local",
+  "materials": [],
+  "creations": [
+    {{
+      "creationId": "{C}",
+      "displayName": "{display_name}",
+      "kind": "{kind}",
+      "relativePath": "outputs/{C}/{file_name}",
+      "contentType": "text/html",
+      "byteSize": 8,
+      "revision": 1,
+      "createdAt": "2026-08-28T15:00:00Z"
+    }}
+  ]
+}}"#
+        )
+    }
+    #[test]
+    fn new_project_is_schema_v2_without_publication_route() {
+        let p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(p.publication_route.is_none());
+        assert!(p.validate_for_persist().is_ok())
+    }
+    #[test]
+    fn create_creation_persists_explicit_visibility_defaulting_to_private() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let private = s
+            .create_creation(
+                &pid(),
+                CreateCreation {
+                    display_name: "Activity".into(),
+                    kind: CreationKind::Web,
+                    visibility: CreationVisibility::default(),
+                    content_type: None,
+                    content: CreationContent {
+                        bytes: b"x".to_vec(),
+                        file_name: "index.html".into(),
+                    },
+                    parent_creation_id: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(private.visibility, CreationVisibility::Private);
+        assert_eq!(
+            s.open_project(&pid()).unwrap().creations[0].visibility,
+            CreationVisibility::Private
+        )
+    }
+    #[test]
+    fn reader_accepts_schema_v1_and_marks_legacy_creations_private() {
+        let p = Project::from_json(&v1_json_with_creation(
+            "public answers key",
+            "web",
+            "public.html",
+        ))
+        .unwrap();
+        assert_eq!(p.schema_version, LEGACY_PROJECT_SCHEMA_VERSION);
+        assert!(p.publication_route.is_none());
+        assert_eq!(p.creations.len(), 1);
+        assert_eq!(p.creations[0].visibility, CreationVisibility::Private);
+        assert_eq!(p.creations[0].display_name, "public answers key");
+        assert_eq!(p.creations[0].kind, CreationKind::Web)
+    }
+    #[test]
+    fn v1_migration_is_private_and_never_infers_visibility() {
+        let mut p = Project::from_json(&v1_json_with_creation(
+            "PUBLIC worksheet",
+            "web",
+            "index.html",
+        ))
+        .unwrap();
+        p.creations[0].visibility = CreationVisibility::Public;
+        p.migrate_to_v2().unwrap();
+        assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(p.publication_route.is_none());
+        assert_eq!(p.creations[0].visibility, CreationVisibility::Private);
+        assert_eq!(p.creations[0].kind, CreationKind::Web);
+        assert_eq!(p.creations[0].display_name, "PUBLIC worksheet")
+    }
+    #[test]
+    fn v2_migration_is_idempotent_and_preserves_explicit_public() {
+        let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        p.creations.push(Creation {
+            id: CreationId::parse(C).unwrap(),
+            display_name: "published".into(),
+            kind: CreationKind::Web,
+            visibility: CreationVisibility::Public,
+            relative_path: RelativeProjectPath::parse(format!("outputs/{C}/index.html")).unwrap(),
+            content_type: None,
+            byte_size: 1,
+            revision: 1,
+            parent_creation_id: None,
+            created_at: time(),
+        });
+        p.publication_route = Some(PublicationRoute::parse("fotosintesis-a7k2m9").unwrap());
+        p.migrate_to_v2().unwrap();
+        p.migrate_to_v2().unwrap();
+        assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
+        assert_eq!(p.creations[0].visibility, CreationVisibility::Public);
+        assert_eq!(
+            p.publication_route.as_ref().map(PublicationRoute::as_str),
+            Some("fotosintesis-a7k2m9")
+        )
+    }
+    #[test]
+    fn persist_rejects_unmigrated_v1_and_unknown_schema() {
+        let mut p = Project::from_json(&v1_json_with_creation("x", "file", "x.txt")).unwrap();
+        assert!(matches!(
+            p.validate_for_persist(),
+            Err(ProjectCoreError::UnsupportedSchema(
+                LEGACY_PROJECT_SCHEMA_VERSION
+            ))
+        ));
+        p.schema_version = 99;
+        assert!(matches!(
+            p.validate(),
+            Err(ProjectCoreError::UnsupportedSchema(99))
+        ));
+        assert!(matches!(
+            Project::from_json("{\"schemaVersion\":99,\"projectId\":\"x\"}"),
+            Err(ProjectCoreError::UnsupportedSchema(99))
+        ))
+    }
+    #[test]
+    fn v1_reader_rejects_visibility_or_route_fields() {
+        let with_visibility = v1_json_with_creation("x", "web", "index.html").replace(
+            "\"kind\": \"web\"",
+            "\"kind\": \"web\",\n      \"visibility\": \"public\"",
+        );
+        assert!(matches!(
+            Project::from_json(&with_visibility),
+            Err(ProjectCoreError::CorruptMetadata(_))
+        ));
+        let with_route = v1_json_with_creation("x", "file", "x.txt").replace(
+            "\"state\": \"local\"",
+            "\"state\": \"local\",\n  \"publicationRoute\": \"fotosintesis-a7k2\"",
+        );
+        assert!(matches!(
+            Project::from_json(&with_route),
+            Err(ProjectCoreError::CorruptMetadata(_))
+        ))
+    }
+    #[test]
+    fn v2_reader_requires_visibility_and_rejects_unknown_fields() {
+        let missing_visibility = v1_json_with_creation("x", "web", "index.html")
+            .replace("\"schemaVersion\": 1", "\"schemaVersion\": 2");
+        assert!(matches!(
+            Project::from_json(&missing_visibility),
+            Err(ProjectCoreError::CorruptMetadata(_))
+        ));
+        let v2 = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        let mut raw = serde_json::to_string(&v2).unwrap();
+        raw.insert_str(raw.rfind('}').unwrap(), ",\"unexpectedField\":true");
+        assert!(matches!(
+            Project::from_json(&raw),
+            Err(ProjectCoreError::CorruptMetadata(_))
+        ))
+    }
+    #[test]
+    fn first_mutation_migrates_v1_atomically_and_failed_replace_leaves_v1() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let (mut r, c, k, i) = s.into_parts();
+        let mut legacy = r.get(&pid()).unwrap();
+        legacy.schema_version = LEGACY_PROJECT_SCHEMA_VERSION;
+        r.values.insert(pid(), legacy);
+        r.fail = true;
+        let mut s = ProjectService::new(r, c, k, i);
+        assert!(matches!(
+            s.rename_project(&pid(), "two"),
+            Err(ProjectCoreError::AtomicWriteFailed)
+        ));
+        let unchanged = s.open_project(&pid()).unwrap();
+        assert_eq!(unchanged.schema_version, LEGACY_PROJECT_SCHEMA_VERSION);
+        assert_eq!(unchanged.name.as_str(), "one");
+        let (mut r, c, k, i) = s.into_parts();
+        r.fail = false;
+        let mut s = ProjectService::new(r, c, k, i);
+        let renamed = s.rename_project(&pid(), "two").unwrap();
+        assert_eq!(renamed.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(renamed.publication_route.is_none());
+        assert_eq!(
+            s.open_project(&pid()).unwrap().schema_version,
+            PROJECT_SCHEMA_VERSION
+        )
+    }
+    #[test]
+    fn publication_route_accepts_m2_grammar_and_rejects_invalid() {
+        assert!(PublicationRoute::parse("fotosintesis-a7k2m9").is_ok());
+        assert!(PublicationRoute::parse("a").is_ok());
+        for bad in ["", "A", "-abc", "abc-", "ab--cd", "ab.cd", "ab/cd", "ñ"] {
+            assert!(
+                PublicationRoute::parse(bad).is_err(),
+                "expected {bad:?} to be rejected"
+            )
+        }
     }
 }

@@ -78,9 +78,7 @@ pub(crate) fn read_json(path: &Path) -> CoreResult<Project> {
     let bytes = fs::read(path).map_err(|_| ProjectCoreError::StorageUnavailable)?;
     let s =
         String::from_utf8(bytes).map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
-    let mut p: Project =
-        serde_json::from_str(&s).map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
-    p.validate()?;
+    let mut p = Project::from_json(&s)?;
     validate_rehydrated_fields(&mut p)?;
     Ok(p)
 }
@@ -98,6 +96,9 @@ fn validate_rehydrated_fields(p: &mut Project) -> CoreResult<()> {
     Timestamp::parse(p.updated_at.as_str())?;
     match p.state {
         project_core::ProjectState::Local => {}
+    }
+    if let Some(route) = &p.publication_route {
+        project_core::PublicationRoute::parse(route.as_str())?;
     }
     for m in &p.materials {
         project_core::MaterialId::parse(m.id.as_str())?;
@@ -119,6 +120,10 @@ fn validate_rehydrated_fields(p: &mut Project) -> CoreResult<()> {
         }
         if let Some(parent) = &c.parent_creation_id {
             project_core::CreationId::parse(parent.as_str())?;
+        }
+        match c.visibility {
+            project_core::CreationVisibility::Public
+            | project_core::CreationVisibility::Private => {}
         }
     }
     Ok(())
@@ -300,7 +305,7 @@ impl FilesystemProjectRepository {
 
 impl ProjectRepository for FilesystemProjectRepository {
     fn create(&mut self, project: &Project) -> CoreResult<()> {
-        project.validate()?;
+        project.validate_for_persist()?;
 
         let pd = self.projects_dir();
         // Reject a symlinked/untrusted projects directory before writing.
@@ -406,7 +411,7 @@ impl ProjectRepository for FilesystemProjectRepository {
                 project_id: id.clone(),
             });
         }
-        project.validate()?;
+        project.validate_for_persist()?;
 
         let parent = pj.parent().ok_or(ProjectCoreError::WriteFailed)?;
         let write_result = (|| -> CoreResult<()> {

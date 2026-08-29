@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use project_core::{
-    ContentType, CreationContent, CreationKind, IdGenerator, MaterialContent, ProjectContentStore,
-    ProjectCoreError, ProjectId, ProjectName, ProjectRepository, ProjectService, Sha256Digest,
-    Timestamp,
+    ContentType, CreationContent, CreationKind, CreationVisibility, IdGenerator, MaterialContent,
+    ProjectContentStore, ProjectCoreError, ProjectId, ProjectName, ProjectRepository,
+    ProjectService, Sha256Digest, Timestamp,
 };
 
 use project_fs::{FilesystemProjectContentStore, FilesystemProjectRepository};
@@ -138,6 +138,7 @@ fn creation_request() -> project_core::CreateCreation {
     project_core::CreateCreation {
         display_name: "Actividad interactiva".into(),
         kind: CreationKind::Web,
+        visibility: CreationVisibility::Private,
         content_type: Some(ContentType::parse("text/html").unwrap()),
         content: CreationContent {
             bytes: b"<html><body>Activity</body></html>".to_vec(),
@@ -188,7 +189,7 @@ fn create_and_reopen_preserves_all_metadata() {
         let mut svc = make_service(&base);
         let p = svc.create_project("Fotosintesis").unwrap();
         assert_eq!(p.name.as_str(), "Fotosintesis");
-        assert_eq!(p.schema_version, 1);
+        assert_eq!(p.schema_version, 2);
         assert_eq!(p.id.as_str(), "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22");
 
         // Four roots exist
@@ -1148,6 +1149,7 @@ fn empty_creation_content_writes_successfully() {
             project_core::CreateCreation {
                 display_name: "Empty".into(),
                 kind: CreationKind::File,
+                visibility: CreationVisibility::Private,
                 content_type: None,
                 content: CreationContent {
                     bytes: vec![],
@@ -1265,7 +1267,7 @@ fn metadata_preserves_all_fields_after_material_add() {
     let m = svc.add_material(&p.id, material_request()).unwrap();
 
     let reloaded = svc.open_project(&p.id).unwrap();
-    assert_eq!(reloaded.schema_version, 1);
+    assert_eq!(reloaded.schema_version, 2);
     assert_eq!(reloaded.name.as_str(), "Test");
     assert_eq!(reloaded.state, project_core::ProjectState::Local);
     assert_eq!(reloaded.materials.len(), 1);
@@ -1293,6 +1295,10 @@ fn metadata_preserves_all_fields_after_creation_add() {
     assert_eq!(reloaded.creations[0].id, c.id);
     assert_eq!(reloaded.creations[0].display_name, "Actividad interactiva");
     assert_eq!(reloaded.creations[0].kind, CreationKind::Web);
+    assert_eq!(
+        reloaded.creations[0].visibility,
+        CreationVisibility::Private
+    );
     assert_eq!(reloaded.creations[0].revision, 1);
     assert!(reloaded.creations[0].parent_creation_id.is_none());
     assert_eq!(reloaded.materials.len(), 0);
@@ -1320,6 +1326,11 @@ fn schema_uses_explicit_id_and_version_field_names() {
     );
     assert!(raw.contains("\"materialId\""), "materialId missing: {raw}");
     assert!(raw.contains("\"creationId\""), "creationId missing: {raw}");
+    assert!(raw.contains("\"visibility\""), "visibility missing: {raw}");
+    assert!(
+        !raw.contains("\"publicationRoute\""),
+        "new projects must omit publicationRoute until allocated: {raw}"
+    );
 
     // Ensure it also round-trips under the new names.
     let back: project_core::Project = serde_json::from_str(&raw).unwrap();
