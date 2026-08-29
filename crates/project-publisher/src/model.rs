@@ -105,11 +105,6 @@ impl PublishRoot {
         Self(path)
     }
 
-    /// Infrastructure constructor for validated canonical publish roots.
-    pub fn from_path_buf_unchecked(path: PathBuf) -> Self {
-        Self(path)
-    }
-
     /// Returns a reference to the underlying path.
     pub fn as_path(&self) -> &Path {
         &self.0

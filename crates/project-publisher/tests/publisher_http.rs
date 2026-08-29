@@ -68,7 +68,7 @@ impl RunningServer {
         // Project-fs provides canonical publish roots; mirror that here so
         // containment checks see a canonical root.
         let canonical = fs::canonicalize(&publish).expect("canonicalize publish");
-        (dir, PublishRoot::from_path_buf_unchecked(canonical))
+        (dir, PublishRoot::from_verified_path(canonical))
     }
 
     fn get(&self, url: &str) -> Resp {

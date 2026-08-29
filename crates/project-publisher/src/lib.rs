@@ -32,7 +32,7 @@ mod tests {
     use std::thread;
 
     fn sample_root(name: &str) -> PublishRoot {
-        PublishRoot::from_path_buf_unchecked(PathBuf::from(format!("/tmp/projects/{name}/publish")))
+        PublishRoot::from_verified_path(PathBuf::from(format!("/tmp/projects/{name}/publish")))
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn publish_root_is_opaque_and_retains_path() {
         let path = PathBuf::from("/srv/storage/projects/p1/publish");
-        let root = PublishRoot::from_path_buf_unchecked(path.clone());
+        let root = PublishRoot::from_verified_path(path.clone());
         assert_eq!(root.as_path(), path.as_path());
         assert_eq!(root.as_ref(), path.as_path());
         assert_eq!(root.to_string(), path.display().to_string());
