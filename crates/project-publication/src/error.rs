@@ -49,7 +49,7 @@ pub(crate) fn from_core(error: ProjectCoreError) -> PublicationError {
             operation: "recover",
         } => PublicationError::Recovery,
         ProjectCoreError::OperationFailed {
-            operation: "prepare",
+            operation: "prepare" | "swap",
         }
         | ProjectCoreError::InvalidCreation(_)
         | ProjectCoreError::SourceUnreadable
@@ -85,4 +85,31 @@ pub(crate) fn from_unregister(error: PublisherError) -> PublicationError {
 pub(crate) fn from_stop(error: PublisherError) -> PublicationError {
     let _ = error;
     PublicationError::PublisherStop
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use project_core::ProjectCoreError;
+
+    #[test]
+    fn swap_and_prepare_failures_map_to_preparation() {
+        for operation in ["prepare", "swap"] {
+            assert_eq!(
+                from_core(ProjectCoreError::OperationFailed { operation }),
+                PublicationError::Preparation,
+                "operation {operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn recover_failure_maps_to_recovery() {
+        assert_eq!(
+            from_core(ProjectCoreError::OperationFailed {
+                operation: "recover"
+            }),
+            PublicationError::Recovery
+        );
+    }
 }

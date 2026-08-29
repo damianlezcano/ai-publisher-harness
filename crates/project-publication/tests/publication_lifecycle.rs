@@ -238,6 +238,36 @@ fn recover_does_not_auto_register() {
 }
 
 #[test]
+fn concurrent_publish_and_recover_stay_consistent() {
+    let h = Arc::new(harness(&["a7k2m9"]));
+    let mut svc = service(h.temp.path());
+    let project = seed_project(&mut svc, "One", vec![public_doc("N", "n.pdf", b"1")]);
+    h.manager.publish(&project.id).unwrap();
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let hh = Arc::clone(&h);
+        let id = project.id.clone();
+        handles.push(thread::spawn(move || {
+            let _ = hh.manager.recover();
+            let _ = hh.manager.publish(&id);
+        }));
+    }
+    for t in handles {
+        t.join().unwrap();
+    }
+    assert_eq!(h.manager.list_published().unwrap().len(), 1);
+    assert_eq!(
+        h.publisher.registered_routes(),
+        vec!["one-a7k2m9".to_owned()]
+    );
+    assert!(
+        publish_dir(h.temp.path(), &project.id)
+            .join("index.html")
+            .exists()
+    );
+}
+
+#[test]
 fn v1_first_publish_migrates_privately_and_failed_metadata_leaves_v1() {
     let h = harness(&["a7k2m9"]);
     let mut svc = service(h.temp.path());

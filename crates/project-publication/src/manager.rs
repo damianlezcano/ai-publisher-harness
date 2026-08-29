@@ -239,8 +239,12 @@ where
     }
 
     /// Recovers snapshot journals. Never auto-publishes. Retries a pending last-stop.
+    ///
+    /// Each project's snapshot directory is recovered under its per-project lock so
+    /// recovery serializes with a concurrent `publish` of the same project. The
+    /// lifecycle lock is taken only for the stop retry to keep a consistent
+    /// project-lock-before-lifecycle partial order (no inverse acquisition).
     pub fn recover(&self) -> PublicationResult<()> {
-        let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
         let projects = self
             .repository
             .lock()
@@ -248,8 +252,11 @@ where
             .list()
             .map_err(from_core)?;
         for project in projects {
+            let project_lock = self.project_lock(&project.id);
+            let _guard = project_lock.lock().unwrap_or_else(|e| e.into_inner());
             self.snapshots.recover(&project.id).map_err(from_core)?;
         }
+        let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
         self.retry_pending_stop()
     }
 
