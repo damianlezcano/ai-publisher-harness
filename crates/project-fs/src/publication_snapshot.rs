@@ -497,7 +497,7 @@ fn landing_html(materials: &[(&Creation, PathBuf)]) -> String {
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>Material del proyecto</title></head><body><h1>Material del proyecto</h1><ul>",
     );
     for (creation, path) in entries {
-        let href = path.to_string_lossy();
+        let href = escape_html(&path.to_string_lossy());
         let name = escape_html(&creation.display_name);
         html.push_str("<li>");
         html.push_str(&name);
@@ -576,4 +576,37 @@ fn remove_owned_dir(path: &Path) -> CoreResult<()> {
 }
 fn validate_publish(base: &Path, id: &ProjectId) -> CoreResult<PublishRoot> {
     ProjectPublishRootProvider::new(base).publish_root(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use project_core::{CreationId, RelativeProjectPath, Timestamp};
+
+    fn creation(display_name: &str) -> Creation {
+        Creation {
+            id: CreationId::parse("0198e4a6-86d6-7c16-b4c4-3197b3550001").unwrap(),
+            display_name: display_name.into(),
+            kind: CreationKind::Document,
+            visibility: CreationVisibility::Public,
+            relative_path: RelativeProjectPath::parse(
+                "outputs/0198e4a6-86d6-7c16-b4c4-3197b3550001/notes.pdf",
+            )
+            .unwrap(),
+            content_type: None,
+            byte_size: 1,
+            revision: 1,
+            parent_creation_id: None,
+            created_at: Timestamp::parse("2026-08-29T00:00:00Z").unwrap(),
+        }
+    }
+
+    #[test]
+    fn landing_html_escapes_href_path_attribute() {
+        let c = creation("Doc");
+        let hostile = PathBuf::from("files").join(c.id.as_str()).join("a\"b.pdf");
+        let html = landing_html(&[(&c, hostile)]);
+        assert!(html.contains("a&quot;b.pdf"));
+        assert!(!html.contains("a\"b.pdf\""));
+    }
 }
