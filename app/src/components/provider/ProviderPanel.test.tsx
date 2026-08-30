@@ -163,11 +163,16 @@ describe("ProviderPanel", () => {
     });
   });
 
-  it("runs the OAuth flow: begin, open, poll to complete", async () => {
+  it("runs the OAuth flow: begin, open, poll to complete, then disconnect", async () => {
+    let completed = false;
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([openaiWithOauth]);
       if (cmd === "provider_detail") {
-        return Promise.resolve({ ...detail, authMethods: openaiWithOauth.authMethods });
+        return Promise.resolve(
+          completed
+            ? { ...detail, connections: [{ id: "cred-9", label: null }] }
+            : { ...detail, authMethods: openaiWithOauth.authMethods },
+        );
       }
       if (cmd === "provider_oauth_begin") {
         return Promise.resolve({
@@ -178,9 +183,11 @@ describe("ProviderPanel", () => {
         });
       }
       if (cmd === "provider_oauth_status") {
+        completed = true;
         return Promise.resolve({ status: "complete", message: null });
       }
       if (cmd === "provider_oauth_open") return Promise.resolve(undefined);
+      if (cmd === "provider_disconnect") return Promise.resolve(undefined);
       return Promise.reject(new Error(`unexpected invoke ${cmd}`));
     });
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
@@ -191,9 +198,18 @@ describe("ProviderPanel", () => {
     expect(invokeMock).toHaveBeenCalledWith("provider_oauth_open", {
       url: "https://example.test/oauth/chatgpt-browser",
     });
-    // The poll runs every 2s and resolves to `complete` on the first tick.
-    await waitFor(() => expect(screen.getByText("Conectado.")).toBeInTheDocument(), {
-      timeout: 5000,
+    // The poll runs every 2s and resolves to `complete` on the first tick; the
+    // card then refreshes its detail so Desconectar is available.
+    const disconnect = await screen.findByRole(
+      "button",
+      { name: "Desconectar" },
+      {
+        timeout: 5000,
+      },
+    );
+    await userEvent.click(disconnect);
+    expect(invokeMock).toHaveBeenCalledWith("provider_disconnect", {
+      credentialId: "cred-9",
     });
   });
 });

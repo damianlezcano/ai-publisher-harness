@@ -59,6 +59,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
           if (!active) return;
           if (status.status === "complete") {
             setOauth((prev) => (prev ? { ...prev, status: "complete" } : prev));
+            void refreshDetail();
             onChanged();
           } else if (status.status === "failed" || status.status === "expired") {
             setOauth((prev) => (prev ? { ...prev, status: status.status } : prev));
@@ -73,7 +74,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
       active = false;
       if (pollTimer.current) clearInterval(pollTimer.current);
     };
-  }, [oauth?.attempt.attemptId, oauth?.status, onChanged]);
+  }, [oauth?.attempt.attemptId, oauth?.status, onChanged, refreshDetail]);
 
   async function connectKey() {
     const key = keyInput.trim();
