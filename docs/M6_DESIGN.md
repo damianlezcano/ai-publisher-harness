@@ -1,6 +1,8 @@
 # M6 Desktop Shell and Project Workspace UI Design
 
-Status: Approved for implementation. ADR-0007 is Accepted.
+Status: Approved and implemented. ADR-0007 is Accepted. M6 closed on
+2026-08-30; `./scripts/verify` reports `M6 contract passed` and `git diff
+--check` is clean.
 
 ## 1. Resumen ejecutivo
 
