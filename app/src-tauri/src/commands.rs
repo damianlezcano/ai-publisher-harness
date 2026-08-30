@@ -9,7 +9,11 @@ use std::sync::Arc;
 
 use project_app::{
     AppError, AppState, AppStatusView, CreationView, MaterialView, ProjectSummary, ProjectView,
-    PublicationView,
+    PublicationView, SelectedModelView,
+};
+use project_provider::{
+    ConnectionTest, ConnectionView, ModelSummary, OAuthAttempt, OAuthStatus, ProviderDetail,
+    ProviderSummary, SecretString,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -196,4 +200,148 @@ pub async fn publication_status(
 #[tauri::command]
 pub async fn app_status(state: State<'_, SharedState>) -> Result<AppStatusView, AppError> {
     Ok(state.app_status())
+}
+
+// -- M7 provider/model surface ------------------------------------------------
+//
+// Narrow, capability-scoped commands (design §17). No generic shell/fs/process
+// command exists; the OAuth URL is opened backend-side via `provider_oauth_open`
+// and the credential flows exactly once through `provider_connect_key`.
+
+#[tauri::command]
+pub async fn provider_list(state: State<'_, SharedState>) -> Result<Vec<ProviderSummary>, AppError> {
+    blocking(state.inner().clone(), |app| app.provider_list()).await
+}
+
+#[tauri::command]
+pub async fn provider_detail(
+    state: State<'_, SharedState>,
+    provider_id: String,
+) -> Result<ProviderDetail, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_detail(&provider_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_connect_key(
+    state: State<'_, SharedState>,
+    provider_id: String,
+    key: String,
+    label: Option<String>,
+) -> Result<ConnectionView, AppError> {
+    // The key enters exactly once, wrapped in a redaction-safe SecretString and
+    // dropped by the facade after the loopback request; it is never returned.
+    blocking(state.inner().clone(), move |app| {
+        let secret = SecretString::new(key);
+        app.provider_connect_key(&provider_id, &secret, label.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_oauth_begin(
+    state: State<'_, SharedState>,
+    provider_id: String,
+    method_id: String,
+) -> Result<OAuthAttempt, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_oauth_begin(&provider_id, &method_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_oauth_status(
+    state: State<'_, SharedState>,
+    attempt_id: String,
+) -> Result<OAuthStatus, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_oauth_status(&attempt_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_oauth_complete(
+    state: State<'_, SharedState>,
+    attempt_id: String,
+    code: Option<String>,
+) -> Result<ConnectionView, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_oauth_complete(&attempt_id, code.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_oauth_cancel(
+    state: State<'_, SharedState>,
+    attempt_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_oauth_cancel(&attempt_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_oauth_open(
+    state: State<'_, SharedState>,
+    url: String,
+) -> Result<(), AppError> {
+    // The frontend never opens an arbitrary browser URL itself; the backend
+    // validates (https-only) and opens.
+    blocking(state.inner().clone(), move |app| {
+        app.provider_oauth_open(&url)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_disconnect(
+    state: State<'_, SharedState>,
+    credential_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_disconnect(&credential_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn provider_test_connection(
+    state: State<'_, SharedState>,
+    provider_id: String,
+    model_id: Option<String>,
+) -> Result<ConnectionTest, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.provider_test_connection(&provider_id, model_id.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn model_list(state: State<'_, SharedState>) -> Result<Vec<ModelSummary>, AppError> {
+    blocking(state.inner().clone(), |app| app.model_list()).await
+}
+
+#[tauri::command]
+pub async fn model_select(
+    state: State<'_, SharedState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.model_select(&provider_id, &model_id).map(|_| ())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn model_get_selected(
+    state: State<'_, SharedState>,
+) -> Result<SelectedModelView, AppError> {
+    blocking(state.inner().clone(), |app| app.model_get_selected()).await
 }

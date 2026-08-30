@@ -33,6 +33,19 @@ pub fn run() {
             commands::unpublish,
             commands::publication_status,
             commands::app_status,
+            commands::provider_list,
+            commands::provider_detail,
+            commands::provider_connect_key,
+            commands::provider_oauth_begin,
+            commands::provider_oauth_status,
+            commands::provider_oauth_complete,
+            commands::provider_oauth_cancel,
+            commands::provider_oauth_open,
+            commands::provider_disconnect,
+            commands::provider_test_connection,
+            commands::model_list,
+            commands::model_select,
+            commands::model_get_selected,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

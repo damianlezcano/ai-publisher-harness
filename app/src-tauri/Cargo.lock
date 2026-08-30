@@ -786,6 +786,7 @@ name = "educai"
 version = "0.0.0"
 dependencies = [
  "project-app",
+ "project-provider",
  "serde",
  "serde_json",
  "tauri",
