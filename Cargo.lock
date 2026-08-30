@@ -699,6 +699,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-provider"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "project-publication"
 version = "0.0.0"
 dependencies = [

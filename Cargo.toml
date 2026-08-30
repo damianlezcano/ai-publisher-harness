@@ -5,6 +5,7 @@ members = [
     "crates/project-core",
     "crates/project-fs",
     "crates/project-opencode",
+    "crates/project-provider",
     "crates/project-publisher",
     "crates/project-publication",
     "crates/project-process",
