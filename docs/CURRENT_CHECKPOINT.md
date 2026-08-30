@@ -6,105 +6,76 @@
 
 ## Estado actual
 
-- Current milestone: M7 — AI Provider Onboarding — **CLOSED / implementado**
-- Current phase: IMPLEMENTED_CLOSED
-- Current main commit: ver `git log -1` tras el commit de cierre de M7
+- Current milestone: M8 — Attachments / Advanced Resource UX — **DESIGN_APPROVED / IMPLEMENTATION_PENDING**
+- Current phase: DESIGN_APPROVED_IMPLEMENTATION_PENDING (no hay implementación)
+- Current main commit: ver `git log -1` (commit de cierre de diseño M8)
 - M1-M7: completados y cerrados
-- verify: PASS — "M7 contract passed"
+- ADR-0010: Accepted (untrusted generated-content preview isolation)
+- ADR-0011: Accepted (prompt attachment contract)
+- verify: PASS — "M7 contract passed" (baseline previo a M8)
 - git diff --check: limpio
-- Worktrees: solo `main`; worktrees históricos de tareas M7 limpiados
-- Siguiente milestone: M8 — Attachments / advanced resource UX (no iniciado)
+- Worktrees: solo `main`
+- Siguiente acción: implementación de M8 por sesión fresca `opencode-go/deepseek-v4-flash`
 
-## ADRs
+## Alcance M8 aprobado
 
-- ADR-0001..0009: Accepted (ninguno reabierto).
-- ADR-0008 (Accepted): provider onboarding vía API de integraciones de OpenCode — implementado.
-- ADR-0009 (Accepted): selección simplificada de modelo + política free-model — implementado.
+- **Clipboard image paste**: evento DOM `paste` (sin privilegio de clipboard global);
+  backend revalida contenido (magic-byte), cap 25 MB, dedup SHA-256, creación
+  atómica de material. Original nunca se modifica.
+- **Multi-file import**: un batch command (`materials_add_from_paths`), resultado
+  determinista por archivo (`added` / `duplicate` / `unsupported` / `failed`),
+  fallo parcial permitido, originales nunca modificados, dedup por SHA-256.
+- **Prompt attachments**: frontend envía `MaterialId` (nunca paths); backend valida
+  que cada material pertenece al proyecto y provisiona copias/referencias
+  autorizadas para `AgentEngine` antes de `open_session`. `AgentEngine` y
+  `AgentPrompt` estables salvo el cambio mínimo (`AgentRequest.attachments`).
+- **Preview tiers**: imágenes/texto/Markdown se previsualizan in-app de forma
+  segura; PDF/office se delegan al system handler; generated web content es
+  **UNTRUSTED**.
+- **Generated-web security boundary** (ADR-0010): webview `preview` sin
+  capacidades (nunca hereda Tauri privileges ni IPC privilegiado), servidor
+  loopback con token aislado (crate `project-preview`), CSP, fallback explícito a
+  system browser si el aislamiento seguro no puede probarse. NUNCA debilitar
+  seguridad para embeder el preview.
+- **Core**: único cambio aditivo `remove_material` (project-core + project-fs);
+  no se reabren invariantes M1-M7.
 
-## Decisiones de arquitectura (aprobadas e implementadas)
+## Task graph (M8_DESIGN §22-26)
 
-- La app NO es un segundo provider framework. OpenCode sigue siendo la capa de
-  provider integrations / auth mechanisms / auth flows / model discovery /
-  connection state. Nuestra app es un **conductor fino y seguro**:
-  Frontend → Application facade → `ProviderConnectorPort` → OpenCode API.
-- **Credential ownership**: pertenece a OpenCode dentro de su config/data
-  aislada. M7 NO tiene CredentialStore propio. La app: recibe el secreto una vez
-  (frontend), lo envía por loopback al endpoint de integración de OpenCode,
-  nunca lo persiste en project files, nunca lo retorna al frontend, nunca lo
-  loggea, nunca lo incluye en prompts ni en diagnostic bundles. El frontend sólo
-  recibe estados (`configured=true`, `connected=true/false`), nunca el secreto.
-- **ChatGPT/accuracy**: ChatGPT Plus/Pro puede usar OAuth de OpenCode si está
-  disponible. No confundir suscripción ChatGPT con OpenAI API billing/key.
-  Gemini consumer subscription NO es una API key. DeepSeek: seguir el auth
-  mechanism real de OpenCode. UI precisa pero simple.
-- **Free-model policy**: modelos zero-credential/cost:0 de OpenCode como opción
-  inicial de bajo roce. No prometer permanencia, no cambiar silenciosamente a
-  modelos pagos ni de provider; si desaparecen, informar claramente.
-- **Shared OpenCodeBackend**: extraído a `project-opencode`. Un único
-  backend `opencode serve` compartido por AgentEngine + ProviderConnector. NO
-  duplicar procesos. Cualquier mutación de credencial reinicia el backend;
-  la selección de modelo aplica por prompt sin reiniciar.
+| # | Task | Level | Depends | Ownership |
+| --- | --- | --- | --- | --- |
+| 0 | Design + ADR approval | HIGH_ARCHITECTURE | — | DONE (V4 Pro + Human) |
+| 1 | `remove_material` core+fs (+ tests) | MEDIUM | 0 | project-core, project-fs |
+| 2 | `project-app` import/preview/attachment facade + DTOs + errors | MEDIUM_HIGH | 1 | crates/project-app/** |
+| 3 | `AgentRequest.attachments` + AgentService provisioning + prompt augmentation | HIGH_CODING | 0 | project-agent/** |
+| 4 | `project-preview` crate (loopback token server + containment + teardown) + security suite | HIGH_CODING — **HIGH_RISK / SECURITY REVIEW** | 0 | project-preview/** |
+| 5 | Tauri commands + capabilities (`preview.json` empty) + preview window | MEDIUM | 2,3,4 | app/src-tauri/** |
+| 6 | Frontend paste/chips/cards/preview UI + a11y + component tests | MEDIUM | 5 | app/src |
+| 7 | Named suites + verify gate + smoke script + docs/VERIFY | MEDIUM/HIGH | 5,6 | tests, scripts, docs/VERIFY |
+| 8 | Gate/docs/ADR + verify + checkpoint | HIGH_ARCHITECTURE | 7 | docs, verify |
 
-## OpenCode research (instalado/testeado)
-
-- Versión instalada: `1.18.25` (rango soportado M5: `>=1.18 <2`).
-- Credenciales: `<data>/opencode/auth.json` (0600), write/delete-only por API.
-- `opencode auth` == `opencode providers` (CLI interactivo; la app usa el HTTP API).
-- Endpoints usados:
-  - `GET /api/integration` → `IntegrationInfo{id,name,methods,connections}`.
-  - `POST /api/integration/{id}/connect/key` body `{key,label?}` → 204.
-  - `POST /api/integration/{id}/connect/oauth` body `{methodID,inputs,label?}` → `IntegrationAttempt{attemptID,url,instructions,mode,time}`.
-  - `GET /api/integration/attempt/{id}` → `pending|complete|failed|expired`.
-  - `POST /api/integration/attempt/{id}/complete` body `{code?}` → 204.
-  - `DELETE /api/integration/attempt/{id}` (cancel), `DELETE /api/credential/{id}` (remove).
-  - `GET /api/model` → `ModelV2Info{id,providerID,family,name,cost,status,enabled,limit}`.
-  - `GET /config/providers` → providers + `default` map.
-  - `POST /api/session/{id}/model` → switch model.
-  - NO existe `GET /api/credential/{id}` (sin read-back del secreto).
-
-## Provider auth findings
-
-- `openai`: `key`, `env`, `oauth` (chatgpt-browser, chatgpt-headless).
-- `opencode` (OpenCode Zen): `key` (service account), `env`, `oauth` (device).
-- `google`: `key`+`env` (NO oauth) — API key only.
-- `deepseek`: `key`+`env` — API key only.
-- `anthropic`: `key`+`env`.
-- 212 integrations totales; `env` no se ofrece en UX M7.
-- Modelos gratis: provider `opencode` (`*-free`, `apiKey:"public"`, `cost:0`).
-
-## Task graph (M7_DESIGN §27-30) — completado
-
-| # | Task | Level | Estado |
-| --- | --- | --- | --- |
-| 1 | Extraer `project-opencode` (`OpenCodeBackend`) + migrar `OpenCodeAgentEngine`; M1-M6 verdes | HIGH_CODING | DONE |
-| 2 | `project-provider`: port + models + errors + `SecretString` + `FakeProviderConnector` | MEDIUM | DONE |
-| 3 | `OpenCodeProviderConnector` adapter + extender `fake_opencode_server` | HIGH_CODING | DONE |
-| 4 | `ProviderService`: selección/settings + test-connection + restart-on-mutation | HIGH_CODING | DONE |
-| 5 | `project-app`: backend compartido, facade provider/model + DTOs + error map | MEDIUM_HIGH | DONE |
-| 6 | Tauri commands + capabilities + state | MEDIUM | DONE |
-| 7 | Frontend "Conectá tu IA" + selector de modelo + tests | MEDIUM | DONE |
-| 8 | Security + lifecycle tests + verify + smoke | MEDIUM/HIGH | DONE |
-| 9 | Gate/docs/ADR + verify | HIGH_ARCHITECTURE | DONE (cierre) |
-
-- Tareas 1-8 aterrizaron en `main`; la tarea 9 cierra el milestone en el repo.
-- M7 NO implementó alcance M8 (attachments / advanced resource UX: clipboard
-  image paste, rich previews, embedded web preview). Ese boundary queda intacto.
+- **Task 4 (web preview) = HIGH_RISK / SECURITY REVIEW**, reviewer independiente
+  (OpenCode Go DeepSeek V4 Flash); evalúa el fallback §11 y reporta
+  approve / fallback / request-changes.
+- Tasks 1, 3 y 4 son independientes una vez aceptados los ADR.
+- **Recommended first task**: Task 1 (`remove_material` core+fs) — desbloquea la
+  task 2; tasks 3 y 4 pueden arrancar en paralelo.
 
 ## Model policy (implementación)
 
 - IMPLEMENTATION_ORCHESTRATOR: `opencode-go/deepseek-v4-flash`.
 - LOW: Cursor Composer 2.5 → fallback `opencode-go/mimo-v2.5`.
-- MEDIUM: `opencode-go/deepseek-v4-flash` → Composer → `opencode-go/qwen3.8-flash`.
-- MEDIUM_HIGH: Cursor Grok 4.6 medium → DeepSeek V4 Flash → Qwen3.8 Max.
-- HIGH_CODING: Cursor Grok 4.6 medium → Kimi K2.7 Code.
-- HIGH_ARCHITECTURE: fresh DeepSeek V4 Pro session only.
-- V4 Pro queda reservado para HIGH_ARCHITECTURE escalation únicamente.
+- MEDIUM: `opencode-go/deepseek-v4-flash` → Composer 2.5 → `opencode-go/qwen3.8-max`.
+- MEDIUM_HIGH: Cursor Grok 4.6 medium → DeepSeek V4 Flash → `opencode-go/kimi-k2.7-code`.
+- HIGH_CODING: Cursor Grok 4.6 medium → `opencode-go/kimi-k2.7-code`.
+- HIGH_ARCHITECTURE: fresh `opencode-go/deepseek-v4-pro` only.
 
 ## Documents required by fresh implementation session
 
 - CODEX_HANDOFF.md, docs/AGENT_POLICY.md, docs/ARCHITECTURE.md, docs/SECURITY.md
-- docs/M7_DESIGN.md (diseño aprobado e implementado, 35 secciones)
-- docs/decisions/0008-*, 0009-* (Accepted)
-- docs/M5_DESIGN.md, docs/M6_DESIGN.md (boundaries, adapter/backend)
-- docs/VERIFY.md (§M7), docs/WORKTREES.md, docs/MULTI_AGENT_WORKFLOW.md
+- docs/M8_DESIGN.md (diseño aprobado, 30 secciones) — PRIMARIO
+- docs/decisions/0010-*, 0011-* (Accepted)
+- docs/M6_DESIGN.md, docs/M7_DESIGN.md (boundaries, commands, provider)
+- docs/VERIFY.md (§M7 actual; §M8 se añade en la tarea 7), docs/WORKTREES.md,
+  docs/MULTI_AGENT_WORKFLOW.md, docs/TESTING.md
 - docs/CURRENT_CHECKPOINT.md (este documento)
