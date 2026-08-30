@@ -6,18 +6,45 @@ use project_agent::model::{
 };
 use project_agent::{Artifact, ArtifactKind, FakeAgentEngine};
 use project_app::{AppState, ErrorCode};
+use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
 use project_tunnel::FakeTunnel;
+
+/// A fake connector seeded with a free recommended model so `run_agent` (which
+/// resolves the global model) and the provider surface work offline.
+fn connector() -> FakeProviderConnector {
+    FakeProviderConnector::new()
+        .with_provider(ProviderDetail {
+            id: "opencode".into(),
+            name: "Gratis".into(),
+            auth_methods: Vec::new(),
+            connections: Vec::new(),
+        })
+        .with_model(ModelSummary {
+            provider_id: "opencode".into(),
+            model_id: "big-pickle".into(),
+            name: "big-pickle".into(),
+            free: true,
+            recommended: true,
+            deprecated: false,
+        })
+}
 
 fn app(
     base: &Path,
 ) -> (
-    AppState<FakeAgentEngine, FakeTunnel>,
+    AppState<FakeAgentEngine, FakeTunnel, FakeProviderConnector, FakeRestarter>,
     FakeAgentEngine,
     FakeTunnel,
 ) {
     let engine = FakeAgentEngine::new();
     let tunnel = FakeTunnel::new();
-    let state = AppState::with_components(base.to_path_buf(), engine.clone(), tunnel.clone());
+    let state = AppState::with_components(
+        base.to_path_buf(),
+        engine.clone(),
+        tunnel.clone(),
+        connector(),
+        FakeRestarter::new(),
+    );
     (state, engine, tunnel)
 }
 
@@ -317,7 +344,13 @@ fn cancelled_agent_run_is_a_normal_cancelled_outcome() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let engine = CancellingEngine(FakeAgentEngine::new());
     let tunnel = FakeTunnel::new();
-    let app = AppState::with_components(tmp.path().to_path_buf(), engine, tunnel);
+    let app = AppState::with_components(
+        tmp.path().to_path_buf(),
+        engine,
+        tunnel,
+        connector(),
+        FakeRestarter::new(),
+    );
     let p = app.create_project("P").expect("create");
     let result = app.run_agent(&p.id, "hacé algo").expect("run");
     assert_eq!(result.status, "cancelled");

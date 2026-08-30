@@ -6,10 +6,11 @@
 //! plus human-facing errors. The Tauri command layer is a thin adapter over
 //! this facade; no domain logic lives in the frontend.
 
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use project_agent::model::TaskStatus;
+use project_agent::model::{ModelRef, TaskStatus};
 use project_agent::{
     AgentEngine, AgentPrompt, AgentRequest, AgentRunResult, AgentService, AgentStatus, AgentTask,
     FilesystemCreationRegistrar, OpenCodeAgentEngine,
@@ -21,6 +22,12 @@ use project_core::{
 use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
     PublicationSnapshotStore,
+};
+use project_opencode::OpenCodeBackend;
+use project_provider::{
+    BackendRestarter, ConnectionTest, ConnectionView, ModelSummary, OAuthAttempt, OAuthStatus,
+    OpenCodeProviderConnector, ProviderConnector, ProviderDetail, ProviderError, ProviderResult,
+    ProviderService, ProviderSummary, SecretString,
 };
 use project_publication::{OsRouteEntropy, PublicationManager};
 use project_publisher::AxumLocalPublisher;
@@ -43,10 +50,36 @@ pub struct AppConfig {
     pub cloudflared_binary: Option<PathBuf>,
 }
 
-pub struct AppState<E = OpenCodeAgentEngine, T = CloudflareQuickTunnel>
-where
+/// Shuts down the shared `opencode serve` backend after a credential mutation.
+/// The agent engine lazily respawns it (and drops stale sessions) on next use.
+pub struct SharedBackendRestarter {
+    backend: Arc<OpenCodeBackend>,
+}
+
+impl SharedBackendRestarter {
+    pub fn new(backend: Arc<OpenCodeBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+impl BackendRestarter for SharedBackendRestarter {
+    fn restart(&self) -> ProviderResult<()> {
+        self.backend
+            .shutdown()
+            .map_err(|err| ProviderError::Internal(err.to_string()))
+    }
+}
+
+pub struct AppState<
+    E = OpenCodeAgentEngine,
+    T = CloudflareQuickTunnel,
+    P = OpenCodeProviderConnector,
+    R = SharedBackendRestarter,
+> where
     E: AgentEngine,
     T: TunnelProvider,
+    P: ProviderConnector,
+    R: BackendRestarter,
 {
     base: PathBuf,
     projects: Mutex<
@@ -66,33 +99,59 @@ where
         T,
     >,
     agent: AgentService<E, FilesystemCreationRegistrar>,
+    provider: ProviderService<P, R>,
 }
 
-impl AppState<OpenCodeAgentEngine, CloudflareQuickTunnel> {
-    /// Production constructor: real OpenCode engine + Cloudflare Quick Tunnel.
+impl
+    AppState<
+        OpenCodeAgentEngine,
+        CloudflareQuickTunnel,
+        OpenCodeProviderConnector,
+        SharedBackendRestarter,
+    >
+{
+    /// Production constructor: real shared OpenCode backend (one `opencode
+    /// serve` for the agent engine and the provider connector), Cloudflare
+    /// Quick Tunnel, and an app-managed data dir with owner-only permissions.
     pub fn new(config: AppConfig) -> Self {
-        let engine = OpenCodeAgentEngine::new(
+        ensure_app_data_dir(&config.data_dir);
+        let backend = Arc::new(OpenCodeBackend::new(
             config.opencode_binary,
             config.opencode_config_dir,
             config.opencode_port,
-        );
+        ));
+        let engine = OpenCodeAgentEngine::from_backend(Arc::clone(&backend));
+        let scratch = config.data_dir.join("opencode-scratch");
+        fs::create_dir_all(&scratch).expect("create provider scratch dir under app data");
+        let connector =
+            OpenCodeProviderConnector::new(Arc::clone(&backend)).with_scratch_root(scratch);
+        let restarter = SharedBackendRestarter::new(Arc::clone(&backend));
         let resolver: Box<dyn BinaryResolver> = match config.cloudflared_binary {
             Some(path) => Box::new(FixedBinaryResolver::new(path)),
             None => Box::new(PathBinaryResolver::new("cloudflared")),
         };
         let tunnel = CloudflareQuickTunnel::new(resolver);
-        Self::with_components(config.data_dir, engine, tunnel)
+        Self::with_components(config.data_dir, engine, tunnel, connector, restarter)
     }
 }
 
-impl<E, T> AppState<E, T>
+impl<E, T, P, R> AppState<E, T, P, R>
 where
     E: AgentEngine,
     T: TunnelProvider,
+    P: ProviderConnector,
+    R: BackendRestarter,
 {
     /// Dependency-injection constructor (tests inject `FakeAgentEngine` /
-    /// `FakeTunnel`); all filesystem components still target the real base dir.
-    pub fn with_components(base: PathBuf, engine: E, tunnel: T) -> Self {
+    /// `FakeTunnel` / `FakeProviderConnector` / `FakeRestarter`); all
+    /// filesystem components still target the real base dir.
+    pub fn with_components(
+        base: PathBuf,
+        engine: E,
+        tunnel: T,
+        connector: P,
+        restarter: R,
+    ) -> Self {
         let projects = ProjectService::new(
             FilesystemProjectRepository::new(base.clone()),
             FilesystemProjectContentStore::new(base.clone()),
@@ -113,12 +172,14 @@ where
         let registrar = FilesystemCreationRegistrar::new(base.clone());
         let agent = AgentService::new(engine, registrar, base.clone());
         let content = FilesystemProjectContentStore::new(base.clone());
+        let provider = ProviderService::new(connector, restarter, base.join("settings.json"));
         Self {
             base,
             projects: Mutex::new(projects),
             content,
             publication,
             agent,
+            provider,
         }
     }
 
@@ -286,13 +347,15 @@ where
         if prompt.trim().is_empty() {
             return Err(AppError::invalid("Escribí qué querés crear."));
         }
+        // The global model selection applies to the next prompt (design §12).
+        let model = self.selected_model_ref()?;
         let result = self
             .agent
             .run(AgentRequest {
                 project_id: project_id.to_owned(),
                 prompt: AgentPrompt {
                     text: prompt.to_owned(),
-                    model: None,
+                    model,
                 },
             })
             .or_else(|error| match error {
@@ -318,6 +381,26 @@ where
         })
     }
 
+    /// Resolves the global model to send with a prompt. When no usable free or
+    /// recommended model exists the product stops and asks instead of silently
+    /// switching provider or to a paid model (ADR-0009).
+    fn selected_model_ref(&self) -> AppResult<Option<ModelRef>> {
+        let selected = self
+            .provider
+            .get_selected_model()
+            .map_err(AppError::from_provider)?;
+        if selected.requires_choice {
+            return Err(AppError::new(
+                ErrorCode::ModelUnavailable,
+                "No encontramos un modelo para usar. Elegí uno en Conectá tu IA.",
+            ));
+        }
+        Ok(Some(ModelRef {
+            provider_id: selected.model.provider_id,
+            model_id: selected.model.model_id,
+        }))
+    }
+
     pub fn cancel_agent(&self, project_id: &str) -> AppResult<()> {
         self.agent.cancel(project_id).map_err(AppError::from_agent)
     }
@@ -329,6 +412,117 @@ where
             AgentStatus::Ready => "ready",
             AgentStatus::Failed => "failed",
         }
+    }
+
+    // -- Provider ------------------------------------------------------------
+
+    pub fn provider_list(&self) -> AppResult<Vec<ProviderSummary>> {
+        self.provider
+            .list_providers()
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_detail(&self, provider_id: &str) -> AppResult<ProviderDetail> {
+        self.provider
+            .provider_detail(provider_id)
+            .map_err(AppError::from_provider)
+    }
+
+    /// Stores a credential once. The key enters here and is never returned,
+    /// persisted, or logged; the frontend only receives an opaque reference.
+    pub fn provider_connect_key(
+        &self,
+        provider_id: &str,
+        key: &SecretString,
+        label: Option<&str>,
+    ) -> AppResult<ConnectionView> {
+        self.provider
+            .connect_api_key(provider_id, key, label)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_oauth_begin(
+        &self,
+        provider_id: &str,
+        method_id: &str,
+    ) -> AppResult<OAuthAttempt> {
+        self.provider
+            .begin_oauth(provider_id, method_id)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_oauth_status(&self, attempt_id: &str) -> AppResult<OAuthStatus> {
+        self.provider
+            .oauth_status(attempt_id)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_oauth_complete(
+        &self,
+        attempt_id: &str,
+        code: Option<&str>,
+    ) -> AppResult<ConnectionView> {
+        self.provider
+            .complete_oauth(attempt_id, code)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_oauth_cancel(&self, attempt_id: &str) -> AppResult<()> {
+        self.provider
+            .cancel_oauth(attempt_id)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_disconnect(&self, credential_id: &str) -> AppResult<()> {
+        self.provider
+            .disconnect(credential_id)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn provider_test_connection(
+        &self,
+        provider_id: &str,
+        model_id: Option<&str>,
+    ) -> AppResult<ConnectionTest> {
+        self.provider
+            .test_connection(provider_id, model_id)
+            .map_err(AppError::from_provider)
+    }
+
+    /// Opens an OAuth authorization URL in the system browser. The URL comes
+    /// from a backend-generated `provider_oauth_begin`; only https URLs are
+    /// opened (the frontend never invokes an arbitrary browser URL itself).
+    pub fn provider_oauth_open(&self, url: &str) -> AppResult<()> {
+        let url = url.trim();
+        if !url.starts_with("https://") || url.len() < 12 {
+            return Err(AppError::invalid("Ese enlace no es válido."));
+        }
+        opener::open_browser(url)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir el enlace."))
+    }
+
+    // -- Models --------------------------------------------------------------
+
+    pub fn model_list(&self) -> AppResult<Vec<ModelSummary>> {
+        self.provider.list_models().map_err(AppError::from_provider)
+    }
+
+    pub fn model_select(&self, provider_id: &str, model_id: &str) -> AppResult<ModelSummary> {
+        self.provider
+            .select_model(provider_id, model_id)
+            .map_err(AppError::from_provider)
+    }
+
+    pub fn model_get_selected(&self) -> AppResult<SelectedModelView> {
+        let selected = self
+            .provider
+            .get_selected_model()
+            .map_err(AppError::from_provider)?;
+        Ok(SelectedModelView {
+            model: selected.model,
+            notice: selected.notice,
+            requires_choice: selected.requires_choice,
+        })
     }
 
     // -- Publication -------------------------------------------------------
@@ -397,6 +591,20 @@ where
 
 fn parse_project_id(id: &str) -> AppResult<ProjectId> {
     ProjectId::parse(id).map_err(|_| AppError::invalid("Ese proyecto no es válido."))
+}
+
+/// Creates the app-managed data dir with owner-only permissions before first
+/// use (design §7). Credentials never live here; they live under OpenCode's
+/// isolated `data/` subtree inside it.
+fn ensure_app_data_dir(data_dir: &Path) {
+    if fs::create_dir_all(data_dir).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700));
+    }
 }
 
 fn parse_creation_id(id: &str) -> AppResult<CreationId> {

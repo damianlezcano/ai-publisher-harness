@@ -13,12 +13,15 @@ project-publication = { path = "../project-publication" }
 project-publisher = { path = "../project-publisher" }
 project-tunnel = { path = "../project-tunnel" }
 project-agent = { path = "../project-agent" }
+project-opencode = { path = "../project-opencode" }
+project-provider = { path = "../project-provider" }
 opener = "0.7"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 project-agent = { path = "../project-agent" }
+project-provider = { path = "../project-provider" }
 project-tunnel = { path = "../project-tunnel" }
 tempfile = { workspace = true }
 

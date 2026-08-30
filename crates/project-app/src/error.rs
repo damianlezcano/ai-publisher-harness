@@ -7,6 +7,7 @@ use std::fmt;
 
 use project_agent::AgentError;
 use project_core::ProjectCoreError;
+use project_provider::ProviderError;
 use project_publication::PublicationError;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,14 @@ pub enum ErrorCode {
     MaterialFailed,
     OpenFailed,
     StorageUnavailable,
+    ProviderNotFound,
+    ProviderConnectFailed,
+    CredentialInvalid,
+    CredentialRevoked,
+    ProviderUnavailable,
+    ModelUnavailable,
+    NoCompatibleModel,
+    NetworkError,
     Internal,
 }
 
@@ -36,6 +45,14 @@ impl ErrorCode {
             ErrorCode::MaterialFailed => "material_failed",
             ErrorCode::OpenFailed => "open_failed",
             ErrorCode::StorageUnavailable => "storage_unavailable",
+            ErrorCode::ProviderNotFound => "provider_not_found",
+            ErrorCode::ProviderConnectFailed => "provider_connect_failed",
+            ErrorCode::CredentialInvalid => "credential_invalid",
+            ErrorCode::CredentialRevoked => "credential_revoked",
+            ErrorCode::ProviderUnavailable => "provider_unavailable",
+            ErrorCode::ModelUnavailable => "model_unavailable",
+            ErrorCode::NoCompatibleModel => "no_compatible_model",
+            ErrorCode::NetworkError => "network_error",
             ErrorCode::Internal => "internal",
         }
     }
@@ -147,6 +164,49 @@ impl AppError {
             | AgentError::TaskFailed(_)
             | AgentError::RegistrationFailed(_) => {
                 Self::new(ErrorCode::AiTaskFailed, "No se pudo completar la creación.")
+            }
+        }
+    }
+
+    /// Contextual mapping for the provider/model surface. Only the human-facing
+    /// code + message reach the frontend; no raw provider payloads or ids.
+    pub fn from_provider(error: ProviderError) -> Self {
+        match error {
+            ProviderError::NotFound(_) => Self::new(
+                ErrorCode::ProviderNotFound,
+                "Ese proveedor no está disponible.",
+            ),
+            ProviderError::ConnectFailed(_)
+            | ProviderError::OAuthFailed(_)
+            | ProviderError::DisconnectFailed(_) => Self::new(
+                ErrorCode::ProviderConnectFailed,
+                "No pudimos conectar tu cuenta.",
+            ),
+            ProviderError::CredentialInvalid => {
+                Self::new(ErrorCode::CredentialInvalid, "Esta clave no es válida.")
+            }
+            ProviderError::CredentialRevoked => Self::new(
+                ErrorCode::CredentialRevoked,
+                "Necesitás volver a conectar tu cuenta.",
+            ),
+            ProviderError::ProviderUnavailable | ProviderError::BackendNotReady => Self::new(
+                ErrorCode::ProviderUnavailable,
+                "No pudimos conectarnos con el proveedor.",
+            ),
+            ProviderError::ModelUnavailable => Self::new(
+                ErrorCode::ModelUnavailable,
+                "Este modelo ya no está disponible.",
+            ),
+            ProviderError::NoCompatibleModel => Self::new(
+                ErrorCode::NoCompatibleModel,
+                "No encontramos un modelo disponible para este proveedor.",
+            ),
+            ProviderError::NetworkError => Self::new(
+                ErrorCode::NetworkError,
+                "No hay conexión con el proveedor. Revisá tu conexión.",
+            ),
+            ProviderError::Internal(_) => {
+                Self::new(ErrorCode::Internal, "No se pudo completar la operación.")
             }
         }
     }

@@ -75,3 +75,16 @@ pub struct AppStatusView {
     /// `stopped`, `starting`, `ready`, or `failed`.
     pub agent: String,
 }
+
+/// The resolved global model selection (design §12/§13). `requiresChoice` is
+/// true when the stored model disappeared and only paid/unavailable models
+/// remain: the frontend must show `notice` and require an explicit choice
+/// (never an automatic paid/provider switch).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedModelView {
+    pub model: project_provider::models::ModelSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    pub requires_choice: bool,
+}

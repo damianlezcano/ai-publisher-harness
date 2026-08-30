@@ -10,9 +10,9 @@ pub mod app;
 pub mod dtos;
 pub mod error;
 
-pub use app::{APP_VERSION, AppConfig, AppState};
+pub use app::{APP_VERSION, AppConfig, AppState, SharedBackendRestarter};
 pub use dtos::{
     AgentRunView, AppStatusView, CreationView, MaterialView, ProjectSummary, ProjectView,
-    PublicationView,
+    PublicationView, SelectedModelView,
 };
 pub use error::{AppError, AppResult, ErrorCode};

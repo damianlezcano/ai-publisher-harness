@@ -2533,6 +2533,8 @@ dependencies = [
  "project-agent",
  "project-core",
  "project-fs",
+ "project-opencode",
+ "project-provider",
  "project-publication",
  "project-publisher",
  "project-tunnel",
@@ -2576,6 +2578,15 @@ name = "project-process"
 version = "0.0.0"
 dependencies = [
  "nix",
+]
+
+[[package]]
+name = "project-provider"
+version = "0.0.0"
+dependencies = [
+ "project-opencode",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

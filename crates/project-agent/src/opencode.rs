@@ -29,8 +29,14 @@ impl OpenCodeAgentEngine {
     /// Production: resolve/spawn `opencode serve` on 127.0.0.1:<port> with an
     /// isolated XDG config, lazily. Version range default ">=1.18 <2".
     pub fn new(binary: PathBuf, config_dir: PathBuf, port: u16) -> Self {
+        Self::from_backend(Arc::new(OpenCodeBackend::new(binary, config_dir, port)))
+    }
+
+    /// Share an externally owned backend (M7: one `opencode serve` for the
+    /// agent engine and the provider connector).
+    pub fn from_backend(backend: Arc<OpenCodeBackend>) -> Self {
         Self {
-            backend: Arc::new(OpenCodeBackend::new(binary, config_dir, port)),
+            backend,
             task_timeout: DEFAULT_TASK,
             sessions: Mutex::new(HashMap::new()),
         }
@@ -119,7 +125,13 @@ impl OpenCodeAgentEngine {
 
 impl AgentEngine for OpenCodeAgentEngine {
     fn ensure_ready(&self) -> AgentResult<AgentBackendInfo> {
+        let was_ready = self.backend.status() == BackendStatus::Ready;
         let version = self.backend.ensure_ready().map_err(map_backend_error)?;
+        if !was_ready {
+            // A backend (re)start invalidates every cached session (M7
+            // restart-on-mutation): stale ids belong to the previous process.
+            self.lock_sessions().clear();
+        }
         Ok(AgentBackendInfo { version })
     }
 

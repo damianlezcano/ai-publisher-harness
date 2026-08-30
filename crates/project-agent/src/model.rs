@@ -12,6 +12,7 @@ pub struct AgentSession {
     pub project_id: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelRef {
     pub provider_id: String,
     pub model_id: String,

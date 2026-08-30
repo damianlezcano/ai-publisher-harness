@@ -660,6 +660,8 @@ dependencies = [
  "project-agent",
  "project-core",
  "project-fs",
+ "project-opencode",
+ "project-provider",
  "project-publication",
  "project-publisher",
  "project-tunnel",
