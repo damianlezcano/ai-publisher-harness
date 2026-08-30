@@ -717,6 +717,7 @@ dependencies = [
  "project-opencode",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

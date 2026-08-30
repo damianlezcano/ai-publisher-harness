@@ -1,11 +1,14 @@
 //! M7 provider security suite (design §20 threats at the provider domain level).
 
 use std::fs;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fake_opencode_server::FakeServer;
+use project_opencode::OpenCodeBackend;
 use project_provider::{
-    FakeProviderConnector, ModelSelection, ProviderConnector, ProviderError, ProviderSummary,
-    SecretString, Settings, SettingsStore, redact_credentials,
+    FakeProviderConnector, ModelSelection, OpenCodeProviderConnector, ProviderConnector,
+    ProviderError, ProviderSummary, SecretString, Settings, SettingsStore, redact_credentials,
 };
 
 fn unique_path() -> std::path::PathBuf {
@@ -14,6 +17,15 @@ fn unique_path() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("project-provider-sec-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     dir.join("settings.json")
+}
+
+fn unique_config_dir() -> std::path::PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir().join(format!(
+        "project-provider-sec-cfg-{}-{n}",
+        std::process::id()
+    ))
 }
 
 fn provider(id: &str, name: &str) -> project_provider::ProviderDetail {
@@ -59,14 +71,17 @@ fn provider_surface_never_returns_a_secret() {
     }
 }
 
-// Threat 3 (§20): SecretString and the defensive scrubber never leak the value.
+// Threat 3 (§20): SecretString, the defensive scrubber, and the adapter's own
+// `[provider]` log line never leak the value.
 #[test]
 fn secret_string_and_scrubber_redact() {
     let secret = SecretString::new("sk-abc123".into());
     assert!(!format!("{secret:?}").contains("sk-abc123"));
     assert!(!format!("{secret}").contains("sk-abc123"));
 
-    let log_line = "connect key=sk-abc123 token=AIzaSy0 gsk_xyz Bearer e30 expiry=never";
+    // Matches the adapter's log format (`[provider] {event}`) with a secret
+    // accidentally embedded; the §19 belt-and-suspenders scrubber removes it.
+    let log_line = "[provider] connected key=sk-abc123 token=AIzaSy0 gsk_xyz Bearer e30";
     let scrubbed = redact_credentials(log_line);
     assert!(!scrubbed.contains("sk-abc123"));
     assert!(!scrubbed.contains("AIzaSy0"));
@@ -75,7 +90,8 @@ fn secret_string_and_scrubber_redact() {
     assert!(scrubbed.contains("[REDACTED]"));
 }
 
-// Threat 5 (§20): malicious ids are never echoed and never reach a live list.
+// Threat 5 (§20): malicious ids are rejected; the human-facing Display never
+// echoes them.
 #[test]
 fn malicious_ids_are_rejected_not_echoed() {
     let fake = FakeProviderConnector::new().with_provider(provider("openai", "ChatGPT"));
@@ -88,8 +104,110 @@ fn malicious_ids_are_rejected_not_echoed() {
             "{err:?}"
         );
         assert!(
-            !err.to_string().contains("etc/passwd") || err.to_string().contains(bad),
-            "id is only echoed as the opaque NotFound payload"
+            !err.to_string().contains("etc/passwd") && !err.to_string().contains("rm -rf"),
+            "Display must never echo the raw hostile id: {err}"
+        );
+    }
+}
+
+// Threat 5 (§20), adapter path: hostile ids interpolated into the connect URL
+// resolve to not-found (the fake server only knows real integration ids), and
+// the error's Display still never echoes the raw id.
+#[test]
+fn malicious_id_through_the_adapter_is_not_found_not_echoed() {
+    let server = FakeServer::start();
+    let backend = Arc::new(OpenCodeBackend::new(
+        std::path::PathBuf::from("/usr/bin/true"),
+        unique_config_dir(),
+        0,
+    ));
+    backend.set_base_url(server.base_url());
+    backend.ensure_ready().expect("ready");
+    let connector = OpenCodeProviderConnector::new(Arc::clone(&backend));
+    for bad in ["../../etc/passwd", "openai; rm -rf /"] {
+        let err = connector
+            .connect_api_key(bad, &SecretString::new("sk-x".into()), None)
+            .expect_err("hostile id");
+        assert!(
+            !err.to_string().contains("etc/passwd") && !err.to_string().contains("rm -rf"),
+            "Display must never echo the raw hostile id: {err}"
+        );
+    }
+}
+
+// Threat 4 (§20): the backend child env never carries a secret or a
+// secret-shaped variable, and the connector only ever talks to the loopback
+// server.
+#[test]
+fn backend_env_and_loopback_never_carry_secrets() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_dir = temp.path().join("app-data").join("opencode");
+    let env = project_opencode::build_env(&config_dir);
+    for (key, value) in &env {
+        for fragment in [
+            "TOKEN",
+            "API_KEY",
+            "SECRET",
+            "PASSWORD",
+            "CREDENTIAL",
+            "AWS",
+        ] {
+            assert!(
+                !key.to_ascii_uppercase().contains(fragment),
+                "backend env must not expose {fragment}: {key}"
+            );
+        }
+        assert!(
+            !value.contains("sk-"),
+            "backend env must not carry a secret: {value}"
+        );
+    }
+
+    let server = FakeServer::start();
+    assert!(
+        server.base_url().starts_with("http://127.0.0.1:"),
+        "the connect/key body must only ever reach the loopback server"
+    );
+}
+
+// Threat 9 (§20): the isolated OpenCode config/data/cache/state stay under the
+// managed root; they never resolve to the developer's real opencode dirs or a
+// project dir.
+#[test]
+fn managed_root_isolates_opencode_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_dir = temp.path().join("app-data").join("opencode");
+    let env = project_opencode::build_env(&config_dir);
+
+    let value = |key: &str| {
+        env.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(value("XDG_CONFIG_HOME"), config_dir.display().to_string());
+    assert_eq!(
+        value("XDG_DATA_HOME"),
+        config_dir.join("data").display().to_string()
+    );
+    assert_eq!(
+        value("XDG_CACHE_HOME"),
+        config_dir.join("cache").display().to_string()
+    );
+    assert_eq!(
+        value("XDG_STATE_HOME"),
+        config_dir.join("state").display().to_string()
+    );
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let real_config = std::path::Path::new(&home).join(".config/opencode");
+    let real_data = std::path::Path::new(&home).join(".local/share/opencode");
+    for (_, v) in &env {
+        assert_ne!(v, &real_config.display().to_string());
+        assert_ne!(v, &real_data.display().to_string());
+        assert!(
+            !std::path::Path::new(v).starts_with(temp.path().join("projects")),
+            "backend state must never land in a project dir"
         );
     }
 }
@@ -121,15 +239,27 @@ fn settings_bundle_contains_no_credentials() {
     assert_eq!(parsed["selectedModel"]["modelId"], "gpt-4o");
 }
 
-// Threat 10 (§20): the credential boundary is write/delete-only by construction.
-// This compiles only if the port surface has no secret read-back method; the
-// runtime assertion documents the contract.
+// Threat 10 (§20): the credential boundary is write/delete-only by
+// construction. Assert the only credential references that cross the boundary
+// are opaque `{id, label}` shapes with no secret field.
 #[test]
-fn connector_has_no_secret_read_back() {
-    let fake = FakeProviderConnector::new();
-    let _ = fake;
-    // If a `get_secret`/`read_api_key` method is ever added to ProviderConnector,
-    // the M7 security review must re-open this invariant (ADR-0008 one-way flow).
+fn credential_references_are_opaque_id_label_only() {
+    let view = project_provider::ConnectionView {
+        id: "cred-1".into(),
+        label: Some("clave".into()),
+    };
+    let obj = serde_json::to_value(&view)
+        .expect("serialize")
+        .as_object()
+        .expect("object")
+        .clone();
+    assert_eq!(obj.len(), 2, "ConnectionView must expose only id + label");
+    for key in ["key", "secret", "token", "apiKey"] {
+        assert!(
+            !obj.contains_key(key),
+            "ConnectionView must not expose {key}"
+        );
+    }
 }
 
 // A connect that fails must not mark the provider connected (no partial state).

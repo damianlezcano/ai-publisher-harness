@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use project_agent::FakeAgentEngine;
-use project_app::{AppState, ErrorCode};
+use project_app::{AppError, AppState, ErrorCode};
 use project_provider::{
     FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail, SecretString,
 };
@@ -175,4 +175,35 @@ fn facade_reads_never_expose_secrets_or_echo_hostile_ids() {
     assert_eq!(err.code, ErrorCode::ProviderNotFound);
     assert_eq!(err.message, "Ese proveedor no está disponible.");
     assert!(!err.message.contains("etc/passwd"));
+}
+
+// Threat 6 (§20): after a disconnect the provider is disconnected, and a
+// revoked credential surfaces the human "volver a conectar" message.
+#[test]
+fn disconnect_clears_connection_and_revoked_error_is_human() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let state = app(tmp.path(), connector());
+    let view = state
+        .provider_connect_key("openai", &SecretString::new("sk-x".into()), Some("clave"))
+        .expect("connect");
+    assert!(
+        state
+            .provider_detail("openai")
+            .expect("detail")
+            .connections
+            .len()
+            == 1
+    );
+
+    state.provider_disconnect(&view.id).expect("disconnect");
+    let detail = state.provider_detail("openai").expect("detail");
+    assert!(
+        detail.connections.is_empty(),
+        "disconnect must clear the connection"
+    );
+
+    // A revoked credential maps to the "volver a conectar" prompt (ADR-0008).
+    let err = AppError::from_provider(project_provider::ProviderError::CredentialRevoked);
+    assert_eq!(err.code, ErrorCode::CredentialRevoked);
+    assert_eq!(err.message, "Necesitás volver a conectar tu cuenta.");
 }

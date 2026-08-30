@@ -18,7 +18,7 @@ use crate::models::{
     OAuthStatusKind, ProviderDetail, ProviderSummary,
 };
 use crate::port::ProviderConnector;
-use crate::secret::SecretString;
+use crate::secret::{SecretString, redact_credentials};
 
 const DEFAULT_FEATURED: [&str; 5] = ["openai", "google", "deepseek", "anthropic", "opencode"];
 const DEFAULT_TASK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -438,7 +438,9 @@ fn log_test_failed(outcome: ConnectionTestOutcome) {
 }
 
 fn log_event(event: &str) {
-    eprintln!("[provider] {event}");
+    // Primary defense is never logging a secret; this scrubber is the second
+    // belt-and-suspenders layer (design §19).
+    eprintln!("[provider] {}", redact_credentials(event));
 }
 
 fn map_backend_error(err: BackendError) -> ProviderError {
