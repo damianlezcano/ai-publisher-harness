@@ -59,6 +59,18 @@ fn main() {
             sleep_forever();
         }
         "silent" => sleep_forever(),
+        "env" => {
+            let mut entries: Vec<String> = std::env::vars()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect();
+            entries.sort();
+            let mut stdout = io::stdout();
+            for entry in entries {
+                let _ = writeln!(stdout, "{entry}");
+            }
+            let _ = stdout.flush();
+            sleep_forever();
+        }
         _ => sleep_forever(),
     }
 }
