@@ -53,6 +53,8 @@ pub enum ArtifactKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Artifact {
+    /// Project-relative forward-slash path under `workspace/` (e.g.
+    /// `workspace/actividad/index.html`).
     pub path: String,
     pub kind: ArtifactKind,
     pub byte_size: u64,

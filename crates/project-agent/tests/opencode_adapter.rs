@@ -40,7 +40,7 @@ fn prompt() -> AgentPrompt {
 }
 
 fn web_doc_diff() -> &'static str {
-    r#"[{"path":"outputs/index.html","byte_size":12,"sha256":"abc"},{"path":"outputs/guide.docx","byte_size":24},{"path":"inputs/secret.txt","byte_size":1}]"#
+    r#"[{"path":"workspace/index.html","byte_size":12,"sha256":"abc"},{"path":"workspace/guide.docx","byte_size":24},{"path":"inputs/secret.txt","byte_size":1}]"#
 }
 
 #[test]
@@ -120,11 +120,11 @@ fn send_completes_with_web_and_document_artifacts() {
     assert_eq!(task.status, TaskStatus::Completed);
     assert_eq!(task.message.as_deref(), Some("done"));
     assert_eq!(task.artifacts.len(), 2);
-    assert_eq!(task.artifacts[0].path, "outputs/index.html");
+    assert_eq!(task.artifacts[0].path, "workspace/index.html");
     assert_eq!(task.artifacts[0].kind, ArtifactKind::Web);
     assert_eq!(task.artifacts[0].byte_size, 12);
     assert_eq!(task.artifacts[0].sha256.as_deref(), Some("abc"));
-    assert_eq!(task.artifacts[1].path, "outputs/guide.docx");
+    assert_eq!(task.artifacts[1].path, "workspace/guide.docx");
     assert_eq!(task.artifacts[1].kind, ArtifactKind::Document);
 }
 
@@ -189,22 +189,22 @@ fn artifact_kind_mapping_and_outputs_only() {
     let server = FakeServer::start();
     server.set_diff_body(
         r#"[
-            {"path":"outputs/index.html","byte_size":1},
-            {"path":"outputs/a.docx","byte_size":2},
-            {"path":"outputs/a.xlsx","byte_size":3},
-            {"path":"outputs/a.pptx","byte_size":4},
-            {"path":"outputs/a.pdf","byte_size":5},
-            {"path":"outputs/a.png","byte_size":6},
-            {"path":"outputs/a.jpg","byte_size":7},
-            {"path":"outputs/a.gif","byte_size":8},
-            {"path":"outputs/a.svg","byte_size":9},
-            {"path":"outputs/a.webp","byte_size":10},
-            {"path":"outputs/a.ico","byte_size":11},
-            {"path":"outputs/a.md","byte_size":12},
-            {"path":"outputs/a.txt","byte_size":13},
-            {"path":"outputs/a.bin","byte_size":14},
+            {"path":"workspace/index.html","byte_size":1},
+            {"path":"workspace/a.docx","byte_size":2},
+            {"path":"workspace/a.xlsx","byte_size":3},
+            {"path":"workspace/a.pptx","byte_size":4},
+            {"path":"workspace/a.pdf","byte_size":5},
+            {"path":"workspace/a.png","byte_size":6},
+            {"path":"workspace/a.jpg","byte_size":7},
+            {"path":"workspace/a.gif","byte_size":8},
+            {"path":"workspace/a.svg","byte_size":9},
+            {"path":"workspace/a.webp","byte_size":10},
+            {"path":"workspace/a.ico","byte_size":11},
+            {"path":"workspace/a.md","byte_size":12},
+            {"path":"workspace/a.txt","byte_size":13},
+            {"path":"workspace/a.bin","byte_size":14},
             {"path":"inputs/skip.txt","byte_size":99},
-            {"path":"workspace/skip.txt","byte_size":99}
+            {"path":"outputs/skip.txt","byte_size":99}
         ]"#,
     );
     let engine = engine_for(&server);
@@ -219,20 +219,20 @@ fn artifact_kind_mapping_and_outputs_only() {
     assert_eq!(
         kinds,
         vec![
-            ("outputs/index.html", ArtifactKind::Web),
-            ("outputs/a.docx", ArtifactKind::Document),
-            ("outputs/a.xlsx", ArtifactKind::Spreadsheet),
-            ("outputs/a.pptx", ArtifactKind::Presentation),
-            ("outputs/a.pdf", ArtifactKind::Pdf),
-            ("outputs/a.png", ArtifactKind::Image),
-            ("outputs/a.jpg", ArtifactKind::Image),
-            ("outputs/a.gif", ArtifactKind::Image),
-            ("outputs/a.svg", ArtifactKind::Image),
-            ("outputs/a.webp", ArtifactKind::Image),
-            ("outputs/a.ico", ArtifactKind::Image),
-            ("outputs/a.md", ArtifactKind::Text),
-            ("outputs/a.txt", ArtifactKind::Text),
-            ("outputs/a.bin", ArtifactKind::Other),
+            ("workspace/index.html", ArtifactKind::Web),
+            ("workspace/a.docx", ArtifactKind::Document),
+            ("workspace/a.xlsx", ArtifactKind::Spreadsheet),
+            ("workspace/a.pptx", ArtifactKind::Presentation),
+            ("workspace/a.pdf", ArtifactKind::Pdf),
+            ("workspace/a.png", ArtifactKind::Image),
+            ("workspace/a.jpg", ArtifactKind::Image),
+            ("workspace/a.gif", ArtifactKind::Image),
+            ("workspace/a.svg", ArtifactKind::Image),
+            ("workspace/a.webp", ArtifactKind::Image),
+            ("workspace/a.ico", ArtifactKind::Image),
+            ("workspace/a.md", ArtifactKind::Text),
+            ("workspace/a.txt", ArtifactKind::Text),
+            ("workspace/a.bin", ArtifactKind::Other),
         ]
     );
 }

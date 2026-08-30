@@ -660,7 +660,7 @@ fn normalize_output_path(raw: &str) -> Option<String> {
     let path = raw.replace('\\', "/");
     let path = path.trim_start_matches("./");
     let path = path.trim_start_matches('/');
-    if !path.starts_with("outputs/") {
+    if !path.starts_with("workspace/") {
         return None;
     }
     if path.split('/').any(|seg| seg == ".." || seg.is_empty()) {

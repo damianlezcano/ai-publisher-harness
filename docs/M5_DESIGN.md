@@ -126,20 +126,24 @@ No se implementa credential UI todavía.
 
 ## 10. Project filesystem permissions
 
-Working directory = **raíz del proyecto** (para que OpenCode lea `inputs/` y
-escriba `workspace/`/`outputs/`). Sandbox declarada en el config aislado:
+Working directory = **`project/workspace/`** (el área de scratch del agente).
+`external_directory`: **deny** (el agente queda confinado a `workspace/`; no
+alcanza `~/.ssh`, `/etc`, otros proyectos, home completo, ni siquiera
+`inputs/`/`outputs/`/`publish/` del propio proyecto). Herramientas del agente:
+conjunto mínimo (read/edit/glob/grep/bash) con bash restringido a comandos no
+destructivos.
 
-- `external_directory`: **deny** (sin acceso fuera del proyecto; sin `~/.ssh`,
-  `/etc`, otros proyectos, home completo).
-- `edit` sobre `inputs/**` y `publish/**`: **deny** (inputs inmutables; publish
-  generado sólo por M3).
-- `project.json`: **deny** directo (los metadatos se tocan vía core APIs).
-- Herramientas del agente: conjunto mínimo (read/edit/glob/grep/bash) con bash
-  restringido a comandos no destructivos.
+- `inputs/` originales: **nunca expuestos** al agente (están fuera del cwd y
+  bloqueados); los materiales se incorporan como contexto del prompt para M5 y
+  su lectura se resuelve en M6/M7 (attachments UX).
+- `outputs/` y `publish/`: **nunca escritos por el agente** (fuera del cwd);
+  `outputs/` sólo lo escribe el core vía `create_creation`; `publish/` sólo M3.
 
 Patrones exactos se fijan contra el schema de config instalado durante la
 implementación (no se inventa sintaxis). `--auto` aprueba lo permitido y mantiene
-lo denegado denegado → el usuario final nunca aprueba permisos técnicos.
+lo denegado denegado → el usuario final nunca aprueba permisos técnicos. El
+aislamiento A/B es por working directory + `external_directory` deny (boundary
+técnico, no por prompt).
 
 ## 11. Session model
 
@@ -172,25 +176,30 @@ Estrategia combinada, con prioridad a evidencia estructurada:
 
 1. `GET /session/:id/diff` (cambios de archivos de la sesión) — evidencia
    filesystem de OpenCode, no texto del LLM.
-2. Scan de `outputs/` por artefactos nuevos/creados bajo la sesión.
+2. Scan de `workspace/` por artefactos nuevos/creados bajo la sesión.
 3. NUNCA se parsea el texto final del LLM como única fuente.
 
-Resultado: lista de `Artifact { relative_path, kind, byte_size, sha256 }`.
+Resultado: lista de `Artifact { path, kind, byte_size, sha256 }`, con `path`
+relativo a `workspace/` (p.ej. `actividad/index.html`). Los artefactos se
+promocionan a `outputs/<creation-id>/` vía `create_creation` (§15); el agente no
+escribe `outputs/` directamente.
 
 ## 15. Creation registration strategy
 
-`AgentService` (project-agent) convierte `Artifact` en `Creation` vía
-`ProjectService` de project-core:
+`AgentService` (project-agent) promociona cada `Artifact` (bajo `workspace/`) a
+una `Creation` vía `ProjectService::create_creation` de project-core (copia bytes
+de `workspace/<path>` a `outputs/<creation-id>/<file>` y registra metadata):
 
 - **ID**: UUIDv7 (igual que M1).
 - **CreationKind**: inferido por extensión/estructura controlada (web si hay
   `index.html`; docx/pptx/xlsx/pdf/imagen por tipo), no por contenido.
-- **visibility**: `private` por defecto, siempre.
+- **visibility**: `private` por defecto, siempre (el agente no puede saltársela:
+  lo aplica el core).
 - **display_name**: nombre de archivo/directorio saneado.
 - **timestamps**: del reloj del core.
 - **hash/byte_size**: SHA-256 + tamaño (consistente con M1).
 
-Errores de registro no eliminan artefactos ya generados.
+Errores de registro no eliminan artefactos ya generados en `workspace/`.
 
 ## 16. Public / private semantics
 

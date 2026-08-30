@@ -64,22 +64,25 @@ project with its project directory as the working directory.
 
 ### Filesystem sandbox
 
-The working directory is the project root, and the isolated config denies
-access outside the project (`external_directory` deny) and denies writes to
-`inputs/` and `publish/`. The backend runs with `--auto` so routine in-project
-operations are auto-approved while explicitly-denied paths stay denied — the
-non-technical user is never prompted for technical permissions. Exact deny
-patterns are pinned against the installed config schema during implementation.
+The working directory is `project/workspace/` (the agent's scratch area), and
+the isolated config denies `external_directory` access, so the agent is confined
+to `workspace/` and cannot reach other projects, `~/.ssh`, `/etc`, secrets, the
+home directory, or even its own project's `inputs/`/`outputs/`/`publish/`. The
+backend runs with `--auto` so routine in-workspace operations are auto-approved
+while denied paths stay denied — the non-technical user is never prompted for
+technical permissions. Project A/B isolation is a technical boundary (working
+directory + `external_directory` deny), not a prompt. Exact deny patterns are
+pinned against the installed config schema during implementation.
 
 ### Output registration
 
 After a task completes, the adapter reads OpenCode's structured session diff
 (`GET /session/:id/diff`) as filesystem evidence of what was created, rather
-than parsing the LLM's final text. New artifacts under `outputs/` are reported
+than parsing the LLM's final text. New artifacts under `workspace/` are reported
 as structured `Artifact` descriptors (path, kind, name, size); the `AgentService`
-registers them as `Creation` records with **private** visibility by default.
-Visibility is never inferred from filenames or content; public intent is an
-explicit later-layer decision.
+promotes them to `outputs/<creation-id>/` and registers them as `Creation`
+records with **private** visibility by default. Visibility is never inferred
+from filenames or content; public intent is an explicit later-layer decision.
 
 ## Consequences
 
