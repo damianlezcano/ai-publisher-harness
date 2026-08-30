@@ -188,6 +188,7 @@ fn run_registers_scripted_artifacts_as_private() {
         .run(AgentRequest {
             project_id: "proj-7".into(),
             prompt: prompt(),
+            attachments: Vec::new(),
         })
         .expect("run");
     assert_eq!(result.registered, vec!["creation-1", "creation-2"]);
@@ -224,6 +225,7 @@ fn same_project_runs_are_serialized() {
             service.run(AgentRequest {
                 project_id: "proj-7".into(),
                 prompt: prompt(),
+                attachments: Vec::new(),
             })
         })
     };
@@ -233,6 +235,7 @@ fn same_project_runs_are_serialized() {
             service.run(AgentRequest {
                 project_id: "proj-7".into(),
                 prompt: prompt(),
+                attachments: Vec::new(),
             })
         })
     };
@@ -266,6 +269,7 @@ fn traversal_artifact_path_is_rejected_and_not_registered() {
     let err = match service.run(AgentRequest {
         project_id: "proj-7".into(),
         prompt: prompt(),
+        attachments: Vec::new(),
     }) {
         Err(err) => err,
         Ok(_) => panic!("traversal must fail"),
@@ -285,6 +289,7 @@ fn cancel_calls_engine_cancel_for_session() {
         .run(AgentRequest {
             project_id: "proj-7".into(),
             prompt: prompt(),
+            attachments: Vec::new(),
         })
         .expect("run");
     service.cancel("proj-7").expect("cancel");
@@ -303,6 +308,7 @@ fn run_lazily_ensures_ready() {
         .run(AgentRequest {
             project_id: "proj-7".into(),
             prompt: prompt(),
+            attachments: Vec::new(),
         })
         .expect("run");
     assert_eq!(calls.calls()[0], FakeCall::Ready);
@@ -321,6 +327,7 @@ fn failing_registrar_leaves_workspace_file() {
     let err = match service.run(AgentRequest {
         project_id: "proj-7".into(),
         prompt: prompt(),
+        attachments: Vec::new(),
     }) {
         Err(err) => err,
         Ok(_) => panic!("expected registration failure"),
