@@ -51,6 +51,11 @@ s.close()
 PY
 )"
 
+# Start the server with cwd inside the temp dir so a stray agent write can never
+# land in the caller's directory. The per-session `directory` is advisory; the
+# real filesystem boundary is the server cwd + the isolated config's
+# `external_directory` deny.
+cd "$WORKDIR"
 XDG_CONFIG_HOME="$CFG" XDG_DATA_HOME="$CFG/data" XDG_CACHE_HOME="$CFG/cache" \
 XDG_STATE_HOME="$CFG/state" \
 opencode serve --hostname 127.0.0.1 --port "$PORT" --pure \
