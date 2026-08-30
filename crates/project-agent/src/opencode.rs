@@ -172,34 +172,8 @@ impl OpenCodeAgentEngine {
         fs::create_dir_all(self.config_dir.join("state"))
             .map_err(|err| AgentError::BackendStartFailed(err.to_string()))?;
 
-        let argv = vec![
-            "serve".into(),
-            "--hostname".into(),
-            "127.0.0.1".into(),
-            "--port".into(),
-            self.port.to_string(),
-            "--pure".into(),
-        ];
-        let mut envs = vec![
-            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
-            ("HOME".into(), std::env::var("HOME").unwrap_or_default()),
-            (
-                "XDG_CONFIG_HOME".into(),
-                self.config_dir.display().to_string(),
-            ),
-            (
-                "XDG_DATA_HOME".into(),
-                self.config_dir.join("data").display().to_string(),
-            ),
-            (
-                "XDG_CACHE_HOME".into(),
-                self.config_dir.join("cache").display().to_string(),
-            ),
-            (
-                "XDG_STATE_HOME".into(),
-                self.config_dir.join("state").display().to_string(),
-            ),
-        ];
+        let argv = build_argv(self.port);
+        let mut envs = build_env(&self.config_dir);
         envs.extend(self.extra_env.iter().cloned());
 
         let guard = ChildGuard::spawn(&self.binary, &argv, &envs).map_err(map_process_error)?;
@@ -509,6 +483,41 @@ fn lock(mutex: &Mutex<Inner>) -> std::sync::MutexGuard<'_, Inner> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Loopback-only argv for `opencode serve`. No shell involved: every element
+/// is a literal token passed via `Command::args`.
+pub fn build_argv(port: u16) -> Vec<String> {
+    vec![
+        "serve".into(),
+        "--hostname".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        port.to_string(),
+        "--pure".into(),
+    ]
+}
+
+/// Child environment with the user's environment cleared (by the supervisor)
+/// and replaced by PATH/HOME plus isolated XDG dirs under `config_dir`.
+pub fn build_env(config_dir: &Path) -> Vec<(String, String)> {
+    vec![
+        ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+        ("HOME".into(), std::env::var("HOME").unwrap_or_default()),
+        ("XDG_CONFIG_HOME".into(), config_dir.display().to_string()),
+        (
+            "XDG_DATA_HOME".into(),
+            config_dir.join("data").display().to_string(),
+        ),
+        (
+            "XDG_CACHE_HOME".into(),
+            config_dir.join("cache").display().to_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            config_dir.join("state").display().to_string(),
+        ),
+    ]
 }
 
 fn map_process_error(err: ProcessError) -> AgentError {
