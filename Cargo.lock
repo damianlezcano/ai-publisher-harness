@@ -561,16 +561,20 @@ dependencies = [
 name = "project-agent"
 version = "0.0.0"
 dependencies = [
+ "project-core",
+ "project-fs",
  "project-process",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
 name = "project-core"
 version = "0.0.0"
 dependencies = [
+ "getrandom",
  "serde",
  "serde_json",
 ]

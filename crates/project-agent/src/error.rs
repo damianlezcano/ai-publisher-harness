@@ -14,6 +14,7 @@ pub enum AgentError {
     Timeout,
     Http(String),
     ShutdownFailed(String),
+    RegistrationFailed(String),
 }
 
 impl fmt::Display for AgentError {
@@ -36,6 +37,7 @@ impl fmt::Display for AgentError {
             AgentError::Timeout => write!(f, "agent operation timed out"),
             AgentError::Http(_) => write!(f, "agent HTTP request failed"),
             AgentError::ShutdownFailed(_) => write!(f, "failed to shut down agent backend"),
+            AgentError::RegistrationFailed(_) => write!(f, "could not register creation"),
         }
     }
 }

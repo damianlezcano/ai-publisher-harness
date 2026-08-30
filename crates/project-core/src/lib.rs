@@ -814,6 +814,118 @@ pub fn safe_file_name(name: &str) -> String {
     if out.is_empty() { "file".into() } else { out }
 }
 
+/// Wall-clock UTC timestamps at second resolution (`YYYY-MM-DDTHH:MM:SSZ`).
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Timestamp::parse(unix_secs_to_rfc3339_utc(secs))
+            .expect("system time is a valid UTC timestamp")
+    }
+}
+
+/// UUIDv7 identifiers (48-bit unix-ms timestamp, version 7, RFC variant, getrandom).
+pub struct UuidV7IdGenerator;
+
+impl IdGenerator for UuidV7IdGenerator {
+    fn project_id(&self) -> ProjectId {
+        ProjectId::parse(uuid_v7()).expect("generated id is UUID v7")
+    }
+    fn material_id(&self) -> MaterialId {
+        MaterialId::parse(uuid_v7()).expect("generated id is UUID v7")
+    }
+    fn creation_id(&self) -> CreationId {
+        CreationId::parse(uuid_v7()).expect("generated id is UUID v7")
+    }
+}
+
+fn unix_secs_to_rfc3339_utc(secs: u64) -> String {
+    let mut days = secs / 86_400;
+    let rem = secs % 86_400;
+    let hour = rem / 3_600;
+    let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
+    let mut year = 1970u32;
+    loop {
+        let year_days = if is_gregorian_leap(year) { 366 } else { 365 };
+        if days >= year_days {
+            days -= year_days;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+    let month_days: [u32; 12] = [
+        31,
+        if is_gregorian_leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 1u32;
+    for md in month_days {
+        if days >= u64::from(md) {
+            days -= u64::from(md);
+            month += 1;
+        } else {
+            break;
+        }
+    }
+    let day = days + 1;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn is_gregorian_leap(year: u32) -> bool {
+    year.is_multiple_of(400) || year.is_multiple_of(4) && !year.is_multiple_of(100)
+}
+
+fn uuid_v7() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let mut bytes = [0u8; 16];
+    bytes[0] = (millis >> 40) as u8;
+    bytes[1] = (millis >> 32) as u8;
+    bytes[2] = (millis >> 24) as u8;
+    bytes[3] = (millis >> 16) as u8;
+    bytes[4] = (millis >> 8) as u8;
+    bytes[5] = millis as u8;
+    let _ = getrandom::fill(&mut bytes[6..]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1404,6 +1516,46 @@ mod tests {
                 PublicationRoute::parse(bad).is_err(),
                 "expected {bad:?} to be rejected"
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod production_ids_and_clock {
+    use super::*;
+    use std::collections::HashSet;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn system_clock_produces_parseable_nondecreasing_timestamps() {
+        let clock = SystemClock;
+        let first = clock.now();
+        Timestamp::parse(first.as_str()).expect("first timestamp parses");
+        thread::sleep(Duration::from_millis(1100));
+        let second = clock.now();
+        Timestamp::parse(second.as_str()).expect("second timestamp parses");
+        assert!(
+            second.as_str() >= first.as_str(),
+            "clock moved backwards: {} then {}",
+            first.as_str(),
+            second.as_str()
+        );
+        assert_ne!(first.as_str(), second.as_str());
+    }
+
+    #[test]
+    fn uuid_v7_ids_parse_and_are_unique() {
+        let generator = UuidV7IdGenerator;
+        let mut seen = HashSet::new();
+        for _ in 0..4_000 {
+            let id = generator.project_id();
+            ProjectId::parse(id.as_str()).expect("uuid v7");
+            assert!(
+                seen.insert(id.as_str().to_owned()),
+                "duplicate {}",
+                id.as_str()
+            );
         }
     }
 }
