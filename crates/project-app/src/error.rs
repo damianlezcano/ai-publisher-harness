@@ -12,6 +12,7 @@ use project_publication::PublicationError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     NotFound,
     InvalidInput,
@@ -176,11 +177,13 @@ impl AppError {
                 ErrorCode::ProviderNotFound,
                 "Ese proveedor no está disponible.",
             ),
-            ProviderError::ConnectFailed(_)
-            | ProviderError::OAuthFailed(_)
-            | ProviderError::DisconnectFailed(_) => Self::new(
+            ProviderError::ConnectFailed(_) | ProviderError::OAuthFailed(_) => Self::new(
                 ErrorCode::ProviderConnectFailed,
                 "No pudimos conectar tu cuenta.",
+            ),
+            ProviderError::DisconnectFailed(_) => Self::new(
+                ErrorCode::ProviderConnectFailed,
+                "No pudimos desconectar tu cuenta.",
             ),
             ProviderError::CredentialInvalid => {
                 Self::new(ErrorCode::CredentialInvalid, "Esta clave no es válida.")

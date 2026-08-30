@@ -656,6 +656,7 @@ dependencies = [
 name = "project-app"
 version = "0.0.0"
 dependencies = [
+ "fake-opencode-server",
  "opener",
  "project-agent",
  "project-core",

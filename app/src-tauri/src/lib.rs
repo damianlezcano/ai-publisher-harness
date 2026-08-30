@@ -48,7 +48,7 @@ fn build_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error::E
         opencode_port: ephemeral_port(),
         cloudflared_binary: None,
     };
-    Ok(AppState::new(config))
+    Ok(AppState::new(config)?)
 }
 
 /// Reserve a loopback ephemeral port for the OpenCode backend. A fixed default

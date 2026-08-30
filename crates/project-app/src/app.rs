@@ -113,8 +113,9 @@ impl
     /// Production constructor: real shared OpenCode backend (one `opencode
     /// serve` for the agent engine and the provider connector), Cloudflare
     /// Quick Tunnel, and an app-managed data dir with owner-only permissions.
-    pub fn new(config: AppConfig) -> Self {
-        ensure_app_data_dir(&config.data_dir);
+    /// Fails closed when the app data dir cannot be prepared.
+    pub fn new(config: AppConfig) -> AppResult<Self> {
+        ensure_app_data_dir(&config.data_dir)?;
         let backend = Arc::new(OpenCodeBackend::new(
             config.opencode_binary,
             config.opencode_config_dir,
@@ -122,7 +123,8 @@ impl
         ));
         let engine = OpenCodeAgentEngine::from_backend(Arc::clone(&backend));
         let scratch = config.data_dir.join("opencode-scratch");
-        fs::create_dir_all(&scratch).expect("create provider scratch dir under app data");
+        fs::create_dir_all(&scratch)
+            .map_err(|err| AppError::internal(format!("could not create scratch dir: {err}")))?;
         let connector =
             OpenCodeProviderConnector::new(Arc::clone(&backend)).with_scratch_root(scratch);
         let restarter = SharedBackendRestarter::new(Arc::clone(&backend));
@@ -131,7 +133,13 @@ impl
             None => Box::new(PathBinaryResolver::new("cloudflared")),
         };
         let tunnel = CloudflareQuickTunnel::new(resolver);
-        Self::with_components(config.data_dir, engine, tunnel, connector, restarter)
+        Ok(Self::with_components(
+            config.data_dir,
+            engine,
+            tunnel,
+            connector,
+            restarter,
+        ))
     }
 }
 
@@ -594,17 +602,22 @@ fn parse_project_id(id: &str) -> AppResult<ProjectId> {
 }
 
 /// Creates the app-managed data dir with owner-only permissions before first
-/// use (design §7). Credentials never live here; they live under OpenCode's
-/// isolated `data/` subtree inside it.
-fn ensure_app_data_dir(data_dir: &Path) {
-    if fs::create_dir_all(data_dir).is_err() {
-        return;
-    }
+/// use (design §7). Fails closed: an uncreatable or world-accessible app data
+/// dir aborts startup rather than silently storing under weak permissions.
+/// Credentials never live here; they live under OpenCode's isolated `data/`
+/// subtree inside it.
+fn ensure_app_data_dir(data_dir: &Path) -> AppResult<()> {
+    fs::create_dir_all(data_dir).map_err(|_| {
+        AppError::internal("No se pudo inicializar el directorio de datos de la aplicación.")
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700));
+        fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700)).map_err(|_| {
+            AppError::internal("No se pudo proteger el directorio de datos de la aplicación.")
+        })?;
     }
+    Ok(())
 }
 
 fn parse_creation_id(id: &str) -> AppResult<CreationId> {

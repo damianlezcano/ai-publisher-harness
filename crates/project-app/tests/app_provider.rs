@@ -9,8 +9,8 @@ use project_agent::model::{
 use project_agent::{AgentEngine, Artifact, ArtifactKind, FakeAgentEngine};
 use project_app::{AppState, ErrorCode, SharedBackendRestarter};
 use project_provider::{
-    ConnectionTestOutcome, FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail,
-    ProviderError, ProviderSummary, SecretString,
+    BackendRestarter, ConnectionTestOutcome, FakeProviderConnector, FakeRestarter, ModelSummary,
+    ProviderDetail, ProviderError, ProviderSummary, SecretString,
 };
 use project_tunnel::FakeTunnel;
 
@@ -146,6 +146,25 @@ fn provider_errors_map_to_human_codes() {
 }
 
 #[test]
+fn app_errors_serialize_codes_as_snake_case() {
+    use project_app::AppError;
+    // The frontend contract is snake_case (M6 mocks: publish_failed, ...).
+    let err = AppError::new(
+        ErrorCode::ProviderConnectFailed,
+        "No pudimos conectar tu cuenta.",
+    );
+    let json = serde_json::to_value(&err).expect("json");
+    assert_eq!(json["code"], "provider_connect_failed");
+    assert_eq!(json["message"], "No pudimos conectar tu cuenta.");
+    let err = AppError::new(ErrorCode::CredentialRevoked, "x");
+    let json = serde_json::to_value(&err).expect("json");
+    assert_eq!(json["code"], "credential_revoked");
+    let err = AppError::new(ErrorCode::PublishFailed, "x");
+    let json = serde_json::to_value(&err).expect("json");
+    assert_eq!(json["code"], "publish_failed");
+}
+
+#[test]
 fn model_list_select_and_get_selected() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let state = app(tmp.path(), default_connector(), FakeRestarter::new());
@@ -214,19 +233,24 @@ fn oauth_open_rejects_non_https() {
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
 
-// -- SharedBackendRestarter is a thin shutdown over the shared backend ---------
+// -- SharedBackendRestarter stops the shared backend ---------------------------
 
 #[test]
-fn shared_restarter_is_a_clone_of_the_backend_and_stops_it() {
-    // Exercises only the trait contract: the production restarter is wired in
-    // `AppState::new` (real backend), covered by the lifecycle/security suites.
+fn shared_restarter_stops_the_shared_backend() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let _ = tmp;
-    let _ = SharedBackendRestarter::new(Arc::new(project_opencode::OpenCodeBackend::new(
+    let server = fake_opencode_server::FakeServer::start();
+    let backend = Arc::new(project_opencode::OpenCodeBackend::new(
         std::path::PathBuf::from("/usr/bin/true"),
         tmp.path().join("oc"),
         0,
-    )));
+    ));
+    backend.set_base_url(server.base_url());
+    backend.ensure_ready().expect("ready");
+    assert_eq!(backend.status(), project_opencode::BackendStatus::Ready);
+
+    let restarter = SharedBackendRestarter::new(Arc::clone(&backend));
+    restarter.restart().expect("restart");
+    assert_eq!(backend.status(), project_opencode::BackendStatus::Stopped);
 }
 
 // -- run_agent passes the selected model to the engine -------------------------
