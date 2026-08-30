@@ -18,6 +18,19 @@ const openaiSummary: ProviderSummary = {
   highlighted: true,
 };
 
+const openaiWithOauth: ProviderSummary = {
+  ...openaiSummary,
+  authMethods: [
+    { kind: "api_key", methodId: null, label: "Clave de acceso", prompts: [] },
+    {
+      kind: "account",
+      methodId: "chatgpt-browser",
+      label: "Conectá tu cuenta",
+      prompts: [],
+    },
+  ],
+};
+
 const googleSummary: ProviderSummary = {
   id: "google",
   name: "Gemini",
@@ -82,7 +95,7 @@ describe("ProviderPanel", () => {
     expect(await screen.findByText("Gemini")).toBeInTheDocument();
   });
 
-  it("connects an API key once and reports the change", async () => {
+  it("connects an API key once, clears the input, and reports the change", async () => {
     const onChanged = vi.fn();
     render(<ProviderPanel onClose={() => {}} onChanged={onChanged} />);
     const connect = await screen.findByRole("button", { name: "Conectar", hidden: false });
@@ -96,6 +109,8 @@ describe("ProviderPanel", () => {
       label: null,
     });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect((input as HTMLInputElement).value).toBe("");
+    expect(screen.getByText("Conectado.")).toBeInTheDocument();
   });
 
   it("shows a human error when the key is invalid", async () => {
@@ -119,5 +134,66 @@ describe("ProviderPanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Conectar", hidden: false }));
     await userEvent.click(await screen.findByRole("button", { name: "Probar conexión" }));
     await waitFor(() => expect(screen.getByText("Conectado.")).toBeInTheDocument());
+  });
+
+  it("allows disconnecting after connecting (refreshed detail)", async () => {
+    let connected = false;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([openaiSummary]);
+      if (cmd === "provider_detail") {
+        return Promise.resolve(
+          connected ? { ...detail, connections: [{ id: "cred-1", label: null }] } : detail,
+        );
+      }
+      if (cmd === "provider_connect_key") {
+        connected = true;
+        return Promise.resolve({ id: "cred-1", label: null });
+      }
+      if (cmd === "provider_disconnect") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected invoke ${cmd}`));
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Conectar", hidden: false }));
+    await userEvent.type(await screen.findByPlaceholderText("Clave de acceso"), "sk-x");
+    await userEvent.click(screen.getByRole("button", { name: "Conectar" }));
+    const disconnect = await screen.findByRole("button", { name: "Desconectar" });
+    await userEvent.click(disconnect);
+    expect(invokeMock).toHaveBeenCalledWith("provider_disconnect", {
+      credentialId: "cred-1",
+    });
+  });
+
+  it("runs the OAuth flow: begin, open, poll to complete", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([openaiWithOauth]);
+      if (cmd === "provider_detail") {
+        return Promise.resolve({ ...detail, authMethods: openaiWithOauth.authMethods });
+      }
+      if (cmd === "provider_oauth_begin") {
+        return Promise.resolve({
+          attemptId: "att-1",
+          url: "https://example.test/oauth/chatgpt-browser",
+          instructions: "Abrí el enlace y aprobá el acceso.",
+          mode: "auto",
+        });
+      }
+      if (cmd === "provider_oauth_status") {
+        return Promise.resolve({ status: "complete", message: null });
+      }
+      if (cmd === "provider_oauth_open") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`unexpected invoke ${cmd}`));
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Conectar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Conectá tu cuenta" }));
+    expect(screen.getByText("https://example.test/oauth/chatgpt-browser")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir en el navegador" }));
+    expect(invokeMock).toHaveBeenCalledWith("provider_oauth_open", {
+      url: "https://example.test/oauth/chatgpt-browser",
+    });
+    // The poll runs every 2s and resolves to `complete` on the first tick.
+    await waitFor(() => expect(screen.getByText("Conectado.")).toBeInTheDocument(), {
+      timeout: 5000,
+    });
   });
 });

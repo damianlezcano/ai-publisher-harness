@@ -79,6 +79,8 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
     ? `${selected.model.providerId}::${selected.model.modelId}`
     : "";
 
+  const valueInGroups = groups.some((g) => g.options.some((o) => o.value === currentValue));
+
   async function change(next: string) {
     if (next === "") return;
     const [providerId, modelId] = next.split("::");
@@ -104,19 +106,23 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
       )}
       <select
         id="model-select"
-        value={
-          groups.some((g) => g.options.some((o) => o.value === currentValue)) ? currentValue : ""
-        }
+        value={valueInGroups ? currentValue : ""}
         onChange={(e) => void change(e.target.value)}
         disabled={loading}
       >
         {loading && <option value="">Cargando…</option>}
         {!loading && groups.length === 0 && <option value="">Sin modelos</option>}
+        {!loading && groups.length > 0 && !valueInGroups && (
+          <option value="" disabled>
+            Elegí un modelo
+          </option>
+        )}
         {groups.map((group) => (
           <optgroup key={group.label} label={group.label}>
             {group.options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.model.name}
+                {option.model.free ? " (Gratis)" : " (De pago)"}
               </option>
             ))}
           </optgroup>
@@ -126,6 +132,9 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
         <span className={`model-badge ${selected.model.free ? "free" : "paid"}`}>
           {selected.model.free ? "Gratis" : "De pago"}
         </span>
+      )}
+      {models.some((m) => m.free) && (
+        <p className="notice">Los modelos gratis pueden cambiar con el tiempo.</p>
       )}
       {selected?.notice && !selected.requiresChoice && <p className="notice">{selected.notice}</p>}
       {error && (

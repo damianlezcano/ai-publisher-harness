@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { OAuthAttempt, OAuthStatusKind, ProviderDetail, ProviderSummary } from "../../types";
 
@@ -26,6 +26,14 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
 
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const refreshDetail = useCallback(async () => {
+    try {
+      setDetail(await api.providerDetail(provider.id));
+    } catch {
+      // The card still works from the summary; detail is only for connections.
+    }
+  }, [provider.id]);
+
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -43,10 +51,12 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
 
   useEffect(() => {
     if (oauth?.status !== "pending") return;
+    let active = true;
     pollTimer.current = setInterval(() => {
       void (async () => {
         try {
           const status = await api.providerOauthStatus(oauth.attempt.attemptId);
+          if (!active) return;
           if (status.status === "complete") {
             setOauth((prev) => (prev ? { ...prev, status: "complete" } : prev));
             onChanged();
@@ -60,6 +70,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
       })();
     }, POLL_INTERVAL_MS);
     return () => {
+      active = false;
       if (pollTimer.current) clearInterval(pollTimer.current);
     };
   }, [oauth?.attempt.attemptId, oauth?.status, onChanged]);
@@ -74,6 +85,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
       await api.providerConnectKey(provider.id, key);
       setKeyInput("");
       setNotice("Conectado.");
+      await refreshDetail();
       onChanged();
     } catch (err) {
       setError(errorMessage(err));
@@ -106,6 +118,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
       );
       setOauth(null);
       setNotice("Cuenta conectada.");
+      await refreshDetail();
       onChanged();
     } catch (err) {
       setError(errorMessage(err));
@@ -134,6 +147,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
     try {
       await api.providerDisconnect(connection.id);
       setNotice("Desconectado.");
+      await refreshDetail();
       onChanged();
     } catch (err) {
       setError(errorMessage(err));
@@ -173,7 +187,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >
-          {expanded ? "Ocultar" : provider.connected ? "Configurar" : "Conectar"}
+          {expanded ? "Ocultar" : provider.connected ? "Conectar de nuevo" : "Conectar"}
         </button>
       </div>
 
@@ -224,6 +238,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                     </p>
                     {oauth.status === "pending" && (
                       <>
+                        <p className="url">{oauth.attempt.url}</p>
                         <button
                           type="button"
                           className="primary"
@@ -239,6 +254,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                           <input
                             type="text"
                             value={oauth.codeInput}
+                            aria-label="Código de verificación"
                             onChange={(e) =>
                               setOauth((prev) =>
                                 prev ? { ...prev, codeInput: e.target.value } : prev,
