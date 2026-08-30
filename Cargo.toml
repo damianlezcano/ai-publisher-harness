@@ -4,6 +4,7 @@ members = [
     "crates/project-fs",
     "crates/project-publisher",
     "crates/project-publication",
+    "crates/project-tunnel",
 ]
 resolver = "3"
 
