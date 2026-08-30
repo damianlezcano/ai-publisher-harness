@@ -40,12 +40,14 @@ impl PublicationSnapshot {
     }
 }
 
-/// Test-only deterministic failure points. They model failures before any
-/// replacement is observable and ensure the old snapshot remains usable.
+/// Test-only deterministic failure points. They model failures at each
+/// pre-registration swap step and ensure the old snapshot remains usable,
+/// rolling back any move of the previous tree before it is observable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapshotFault {
     AfterStaging,
     AfterJournal,
+    AfterRenamePrevious,
 }
 
 #[derive(Clone, Debug)]
@@ -288,12 +290,26 @@ impl PublicationSnapshotStore {
         }
         let publish = project_dir.join("publish");
         let previous = project_dir.join(&previous_name);
-        if previous.exists() {
-            remove_owned_dir(&previous)?;
+        for entry in fs::read_dir(project_dir)
+            .map_err(|_| ProjectCoreError::OperationFailed { operation: "swap" })?
+        {
+            let entry =
+                entry.map_err(|_| ProjectCoreError::OperationFailed { operation: "swap" })?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(PREVIOUS_PREFIX) {
+                remove_owned_dir(&entry.path())?;
+            }
         }
         if publish.exists() {
             fs::rename(&publish, &previous)
                 .map_err(|_| ProjectCoreError::OperationFailed { operation: "swap" })?;
+        }
+        if self.fault == Some(SnapshotFault::AfterRenamePrevious) {
+            if !publish.exists() && previous.exists() {
+                let _ = fs::rename(&previous, &publish);
+            }
+            let _ = fs::remove_file(&journal_path);
+            return Err(ProjectCoreError::OperationFailed { operation: "swap" });
         }
         if fs::rename(staging, &publish).is_err() {
             if !publish.exists() && previous.exists() {
