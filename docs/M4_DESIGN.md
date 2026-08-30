@@ -1,6 +1,8 @@
 # M4 Cloudflare Quick Tunnel Design
 
-Status: Approved for implementation. ADR-0005 is Accepted.
+Status: Approved and implemented. ADR-0005 is Accepted. M4 closed on
+2026-08-29; `./scripts/verify` reports `M4 contract passed` and `git diff
+--check` is clean.
 
 ## 1. Resumen ejecutivo
 

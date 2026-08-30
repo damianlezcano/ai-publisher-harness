@@ -53,3 +53,16 @@ M3 adds named `project-publication` suites after that crate exists:
 `publication_lifecycle`, `publication_security`, plus `project-fs`
 `project_migration`. Commands match `docs/M3_DESIGN.md`. The script skips a
 named suite only while its file is absent.
+
+## M4 tunnel behavior
+
+M4 adds named offline `project-tunnel` suites (`models`, `supervisor`,
+`cloudflare`, `tunnel_security`) plus `project-publication`
+`publication_tunnel`. Commands match `docs/M4_DESIGN.md`. All M4 suites are
+deterministic and offline: they use the in-memory `FakeTunnel` and the
+`fake_cloudflared` test executable; none contact the Internet or Cloudflare.
+
+The real Quick Tunnel round trip is a manual, optional smoke test
+(`scripts/smoke-cloudflare`, Fedora-only). It is never part of `scripts/verify`
+and SKIPs cleanly when `cloudflared` is not installed; release correctness must
+not depend on it.

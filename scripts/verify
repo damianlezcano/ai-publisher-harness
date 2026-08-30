@@ -118,10 +118,37 @@ if [[ -f crates/project-fs/tests/project_migration.rs ]]; then
   cargo test --locked -p project-fs --test project_migration
 fi
 
+if [[ -f crates/project-tunnel/tests/models.rs ]]; then
+  printf 'verify: cargo test --locked -p project-tunnel --test models\n'
+  cargo test --locked -p project-tunnel --test models
+fi
+
+if [[ -f crates/project-tunnel/tests/supervisor.rs ]]; then
+  printf 'verify: cargo test --locked -p project-tunnel --test supervisor\n'
+  cargo test --locked -p project-tunnel --test supervisor
+fi
+
+if [[ -f crates/project-tunnel/tests/cloudflare.rs ]]; then
+  printf 'verify: cargo test --locked -p project-tunnel --test cloudflare\n'
+  cargo test --locked -p project-tunnel --test cloudflare
+fi
+
+if [[ -f crates/project-tunnel/tests/tunnel_security.rs ]]; then
+  printf 'verify: cargo test --locked -p project-tunnel --test tunnel_security\n'
+  cargo test --locked -p project-tunnel --test tunnel_security
+fi
+
+if [[ -f crates/project-publication/tests/publication_tunnel.rs ]]; then
+  printf 'verify: cargo test --locked -p project-publication --test publication_tunnel\n'
+  cargo test --locked -p project-publication --test publication_tunnel
+fi
+
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f crates/project-publication/tests/publication_lifecycle.rs ]]; then
+if [[ -f crates/project-publication/tests/publication_tunnel.rs ]]; then
+  printf 'verify: M4 contract passed\n'
+elif [[ -f crates/project-publication/tests/publication_lifecycle.rs ]]; then
   printf 'verify: M3 contract passed\n'
 elif [[ -f crates/project-publisher/tests/publisher_http.rs ]]; then
   printf 'verify: M2 contract passed\n'

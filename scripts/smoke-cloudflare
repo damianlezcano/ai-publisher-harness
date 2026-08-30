@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Manual, optional Fedora smoke test for M4 Cloudflare Quick Tunnel.
+#
+# NOT part of `scripts/verify`. Requires network access and `cloudflared` on PATH.
+# Verifies a real end-to-end Quick Tunnel round trip against a temporary local
+# HTTP server, then stops everything and always cleans up.
+#
+# Exit codes: 0 = PASS, 3 = SKIP (no cloudflared), 1 = FAIL, 2 = usage.
+
+set -u
+
+SCRIPT="$(basename "$0")"
+WORKDIR="$(mktemp -d)"
+CLOUDFLARED_LOG="$WORKDIR/cloudflared.log"
+CLOUDFLARED_PID=""
+HTTP_PID=""
+PORT=""
+
+cleanup() {
+  if [[ -n "$CLOUDFLARED_PID" ]] && kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+    kill -TERM "$CLOUDFLARED_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$CLOUDFLARED_PID" 2>/dev/null || break
+      sleep 1
+    done
+    kill -KILL "$CLOUDFLARED_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$HTTP_PID" ]] && kill -0 "$HTTP_PID" 2>/dev/null; then
+    kill -TERM "$HTTP_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT INT TERM
+
+command -v cloudflared >/dev/null 2>&1 || {
+  echo "$SCRIPT: SKIP: cloudflared not found on PATH" >&2
+  exit 3
+}
+
+command -v curl >/dev/null 2>&1 || {
+  echo "$SCRIPT: FAIL: curl is required" >&2
+  exit 1
+}
+
+# 1. Temporary content server (loopback only), serving a known marker.
+PORT="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+printf 'smoke-ok' > "$WORKDIR/smoke.txt"
+python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$WORKDIR" >/dev/null 2>&1 &
+HTTP_PID=$!
+sleep 1
+
+# 2. Start cloudflared Quick Tunnel toward the loopback origin.
+cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate --loglevel info \
+  >"$CLOUDFLARED_LOG" 2>&1 &
+CLOUDFLARED_PID=$!
+
+# 3. Discover the public URL from logs (defensive: https + trycloudflare.com only).
+PUBLIC_URL=""
+for _ in $(seq 1 60); do
+  PUBLIC_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" 2>/dev/null | head -1)"
+  [[ -n "$PUBLIC_URL" ]] && break
+  kill -0 "$CLOUDFLARED_PID" 2>/dev/null || break
+  sleep 1
+done
+
+if [[ -z "$PUBLIC_URL" ]]; then
+  echo "$SCRIPT: FAIL: could not discover a Quick Tunnel URL" >&2
+  exit 1
+fi
+echo "$SCRIPT: tunnel URL: $PUBLIC_URL"
+
+# 4. Real HTTP request against the public URL; verify the marker content.
+BODY="$(curl -fsSL "$PUBLIC_URL/smoke.txt" 2>/dev/null)" || {
+  echo "$SCRIPT: FAIL: request to $PUBLIC_URL/smoke.txt failed" >&2
+  exit 1
+}
+if [[ "$BODY" != "smoke-ok" ]]; then
+  echo "$SCRIPT: FAIL: unexpected response body: $BODY" >&2
+  exit 1
+fi
+
+echo "$SCRIPT: PASS: $PUBLIC_URL/smoke.txt -> smoke-ok"
+exit 0
