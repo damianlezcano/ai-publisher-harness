@@ -794,6 +794,25 @@ where
             .ok_or_else(|| ProjectCoreError::MissingCreation(id.clone()))?;
         self.content.read_creation(pid, c)
     }
+    pub fn set_creation_visibility(
+        &mut self,
+        pid: &ProjectId,
+        id: &CreationId,
+        visibility: CreationVisibility,
+    ) -> CoreResult<Creation> {
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v2()?;
+        let idx = p
+            .creations
+            .iter()
+            .position(|c| &c.id == id)
+            .ok_or_else(|| ProjectCoreError::MissingCreation(id.clone()))?;
+        p.creations[idx].visibility = visibility;
+        p.updated_at = self.clock.now();
+        self.repository.replace(&p, &e)?;
+        Ok(p.creations[idx].clone())
+    }
 }
 fn ensure_stored_path(path: &RelativeProjectPath, root: &str, id: &str) -> CoreResult<()> {
     validate_file_metadata("stored content", "stored-content", path, root, id)

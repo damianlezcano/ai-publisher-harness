@@ -8,3 +8,4 @@ build/
 projects/
 worktrees/
 *.log
+app/src-tauri/gen/

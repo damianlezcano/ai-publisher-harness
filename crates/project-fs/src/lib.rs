@@ -564,6 +564,21 @@ impl FilesystemProjectContentStore {
     }
 }
 
+impl FilesystemProjectContentStore {
+    /// Resolve and validate the absolute, canonical read path for a material.
+    ///
+    /// Reuses the same symlink/containment checks as [`ProjectContentStore::read_material`]
+    /// so an opener capability can be derived without duplicating the security logic.
+    pub fn material_path(&self, p: &ProjectId, m: &Material) -> CoreResult<PathBuf> {
+        self.validate_read_path(p, &m.relative_path, "inputs", m.id.as_str())
+    }
+
+    /// Resolve and validate the absolute, canonical read path for a creation.
+    pub fn creation_path(&self, p: &ProjectId, c: &Creation) -> CoreResult<PathBuf> {
+        self.validate_read_path(p, &c.relative_path, "outputs", c.id.as_str())
+    }
+}
+
 impl ProjectContentStore for FilesystemProjectContentStore {
     fn store_material(
         &mut self,
