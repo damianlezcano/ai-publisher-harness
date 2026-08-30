@@ -10,6 +10,8 @@ mod route;
 pub use error::{PublicationError, PublicationResult};
 pub use fake::{FakePublisher, PublisherCall};
 pub use manager::{
-    InstrumentedSnapshots, Publication, PublicationManager, SnapshotStore, UnpublishOutcome,
+    InstrumentedSnapshots, NoopTunnel, Publication, PublicationManager, SnapshotStore,
+    UnpublishOutcome,
 };
+pub use project_tunnel::{FakeTunnel, TunnelCall};
 pub use route::{OsRouteEntropy, RouteEntropy, ScriptedEntropy, slugify};

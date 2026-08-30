@@ -585,6 +585,7 @@ dependencies = [
  "project-core",
  "project-fs",
  "project-publisher",
+ "project-tunnel",
  "tempfile",
  "unicode-normalization",
 ]

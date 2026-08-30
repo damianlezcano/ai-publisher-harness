@@ -11,9 +11,10 @@ use project_publisher::{
 
 use crate::error::{
     PublicationError, PublicationResult, from_core, from_register, from_replace, from_start,
-    from_stop, from_unregister,
+    from_stop, from_tunnel_start, from_tunnel_stop, from_unregister,
 };
-use crate::route::{RouteEntropy, allocate_route};
+use crate::route::{OsRouteEntropy, RouteEntropy, allocate_route};
+use project_tunnel::{LocalOrigin, PublicBaseUrl, TunnelProvider, TunnelSession, TunnelState};
 
 /// Outcome of `unpublish`. Repeated unpublish is a no-op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +29,52 @@ pub struct Publication {
     pub project_id: ProjectId,
     pub route: CoreRoute,
     pub endpoint: String,
+    pub public_url: Option<String>,
+}
+
+/// Default tunnel for M3-compatible constructors: in-process, no cloudflared.
+#[derive(Debug, Default)]
+pub struct NoopTunnel {
+    session: Option<TunnelSession>,
+}
+
+impl TunnelProvider for NoopTunnel {
+    fn start(&mut self, origin: LocalOrigin) -> project_tunnel::TunnelResult<TunnelSession> {
+        let _ = origin;
+        if self.session.is_some() {
+            return Err(project_tunnel::TunnelError::AlreadyRunning);
+        }
+        let base_url = PublicBaseUrl::parse("https://noop.trycloudflare.com/")
+            .expect("fixture NoopTunnel URL");
+        let session = TunnelSession::new(base_url);
+        self.session = Some(session.clone());
+        Ok(session)
+    }
+
+    fn session(&self) -> Option<TunnelSession> {
+        self.session.clone()
+    }
+
+    fn state(&self) -> TunnelState {
+        match &self.session {
+            Some(session) => TunnelState::Running {
+                base_url: session.base_url().clone(),
+            },
+            None => TunnelState::Stopped,
+        }
+    }
+
+    fn stop(&mut self) -> project_tunnel::TunnelResult<()> {
+        if self.session.is_none() {
+            return Err(project_tunnel::TunnelError::NotRunning);
+        }
+        self.session = None;
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.session.is_some()
+    }
 }
 
 /// Thin port over the approved snapshot store so tests can inject prepare faults
@@ -84,20 +131,70 @@ impl SnapshotStore for InstrumentedSnapshots {
 }
 
 /// Application service for local Publish / Stop sharing.
-pub struct PublicationManager<R, L, S = PublicationSnapshotStore, E = crate::route::OsRouteEntropy>
-{
+pub struct PublicationManager<
+    R,
+    L,
+    S = PublicationSnapshotStore,
+    E = OsRouteEntropy,
+    T = NoopTunnel,
+> {
     repository: Mutex<R>,
     snapshots: S,
     roots: ProjectPublishRootProvider,
     publisher: Mutex<L>,
     entropy: E,
+    tunnel: Mutex<T>,
     published: Mutex<HashMap<ProjectId, CoreRoute>>,
     lifecycle: Mutex<()>,
     project_locks: Mutex<HashMap<ProjectId, Arc<Mutex<()>>>>,
     stop_failed: Mutex<bool>,
+    tunnel_stop_failed: Mutex<bool>,
 }
 
-impl<R, L, S, E> PublicationManager<R, L, S, E>
+impl<R, L, S, E, T> PublicationManager<R, L, S, E, T>
+where
+    R: ProjectRepository,
+    L: LocalPublisher,
+    S: SnapshotStore,
+    E: RouteEntropy,
+    T: TunnelProvider,
+{
+    fn build(
+        repository: R,
+        snapshots: S,
+        roots: ProjectPublishRootProvider,
+        publisher: L,
+        entropy: E,
+        tunnel: T,
+    ) -> Self {
+        Self {
+            repository: Mutex::new(repository),
+            snapshots,
+            roots,
+            publisher: Mutex::new(publisher),
+            entropy,
+            tunnel: Mutex::new(tunnel),
+            published: Mutex::new(HashMap::new()),
+            lifecycle: Mutex::new(()),
+            project_locks: Mutex::new(HashMap::new()),
+            stop_failed: Mutex::new(false),
+            tunnel_stop_failed: Mutex::new(false),
+        }
+    }
+
+    pub fn with_tunnel(
+        repository: R,
+        snapshots: S,
+        roots: ProjectPublishRootProvider,
+        publisher: L,
+        entropy: E,
+        tunnel: T,
+    ) -> Self {
+        Self::build(repository, snapshots, roots, publisher, entropy, tunnel)
+    }
+}
+
+impl<R, L, S, E> PublicationManager<R, L, S, E, NoopTunnel>
 where
     R: ProjectRepository,
     L: LocalPublisher,
@@ -111,19 +208,25 @@ where
         publisher: L,
         entropy: E,
     ) -> Self {
-        Self {
-            repository: Mutex::new(repository),
+        Self::build(
+            repository,
             snapshots,
             roots,
-            publisher: Mutex::new(publisher),
+            publisher,
             entropy,
-            published: Mutex::new(HashMap::new()),
-            lifecycle: Mutex::new(()),
-            project_locks: Mutex::new(HashMap::new()),
-            stop_failed: Mutex::new(false),
-        }
+            NoopTunnel::default(),
+        )
     }
+}
 
+impl<R, L, S, E, T> PublicationManager<R, L, S, E, T>
+where
+    R: ProjectRepository,
+    L: LocalPublisher,
+    S: SnapshotStore,
+    E: RouteEntropy,
+    T: TunnelProvider,
+{
     pub fn publish(&self, project_id: &ProjectId) -> PublicationResult<Publication> {
         let project_lock = self.project_lock(project_id);
         let _project = project_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -137,7 +240,8 @@ where
         self.retry_pending_stop()?;
         let mut publisher = self.publisher.lock().unwrap_or_else(|e| e.into_inner());
 
-        if !publisher.is_running() {
+        let started_publisher = !publisher.is_running();
+        if started_publisher {
             publisher.start().map_err(from_start)?;
         }
 
@@ -159,17 +263,44 @@ where
             return Err(error);
         }
 
-        if !already_published {
+        let first_project = if already_published {
+            false
+        } else {
+            let mut published = self.published.lock().unwrap_or_else(|e| e.into_inner());
+            let was_empty = published.is_empty();
+            published.insert(project_id.clone(), route.clone());
+            was_empty
+        };
+
+        if first_project && let Err(error) = self.engage_tunnel(&*publisher) {
+            let publisher_route = to_publisher_route(&route)?;
+            let _ = publisher.unregister(&publisher_route);
             self.published
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(project_id.clone(), route.clone());
+                .remove(project_id);
+            if started_publisher
+                && self
+                    .published
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_empty()
+            {
+                let _ = self.mark_stop_if_needed(&mut *publisher);
+            }
+            return Err(error);
         }
 
         let base = publisher
             .local_url()
             .ok_or(PublicationError::PublisherStart)?;
-        Ok(publication(project_id.clone(), route, &base))
+        let public_base = self.public_base_url();
+        Ok(publication(
+            project_id.clone(),
+            route,
+            &base,
+            public_base.as_ref(),
+        ))
     }
 
     pub fn unpublish(&self, project_id: &ProjectId) -> PublicationResult<UnpublishOutcome> {
@@ -202,6 +333,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .is_empty();
         if empty {
+            self.stop_tunnel_if_needed()?;
             self.mark_stop_if_needed(&mut *publisher)?;
         }
         Ok(UnpublishOutcome::Removed)
@@ -223,12 +355,21 @@ where
         let Some(base) = base else {
             return Ok(Vec::new());
         };
+        let public_base = self.public_base_url();
         let mut items: Vec<_> = snapshot
             .into_iter()
-            .map(|(id, route)| publication(id, route, &base))
+            .map(|(id, route)| publication(id, route, &base, public_base.as_ref()))
             .collect();
         items.sort_by(|a, b| a.project_id.cmp(&b.project_id));
         Ok(items)
+    }
+
+    pub fn public_base_url(&self) -> Option<PublicBaseUrl> {
+        self.tunnel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .session()
+            .map(|session| session.base_url().clone())
     }
 
     pub fn endpoint(&self) -> Option<LoopbackUrl> {
@@ -295,7 +436,12 @@ where
     }
 
     fn retry_pending_stop(&self) -> PublicationResult<()> {
-        if !*self.stop_failed.lock().unwrap_or_else(|e| e.into_inner()) {
+        let tunnel_pending = *self
+            .tunnel_stop_failed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let publisher_pending = *self.stop_failed.lock().unwrap_or_else(|e| e.into_inner());
+        if !tunnel_pending && !publisher_pending {
             return Ok(());
         }
         if !self
@@ -306,8 +452,53 @@ where
         {
             return Ok(());
         }
+        if tunnel_pending {
+            self.stop_tunnel_if_needed()?;
+        }
         let mut publisher = self.publisher.lock().unwrap_or_else(|e| e.into_inner());
         self.mark_stop_if_needed(&mut *publisher)
+    }
+
+    fn engage_tunnel(&self, publisher: &L) -> PublicationResult<()> {
+        let origin = LocalOrigin::from_port(
+            publisher
+                .local_url()
+                .ok_or(PublicationError::PublisherStart)?
+                .port(),
+        )
+        .map_err(|_| PublicationError::TunnelStart)?;
+        let mut tunnel = self.tunnel.lock().unwrap_or_else(|e| e.into_inner());
+        if !tunnel.is_running() {
+            tunnel.start(origin).map_err(from_tunnel_start)?;
+        }
+        Ok(())
+    }
+
+    fn stop_tunnel_if_needed(&self) -> PublicationResult<()> {
+        let mut tunnel = self.tunnel.lock().unwrap_or_else(|e| e.into_inner());
+        if !tunnel.is_running() {
+            *self
+                .tunnel_stop_failed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = false;
+            return Ok(());
+        }
+        match tunnel.stop() {
+            Ok(()) => {
+                *self
+                    .tunnel_stop_failed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = false;
+                Ok(())
+            }
+            Err(error) => {
+                *self
+                    .tunnel_stop_failed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = true;
+                Err(from_tunnel_stop(error))
+            }
+        }
     }
 
     fn mark_stop_if_needed(&self, publisher: &mut L) -> PublicationResult<()> {
@@ -334,10 +525,16 @@ fn to_publisher_route(route: &CoreRoute) -> PublicationResult<PublisherRoute> {
     PublisherRoute::parse(route.as_str()).map_err(|_| PublicationError::RouteAllocation)
 }
 
-fn publication(project_id: ProjectId, route: CoreRoute, base: &LoopbackUrl) -> Publication {
+fn publication(
+    project_id: ProjectId,
+    route: CoreRoute,
+    base: &LoopbackUrl,
+    public_base: Option<&PublicBaseUrl>,
+) -> Publication {
     Publication {
         project_id,
         endpoint: format!("{}{}/", base.as_str(), route.as_str()),
+        public_url: public_base.map(|base| base.join(route.as_str())),
         route,
     }
 }

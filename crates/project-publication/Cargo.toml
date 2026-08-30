@@ -11,6 +11,7 @@ getrandom = { workspace = true }
 project-core = { path = "../project-core" }
 project-fs = { path = "../project-fs" }
 project-publisher = { path = "../project-publisher" }
+project-tunnel = { path = "../project-tunnel" }
 unicode-normalization = { workspace = true }
 
 [dev-dependencies]

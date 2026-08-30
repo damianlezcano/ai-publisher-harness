@@ -13,7 +13,7 @@ use project_fs::{
     PublicationSnapshotStore,
 };
 use project_publication::{
-    FakePublisher, InstrumentedSnapshots, PublicationManager, ScriptedEntropy,
+    FakePublisher, FakeTunnel, InstrumentedSnapshots, PublicationManager, ScriptedEntropy,
 };
 use tempfile::TempDir;
 
@@ -126,29 +126,41 @@ fn creation(
 pub struct Harness {
     pub temp: TempDir,
     pub publisher: FakePublisher,
+    pub tunnel: FakeTunnel,
     pub snapshots: InstrumentedSnapshots,
     pub manager: PublicationManager<
         FilesystemProjectRepository,
         FakePublisher,
         InstrumentedSnapshots,
         ScriptedEntropy,
+        FakeTunnel,
     >,
 }
 
+/// Default harness for M3 tests: FakeTunnel via `with_tunnel`.
+/// Existing M3 assertions are unchanged because FakeTunnel succeeds silently.
 pub fn harness(suffixes: &[&str]) -> Harness {
+    harness_with_tunnel(suffixes)
+}
+
+/// Same as [`harness`]: manager is wired to a cloneable [`FakeTunnel`].
+pub fn harness_with_tunnel(suffixes: &[&str]) -> Harness {
     let temp = tempfile::tempdir().unwrap();
     let publisher = FakePublisher::new();
+    let tunnel = FakeTunnel::new();
     let snapshots = InstrumentedSnapshots::new(PublicationSnapshotStore::new(temp.path()));
-    let manager = PublicationManager::new(
+    let manager = PublicationManager::with_tunnel(
         FilesystemProjectRepository::new(temp.path()),
         snapshots.clone(),
         ProjectPublishRootProvider::new(temp.path()),
         publisher.clone(),
         ScriptedEntropy::new(suffixes.iter().copied()),
+        tunnel.clone(),
     );
     Harness {
         temp,
         publisher,
+        tunnel,
         snapshots,
         manager,
     }

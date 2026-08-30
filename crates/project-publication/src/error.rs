@@ -2,6 +2,7 @@ use std::fmt;
 
 use project_core::{ProjectCoreError, ProjectId};
 use project_publisher::PublisherError;
+use project_tunnel::TunnelError;
 
 /// Typed publication errors. Messages do not leak filesystem paths.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum PublicationError {
     PublisherReplace,
     PublisherUnregister,
     PublisherStop,
+    TunnelStart,
+    TunnelStop,
     Recovery,
 }
 
@@ -32,6 +35,8 @@ impl fmt::Display for PublicationError {
             Self::PublisherReplace => f.write_str("publication could not be updated"),
             Self::PublisherUnregister => f.write_str("publication could not be unregistered"),
             Self::PublisherStop => f.write_str("local publisher could not stop"),
+            Self::TunnelStart => f.write_str("public tunnel could not start"),
+            Self::TunnelStop => f.write_str("public tunnel could not stop"),
             Self::Recovery => f.write_str("publication recovery failed"),
         }
     }
@@ -85,6 +90,16 @@ pub(crate) fn from_unregister(error: PublisherError) -> PublicationError {
 pub(crate) fn from_stop(error: PublisherError) -> PublicationError {
     let _ = error;
     PublicationError::PublisherStop
+}
+
+pub(crate) fn from_tunnel_start(error: TunnelError) -> PublicationError {
+    let _ = error;
+    PublicationError::TunnelStart
+}
+
+pub(crate) fn from_tunnel_stop(error: TunnelError) -> PublicationError {
+    let _ = error;
+    PublicationError::TunnelStop
 }
 
 #[cfg(test)]
