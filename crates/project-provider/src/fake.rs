@@ -50,6 +50,7 @@ struct FakeProviderState {
     models: Vec<ModelSummary>,
     oauth: HashMap<String, ScriptedOAuth>,
     next_attempt: u64,
+    next_connection: u64,
     test_outcome: ConnectionTestOutcome,
     test_message: String,
     connect_error: Option<ProviderError>,
@@ -77,6 +78,17 @@ impl fmt::Debug for FakeProviderState {
     }
 }
 
+impl fmt::Debug for FakeProviderConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FakeProviderConnector")
+            .field(
+                "inner",
+                &*self.inner.lock().unwrap_or_else(|e| e.into_inner()),
+            )
+            .finish()
+    }
+}
+
 impl Default for FakeProviderConnector {
     fn default() -> Self {
         Self::new()
@@ -93,6 +105,7 @@ impl FakeProviderConnector {
                 models: Vec::new(),
                 oauth: HashMap::new(),
                 next_attempt: 1,
+                next_connection: 1,
                 test_outcome: ConnectionTestOutcome::Connected,
                 test_message: "Conectado.".into(),
                 connect_error: None,
@@ -129,6 +142,12 @@ impl FakeProviderConnector {
             .models
             .push(model);
         self
+    }
+
+    /// Replaces the scripted model catalog (simulates a model disappearing
+    /// from the catalog after an update/refresh).
+    pub fn set_models(&self, models: Vec<ModelSummary>) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).models = models;
     }
 
     pub fn set_test_outcome(&self, outcome: ConnectionTestOutcome, message: &str) {
@@ -270,9 +289,10 @@ impl ProviderConnector for FakeProviderConnector {
         state.last_connect_key = Some(key.expose().to_owned());
         state.last_connect_label = label.map(str::to_owned);
         let connection = ConnectionView {
-            id: format!("cred-{provider_id}"),
+            id: format!("cred-{}", state.next_connection),
             label: label.map(str::to_owned),
         };
+        state.next_connection += 1;
         Self::push_connection(&mut state, provider_id, connection.clone());
         Ok(ConnectionState {
             connected: true,
@@ -340,9 +360,10 @@ impl ProviderConnector for FakeProviderConnector {
             .connection
             .clone()
             .unwrap_or_else(|| ConnectionView {
-                id: format!("cred-{}", attempt.provider_id),
+                id: format!("cred-{}", state.next_connection),
                 label: Some("Cuenta conectada".into()),
             });
+        state.next_connection += 1;
         attempt.status = OAuthStatusKind::Complete;
         state.oauth.insert(attempt_id.to_owned(), attempt.clone());
         Self::push_connection(&mut state, &attempt.provider_id, connection.clone());

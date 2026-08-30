@@ -2,8 +2,9 @@
 //!
 //! This crate owns the provider/model domain and the credential boundary. It is
 //! OpenCode-independent: the UI and project-core never see OpenCode concepts. The
-//! single real adapter (`OpenCodeProviderConnector`) lives in `adapter.rs`;
-//! tests use `FakeProviderConnector`.
+//! real adapter (`OpenCodeProviderConnector`, driving OpenCode's integration API)
+//! and `ProviderService` are added by later M7 tasks; tests use
+//! `FakeProviderConnector`.
 
 #![forbid(unsafe_code)]
 

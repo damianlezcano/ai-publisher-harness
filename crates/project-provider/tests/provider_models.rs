@@ -135,7 +135,7 @@ fn connect_key_never_reaches_dtos() {
     assert!(!serialized.contains("sk-super-secret-value"));
     assert!(state.connected);
     let connection = state.connection.expect("connection");
-    assert_eq!(connection.id, "cred-openai");
+    assert_eq!(connection.id, "cred-1");
     assert_eq!(connection.label.as_deref(), Some("mi clave"));
 }
 
@@ -281,13 +281,29 @@ fn disconnect_removes_only_target_credential() {
     fake.connect_api_key("deepseek", &SecretString::new("sk-d".into()), None)
         .expect("connect deepseek");
 
-    fake.disconnect("cred-google").expect("disconnect");
+    fake.disconnect("cred-1").expect("disconnect");
     assert!(!fake.is_connected("google"));
     assert!(fake.is_connected("deepseek"));
     assert_eq!(fake.connections("google").len(), 0);
 
-    let err = fake.disconnect("cred-google").expect_err("already gone");
+    let err = fake.disconnect("cred-1").expect_err("already gone");
     assert!(matches!(err, ProviderError::NotFound(_)), "{err:?}");
+}
+
+#[test]
+fn connection_ids_are_unique_per_connect() {
+    let fake = FakeProviderConnector::new().with_provider(provider_detail("openai", "ChatGPT"));
+    fake.connect_api_key("openai", &SecretString::new("sk-a".into()), None)
+        .expect("first");
+    fake.connect_api_key("openai", &SecretString::new("sk-b".into()), None)
+        .expect("second");
+    let ids: Vec<_> = fake
+        .connections("openai")
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(ids, vec!["cred-1".to_owned(), "cred-2".to_owned()]);
+    assert_eq!(fake.connections("openai").len(), 2);
 }
 
 #[test]
@@ -296,7 +312,7 @@ fn disconnect_error_injection() {
     fake.connect_api_key("openai", &SecretString::new("sk-x".into()), None)
         .expect("connect");
     fake.set_disconnect_error(ProviderError::DisconnectFailed("injected".into()));
-    let err = fake.disconnect("cred-openai").expect_err("injected");
+    let err = fake.disconnect("cred-1").expect_err("injected");
     assert!(matches!(err, ProviderError::DisconnectFailed(_)), "{err:?}");
     assert!(fake.is_connected("openai"));
 }
@@ -352,7 +368,7 @@ fn provider_detail_returns_connections() {
     .expect("connect");
     let detail = fake.provider_detail("anthropic").expect("detail");
     assert_eq!(detail.connections.len(), 1);
-    assert_eq!(detail.connections[0].id, "cred-anthropic");
+    assert_eq!(detail.connections[0].id, "cred-1");
 }
 
 #[test]
@@ -360,4 +376,112 @@ fn provider_detail_unknown_is_not_found() {
     let fake = FakeProviderConnector::new().with_provider(provider_detail("openai", "ChatGPT"));
     let err = fake.provider_detail("nope").expect_err("unknown");
     assert!(matches!(err, ProviderError::NotFound(_)), "{err:?}");
+}
+
+#[test]
+fn serde_round_trips_all_design_strings() {
+    use project_provider::{ConnectionState, OAuthAttempt, OAuthStatus};
+
+    for (kind, json) in [
+        (OAuthStatusKind::Pending, "pending"),
+        (OAuthStatusKind::Complete, "complete"),
+        (OAuthStatusKind::Failed, "failed"),
+        (OAuthStatusKind::Expired, "expired"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(kind).expect("to"),
+            serde_json::json!(json)
+        );
+        let back: OAuthStatusKind = serde_json::from_value(serde_json::json!(json)).expect("back");
+        assert_eq!(back, kind);
+    }
+
+    assert_eq!(
+        serde_json::from_value::<OAuthMode>(serde_json::json!("code")).expect("code"),
+        OAuthMode::Code
+    );
+    assert_eq!(
+        serde_json::from_value::<AuthPromptKind>(serde_json::json!("select")).expect("select"),
+        AuthPromptKind::Select
+    );
+    assert_eq!(
+        serde_json::from_value::<AuthMethodKind>(serde_json::json!("account")).expect("account"),
+        AuthMethodKind::Account
+    );
+    assert_eq!(
+        serde_json::from_value::<ConnectionTestOutcome>(serde_json::json!("connected"))
+            .expect("connected"),
+        ConnectionTestOutcome::Connected
+    );
+
+    let summary = ProviderSummary {
+        id: "opencode".into(),
+        name: "Gratis".into(),
+        auth_methods: Vec::new(),
+        connected: true,
+        connection_label: None,
+        highlighted: true,
+    };
+    let json = serde_json::to_value(&summary).expect("summary to");
+    let back: ProviderSummary = serde_json::from_value(json).expect("summary back");
+    assert_eq!(back, summary);
+
+    let status = OAuthStatus {
+        status: OAuthStatusKind::Pending,
+        message: Some("esperando".into()),
+    };
+    let json = serde_json::to_value(&status).expect("status to");
+    assert_eq!(json["status"], "pending");
+    let back: OAuthStatus = serde_json::from_value(json).expect("status back");
+    assert_eq!(back, status);
+
+    let attempt = OAuthAttempt {
+        attempt_id: "a1".into(),
+        url: "https://example.test".into(),
+        instructions: None,
+        mode: OAuthMode::Code,
+    };
+    let json = serde_json::to_value(&attempt).expect("attempt to");
+    assert_eq!(json["mode"], "code");
+    let back: OAuthAttempt = serde_json::from_value(json).expect("attempt back");
+    assert_eq!(back, attempt);
+
+    let state = ConnectionState {
+        connected: true,
+        connection: Some(ConnectionView {
+            id: "cred-1".into(),
+            label: None,
+        }),
+    };
+    let json = serde_json::to_value(&state).expect("state to");
+    assert_eq!(json["connected"], true);
+    assert_eq!(json["connection"]["id"], "cred-1");
+    let back: ConnectionState = serde_json::from_value(json).expect("state back");
+    assert_eq!(back, state);
+}
+
+#[test]
+fn model_catalog_disappearance_is_scriptable() {
+    let fake = FakeProviderConnector::new()
+        .with_model(free_model("opencode", "nemotron-free"))
+        .with_model(free_model("opencode", "mimo-free"));
+    assert_eq!(fake.list_models().expect("list").len(), 2);
+
+    fake.set_models(vec![free_model("opencode", "mimo-free")]);
+    let models = fake.list_models().expect("list");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].model_id, "mimo-free");
+
+    fake.set_models(Vec::new());
+    assert!(fake.list_models().expect("list").is_empty());
+}
+
+#[test]
+fn fake_public_debug_redacts_retained_key() {
+    let fake = FakeProviderConnector::new().with_provider(provider_detail("openai", "ChatGPT"));
+    fake.connect_api_key("openai", &SecretString::new("sk-super-secret".into()), None)
+        .expect("connect");
+    let debug = format!("{fake:?}");
+    assert!(!debug.contains("sk-super-secret"));
+    assert!(debug.contains("[REDACTED]"));
 }
