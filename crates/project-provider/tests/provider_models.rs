@@ -426,6 +426,14 @@ fn serde_round_trips_all_design_strings() {
     let back: ProviderSummary = serde_json::from_value(json).expect("summary back");
     assert_eq!(back, summary);
 
+    let model = free_model("opencode", "mimo-free");
+    let json = serde_json::to_value(&model).expect("model to");
+    assert_eq!(json["providerId"], "opencode");
+    assert_eq!(json["modelId"], "mimo-free");
+    assert_eq!(json["free"], true);
+    let back: ModelSummary = serde_json::from_value(json).expect("model back");
+    assert_eq!(back, model);
+
     let status = OAuthStatus {
         status: OAuthStatusKind::Pending,
         message: Some("esperando".into()),
