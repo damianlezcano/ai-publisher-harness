@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/project-agent",
     "crates/project-core",
     "crates/project-fs",
     "crates/project-publisher",
