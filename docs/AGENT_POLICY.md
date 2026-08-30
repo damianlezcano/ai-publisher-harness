@@ -14,7 +14,8 @@ scarce orchestration resource and is not the default builder.
 
 | Pool/model | Level | Preferred use |
 | --- | --- | --- |
-| Codex Tierra | HIGH_ARCHITECTURE | Orchestration, architecture, decomposition, contracts, integration, critical security decisions, conflicts, final gate |
+| DeepSeek V4 Pro (fresh escalation) | HIGH_ARCHITECTURE | Genuine architecture/security decisions in a fresh session; session closed after the design is persisted |
+| Codex Tierra | HIGH_ARCHITECTURE fallback | Fallback for architecture escalation and final gate when V4 Pro is unavailable |
 | Cursor Composer 2.5 | LOW; MEDIUM fallback | Primary LOW worker and MEDIUM fallback for specified code, structs, adapters, tests, refactors, docs, boilerplate |
 | Cursor Grok 4.6 standard | MEDIUM_HIGH/HIGH_CODING | Complex coding, concurrency, difficult bugs, cross-module integration, security fixes; do not use Fast by default |
 | OpenCode Go MiMo-V2.5 | LOW | Simple tests, boilerplate, docs, repetitive corrections |
@@ -25,7 +26,8 @@ scarce orchestration resource and is not the default builder.
 
 OpenCode Go must not use GPT or Grok models. Cursor Grok is reserved for
 MEDIUM_HIGH/HIGH_CODING work; Composer and DeepSeek should absorb most normal
-work. HIGH_ARCHITECTURE remains Codex Tierra.
+work. HIGH_ARCHITECTURE escalation runs in a fresh DeepSeek V4 Pro session;
+Codex Tierra is the fallback.
 
 ## Reasoning matrix
 
@@ -35,7 +37,7 @@ work. HIGH_ARCHITECTURE remains Codex Tierra.
 | MEDIUM | DeepSeek V4 Flash → Composer 2.5 → Qwen3.8 Max |
 | MEDIUM_HIGH | Grok 4.6 standard → DeepSeek V4 Flash → Kimi K2.7 Code |
 | HIGH_CODING | Grok 4.6 standard/medium → Kimi K2.7 Code |
-| HIGH_ARCHITECTURE | Codex Tierra |
+| HIGH_ARCHITECTURE | DeepSeek V4 Pro (fresh session) → Codex Tierra |
 
 These are preferences, not rigid dependencies. Availability and reliability
 may justify switching workers.
@@ -67,10 +69,13 @@ mismatch or an unavailable ID fails closed; the worker is terminated or
 reconfigured and only the documented fallback may be attempted.
 
 The approved OpenCode Go IDs are `opencode-go/mimo-v2.5`,
-`opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max`, and
-`opencode-go/kimi-k2.7-code`. `opencode/mimo-v2.5-free` is not equivalent to
-the OpenCode Go MiMo ID and is never an automatic substitute. Big Pickle, GPT,
-Grok, provider defaults, and last-used OpenCode models are prohibited.
+`opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max`,
+`opencode-go/kimi-k2.7-code`, and `opencode-go/deepseek-v4-pro`. The V4 Pro ID
+is used only for fresh HIGH_ARCHITECTURE escalation sessions and must be pinned
+in `config/agent-models.env` before its first `--launch`. `opencode/mimo-v2.5-free`
+is not equivalent to the OpenCode Go MiMo ID and is never an automatic
+substitute. Big Pickle, GPT, Grok, provider defaults, and last-used OpenCode
+models are prohibited.
 
 ## Task contracts and worker behavior
 
@@ -125,6 +130,16 @@ escalate to Codex only when appropriate workers cannot solve the task.
 6. Reuse healthy sessions for small fixes.
 7. Switch quickly from unreliable workers.
 8. Treat Codex Tierra as a scarce orchestration resource.
+
+## Session, checkpoint, and rotation policy
+
+- The repository is the durable memory and source of truth; conversation history is not carried forward between sessions.
+- `docs/CURRENT_CHECKPOINT.md` is the current handoff for orchestration sessions and is rewritten per phase, never accumulated as historical documentation.
+- Implementation/maintenance orchestration runs on OpenCode Go DeepSeek V4 Flash (`opencode-go/deepseek-v4-flash`).
+- A genuine HIGH_ARCHITECTURE decision is escalated to a fresh DeepSeek V4 Pro session; the Pro session is closed after the architecture decision/design is persisted to the repository.
+- Do not keep historical milestone chats or prior sessions alive for the next milestone; start from repository state.
+- Rotate orchestration sessions around 100K-150K context: prepare checkpoint/rotation above ~100K, rotate above ~150K.
+- Workers receive task-local context only (see "Task contracts and worker behavior"); the orchestration lead retains global project context.
 
 ## Platform
 
