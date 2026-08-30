@@ -3,7 +3,7 @@
 //! This crate owns the provider/model domain and the credential boundary. Domain
 //! types are OpenCode-independent; the UI and project-core never see OpenCode
 //! concepts. The HTTP adapter is [`OpenCodeProviderConnector`]. Tests also use
-//! [`FakeProviderConnector`]. `ProviderService` is added by a later M7 task.
+//! [`FakeProviderConnector`]. Orchestration lives in [`ProviderService`].
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +13,8 @@ pub mod fake;
 pub mod models;
 pub mod port;
 pub mod secret;
+pub mod service;
+pub mod settings;
 
 pub use adapter::OpenCodeProviderConnector;
 pub use error::{ProviderError, ProviderResult};
@@ -24,3 +26,5 @@ pub use models::{
 };
 pub use port::ProviderConnector;
 pub use secret::{SecretString, redact_credentials};
+pub use service::{BackendRestarter, FakeRestarter, ProviderService, SelectedModel};
+pub use settings::{ModelSelection, Settings, SettingsStore};

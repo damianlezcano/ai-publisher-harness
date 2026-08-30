@@ -57,14 +57,17 @@ impl OpenCodeProviderConnector {
     }
 
     fn get(&self, path: &str) -> ProviderResult<(u16, String)> {
+        self.backend.ensure_ready().map_err(map_backend_error)?;
         self.backend.get(path).map_err(map_backend_error)
     }
 
     fn post(&self, path: &str, body: &Value) -> ProviderResult<(u16, String)> {
+        self.backend.ensure_ready().map_err(map_backend_error)?;
         self.backend.post(path, body).map_err(map_backend_error)
     }
 
     fn delete(&self, path: &str) -> ProviderResult<(u16, String)> {
+        self.backend.ensure_ready().map_err(map_backend_error)?;
         self.backend.delete(path).map_err(map_backend_error)
     }
 
