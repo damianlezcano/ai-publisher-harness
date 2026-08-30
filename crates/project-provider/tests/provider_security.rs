@@ -104,7 +104,7 @@ fn malicious_ids_are_rejected_not_echoed() {
             "{err:?}"
         );
         assert!(
-            !err.to_string().contains("etc/passwd") && !err.to_string().contains("rm -rf"),
+            !err.to_string().contains(bad),
             "Display must never echo the raw hostile id: {err}"
         );
     }
@@ -129,15 +129,19 @@ fn malicious_id_through_the_adapter_is_not_found_not_echoed() {
             .connect_api_key(bad, &SecretString::new("sk-x".into()), None)
             .expect_err("hostile id");
         assert!(
-            !err.to_string().contains("etc/passwd") && !err.to_string().contains("rm -rf"),
+            matches!(err, ProviderError::NotFound(ref id) if id == bad),
+            "unknown ids must map to not_found, got {err:?}"
+        );
+        assert!(
+            !err.to_string().contains(bad),
             "Display must never echo the raw hostile id: {err}"
         );
     }
 }
 
 // Threat 4 (§20): the backend child env never carries a secret or a
-// secret-shaped variable, and the connector only ever talks to the loopback
-// server.
+// secret-shaped variable; the serve argv is loopback-only; and the connect/key
+// body only ever reaches the loopback server (captured by our fake server).
 #[test]
 fn backend_env_and_loopback_never_carry_secrets() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -163,10 +167,79 @@ fn backend_env_and_loopback_never_carry_secrets() {
         );
     }
 
+    let argv = project_opencode::build_argv(4567);
+    assert!(argv.windows(2).any(|w| w == ["--hostname", "127.0.0.1"]));
+    assert!(!argv.iter().any(|a| a == "--mdns"));
+    assert!(!argv.iter().any(|a| a == "0.0.0.0"));
+
+    // The connect/key body is sent only to the loopback server we control.
     let server = FakeServer::start();
-    assert!(
-        server.base_url().starts_with("http://127.0.0.1:"),
-        "the connect/key body must only ever reach the loopback server"
+    assert!(server.base_url().starts_with("http://127.0.0.1:"));
+    let backend = Arc::new(OpenCodeBackend::new(
+        std::path::PathBuf::from("/usr/bin/true"),
+        unique_config_dir(),
+        0,
+    ));
+    backend.set_base_url(server.base_url());
+    backend.ensure_ready().expect("ready");
+    let connector = OpenCodeProviderConnector::new(Arc::clone(&backend));
+    connector
+        .connect_api_key(
+            "openai",
+            &SecretString::new("sk-loopback-only".into()),
+            None,
+        )
+        .expect("connect");
+    assert_eq!(
+        server.last_connect_key().as_deref(),
+        Some("sk-loopback-only"),
+        "connect/key must have reached the loopback server"
+    );
+}
+
+// Threat 6 (§20): a 401/403 on a provider that already has a stored credential
+// is a revocation, surfaced as CredentialRevoked (the app maps it to "volver a
+// conectar").
+#[test]
+fn revoked_credential_is_detected_by_connection_test() {
+    let server = FakeServer::start();
+    let backend = Arc::new(OpenCodeBackend::new(
+        std::path::PathBuf::from("/usr/bin/true"),
+        unique_config_dir(),
+        0,
+    ));
+    backend.set_base_url(server.base_url());
+    backend.ensure_ready().expect("ready");
+    let connector = OpenCodeProviderConnector::new(Arc::clone(&backend));
+
+    connector
+        .connect_api_key("openai", &SecretString::new("sk-ok".into()), None)
+        .expect("connect");
+
+    // The provider now holds a credential; a 401 on the next test is a revocation.
+    server.set_prompt_status(401);
+    let err = connector
+        .test_connection("openai", "gpt-4o")
+        .expect_err("revoked");
+    assert_eq!(err, ProviderError::CredentialRevoked);
+
+    // Without a stored credential the same signal is an invalid key.
+    let server2 = FakeServer::start();
+    let backend2 = Arc::new(OpenCodeBackend::new(
+        std::path::PathBuf::from("/usr/bin/true"),
+        unique_config_dir(),
+        0,
+    ));
+    backend2.set_base_url(server2.base_url());
+    backend2.ensure_ready().expect("ready");
+    let connector2 = OpenCodeProviderConnector::new(Arc::clone(&backend2));
+    server2.set_prompt_status(401);
+    let test = connector2
+        .test_connection("google", "gemini-2")
+        .expect("test");
+    assert_eq!(
+        test.outcome,
+        project_provider::ConnectionTestOutcome::CredentialInvalid
     );
 }
 

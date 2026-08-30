@@ -129,6 +129,11 @@ impl ProviderConnector for OpenCodeProviderConnector {
         if status == 401 || status == 403 {
             return Err(ProviderError::CredentialInvalid);
         }
+        if status == 404 {
+            // Unknown provider id: validated against the live list, never echoed
+            // in a human message (design §17).
+            return Err(ProviderError::NotFound(provider_id.to_owned()));
+        }
         if !(200..300).contains(&status) {
             return Err(ProviderError::ConnectFailed(status.to_string()));
         }
@@ -154,6 +159,9 @@ impl ProviderConnector for OpenCodeProviderConnector {
             &format!("/api/integration/{provider_id}/connect/oauth"),
             &body,
         )?;
+        if status == 404 {
+            return Err(ProviderError::NotFound(provider_id.to_owned()));
+        }
         if !(200..300).contains(&status) {
             return Err(ProviderError::OAuthFailed(status.to_string()));
         }
@@ -300,6 +308,13 @@ impl ProviderConnector for OpenCodeProviderConnector {
         let (status, _) =
             self.post(&format!("/session/{session_id}/prompt_async"), &prompt_body)?;
         if status == 401 || status == 403 {
+            // A 401/403 against a provider that already has a stored credential
+            // means the credential was revoked -> "volver a conectar" (design
+            // §15/§18); an invalid key at connect time stays CredentialInvalid.
+            if self.provider_has_connection(provider_id)? {
+                log_event("test failed outcome=credential_revoked");
+                return Err(ProviderError::CredentialRevoked);
+            }
             return failed_test(ConnectionTestOutcome::CredentialInvalid);
         }
         if status == 404 {
@@ -333,6 +348,14 @@ impl ProviderConnector for OpenCodeProviderConnector {
 }
 
 impl OpenCodeProviderConnector {
+    /// Whether the provider currently has at least one stored connection.
+    fn provider_has_connection(&self, provider_id: &str) -> ProviderResult<bool> {
+        let entries = self.fetch_integrations()?;
+        Ok(Self::find_integration(&entries, provider_id)
+            .map(|entry| !map_connections(entry).is_empty())
+            .unwrap_or(false))
+    }
+
     fn fetch_provider_defaults(&self) -> HashMap<String, String> {
         let Ok((status, body)) = self.get("/config/providers") else {
             return HashMap::new();
