@@ -4,11 +4,19 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type {
   AgentTaskEvent,
   AppError,
+  ConnectionTest,
+  ConnectionView,
   CreationView,
   MaterialView,
+  ModelSummary,
+  OAuthAttempt,
+  OAuthStatus,
   ProjectSummary,
   ProjectView,
+  ProviderDetail,
+  ProviderSummary,
   PublicationView,
+  SelectedModelView,
 } from "./types";
 
 export const api = {
@@ -43,6 +51,32 @@ export const api = {
     const selected = await openDialog({ multiple: false, directory: false });
     return typeof selected === "string" ? selected : null;
   },
+
+  // -- M7 provider/model surface ----------------------------------------------
+
+  providerList: () => invoke<ProviderSummary[]>("provider_list"),
+  providerDetail: (providerId: string) => invoke<ProviderDetail>("provider_detail", { providerId }),
+  providerConnectKey: (providerId: string, key: string, label?: string | null) =>
+    invoke<ConnectionView>("provider_connect_key", { providerId, key, label: label ?? null }),
+  providerOauthBegin: (providerId: string, methodId: string) =>
+    invoke<OAuthAttempt>("provider_oauth_begin", { providerId, methodId }),
+  providerOauthStatus: (attemptId: string) =>
+    invoke<OAuthStatus>("provider_oauth_status", { attemptId }),
+  providerOauthComplete: (attemptId: string, code?: string | null) =>
+    invoke<ConnectionView>("provider_oauth_complete", { attemptId, code: code ?? null }),
+  providerOauthCancel: (attemptId: string) => invoke<void>("provider_oauth_cancel", { attemptId }),
+  providerOauthOpen: (url: string) => invoke<void>("provider_oauth_open", { url }),
+  providerDisconnect: (credentialId: string) =>
+    invoke<void>("provider_disconnect", { credentialId }),
+  providerTestConnection: (providerId: string, modelId?: string | null) =>
+    invoke<ConnectionTest>("provider_test_connection", {
+      providerId,
+      modelId: modelId ?? null,
+    }),
+  modelList: () => invoke<ModelSummary[]>("model_list"),
+  modelSelect: (providerId: string, modelId: string) =>
+    invoke<void>("model_select", { providerId, modelId }),
+  modelGetSelected: () => invoke<SelectedModelView>("model_get_selected"),
 };
 
 export function isAppError(value: unknown): value is AppError {

@@ -37,6 +37,22 @@ describe("App", () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "project_list") return Promise.resolve(summary);
       if (cmd === "project_open") return Promise.resolve(projectView);
+      if (cmd === "model_list") return Promise.resolve([]);
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "model_get_selected") {
+        return Promise.resolve({
+          model: {
+            providerId: "opencode",
+            modelId: "big-pickle",
+            name: "big-pickle",
+            free: true,
+            recommended: true,
+            deprecated: false,
+          },
+          notice: null,
+          requiresChoice: false,
+        });
+      }
       return Promise.resolve(undefined);
     });
 
@@ -54,10 +70,55 @@ describe("App", () => {
   });
 
   it("shows the projects view as the landing screen", async () => {
-    invokeMock.mockResolvedValueOnce(summary);
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "project_list") return Promise.resolve(summary);
+      if (cmd === "model_list") return Promise.resolve([]);
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "model_get_selected") {
+        return Promise.resolve({
+          model: {
+            providerId: "opencode",
+            modelId: "big-pickle",
+            name: "big-pickle",
+            free: true,
+            recommended: true,
+            deprecated: false,
+          },
+          notice: null,
+          requiresChoice: false,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
     render(<App />);
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Tus proyectos" })).toBeInTheDocument(),
     );
+  });
+
+  it("opens the Conectá tu IA panel from the app bar", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "project_list") return Promise.resolve(summary);
+      if (cmd === "model_list") return Promise.resolve([]);
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "model_get_selected") {
+        return Promise.resolve({
+          model: {
+            providerId: "opencode",
+            modelId: "big-pickle",
+            name: "big-pickle",
+            free: true,
+            recommended: true,
+            deprecated: false,
+          },
+          notice: null,
+          requiresChoice: false,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Conectá tu IA" }));
+    expect(await screen.findByRole("dialog", { name: "Conectá tu IA" })).toBeInTheDocument();
   });
 });

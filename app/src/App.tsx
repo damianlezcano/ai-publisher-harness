@@ -3,6 +3,8 @@ import { api, errorMessage } from "./api";
 import type { AgentPhase, ProjectSummary, ProjectView } from "./types";
 import ProjectsView from "./components/ProjectsView";
 import WorkspaceView from "./components/WorkspaceView";
+import ModelSelector from "./components/provider/ModelSelector";
+import ProviderPanel from "./components/provider/ProviderPanel";
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -11,6 +13,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
   const [agentMessage, setAgentMessage] = useState<string | null>(null);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [providerRefreshKey, setProviderRefreshKey] = useState(0);
 
   const refreshProjects = useCallback(async () => {
     setProjects(await api.projectList());
@@ -79,6 +83,12 @@ export default function App() {
     void refreshProjects();
   }, [refreshProjects]);
 
+  const providerChanged = useCallback(() => {
+    // Credential mutations or a model selection can change the catalog;
+    // bump the key so the selector reloads its groups/selection.
+    setProviderRefreshKey((k) => k + 1);
+  }, []);
+
   if (loading) {
     return (
       <main className="app" aria-busy="true">
@@ -89,6 +99,18 @@ export default function App() {
 
   return (
     <main className="app">
+      <header className="app-bar">
+        <span className="app-title">EducAI</span>
+        <ModelSelector refreshKey={providerRefreshKey} />
+        <button type="button" className="secondary" onClick={() => setProviderOpen(true)}>
+          Conectá tu IA
+        </button>
+      </header>
+
+      {providerOpen && (
+        <ProviderPanel onClose={() => setProviderOpen(false)} onChanged={providerChanged} />
+      )}
+
       {selectedId && project ? (
         <WorkspaceView
           project={project}

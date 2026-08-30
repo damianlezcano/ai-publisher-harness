@@ -280,6 +280,172 @@ textarea {
   border: 0;
 }
 
+/* -- M7: provider / model surface ------------------------------------------- */
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.app-title {
+  font-weight: 700;
+  font-size: 1.2rem;
+}
+
+.model-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-label {
+  font-weight: 600;
+}
+
+.model-selector select {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  max-width: 260px;
+}
+
+.model-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.model-badge.free {
+  background: #e3f5e9;
+  color: var(--ok);
+}
+
+.model-badge.paid {
+  background: #f1f1f8;
+  color: var(--muted);
+}
+
+.notice {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 4px 0;
+}
+
+.provider-dialog {
+  max-width: 640px;
+  max-height: 82vh;
+  overflow-y: auto;
+}
+
+.provider-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-panel-header h2 {
+  margin: 0;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.provider-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 8px;
+}
+
+.provider-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-others {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fbfbfe;
+}
+
+.provider-card.connected {
+  border-color: #b9e6c6;
+}
+
+.provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.provider-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.provider-state {
+  font-size: 0.78rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.provider-state.ok {
+  background: #e3f5e9;
+  color: var(--ok);
+}
+
+.provider-body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-method {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.oauth-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.oauth-box .muted {
+  margin: 0;
+}
+
+.status.published {
+  color: var(--ok);
+  font-weight: 700;
+}
+
 @media (min-width: 900px) {
   .workspace-grid {
     grid-template-columns: 1fr 1fr;

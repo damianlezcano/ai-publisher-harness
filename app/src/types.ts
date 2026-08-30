@@ -45,3 +45,86 @@ export interface AppError {
 }
 
 export type AgentPhase = "idle" | "working" | "completed" | "failed";
+
+// -- M7 provider/model surface ------------------------------------------------
+
+export type AuthMethodKind = "api_key" | "account";
+
+export interface AuthPrompt {
+  key: string;
+  message: string;
+  kind: "text" | "select";
+  options: string[];
+  placeholder: string | null;
+  optional: boolean;
+}
+
+export interface AuthMethodView {
+  kind: AuthMethodKind;
+  methodId: string | null;
+  label: string;
+  prompts: AuthPrompt[];
+}
+
+export interface ConnectionView {
+  id: string;
+  label: string | null;
+}
+
+export interface ProviderSummary {
+  id: string;
+  name: string;
+  authMethods: AuthMethodView[];
+  connected: boolean;
+  connectionLabel: string | null;
+  highlighted: boolean;
+}
+
+export interface ProviderDetail {
+  id: string;
+  name: string;
+  authMethods: AuthMethodView[];
+  connections: ConnectionView[];
+}
+
+export interface ModelSummary {
+  providerId: string;
+  modelId: string;
+  name: string;
+  free: boolean;
+  recommended: boolean;
+  deprecated: boolean;
+}
+
+export type OAuthMode = "auto" | "code";
+export type OAuthStatusKind = "pending" | "complete" | "failed" | "expired";
+
+export interface OAuthAttempt {
+  attemptId: string;
+  url: string;
+  instructions: string | null;
+  mode: OAuthMode;
+}
+
+export interface OAuthStatus {
+  status: OAuthStatusKind;
+  message: string | null;
+}
+
+export type ConnectionTestOutcome =
+  | "connected"
+  | "credential_invalid"
+  | "provider_unavailable"
+  | "no_compatible_model"
+  | "network_error";
+
+export interface ConnectionTest {
+  outcome: ConnectionTestOutcome;
+  message: string;
+}
+
+export interface SelectedModelView {
+  model: ModelSummary;
+  notice: string | null;
+  requiresChoice: boolean;
+}
