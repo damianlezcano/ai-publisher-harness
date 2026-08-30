@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Manual, optional Fedora smoke test for M5 OpenCode agent integration.
+#
+# NOT part of `scripts/verify`. Requires `opencode` on PATH and a configured,
+# available (preferably cheap/free) model. It starts an isolated `opencode serve`
+# on loopback, sends a minimal deterministic task, verifies a produced artifact,
+# then shuts down and always cleans up.
+#
+# Exit codes: 0 = PASS, 3 = SKIP (no opencode or no usable model), 1 = FAIL.
+
+set -u
+
+SCRIPT="$(basename "$0")"
+WORKDIR="$(mktemp -d)"
+CFG="$WORKDIR/config"
+SERVER_LOG="$WORKDIR/server.log"
+SERVER_PID=""
+PORT=""
+
+cleanup() {
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill -TERM "$SERVER_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep 1; done
+    kill -KILL "$SERVER_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT INT TERM
+
+command -v opencode >/dev/null 2>&1 || { echo "$SCRIPT: SKIP: opencode not found" >&2; exit 3; }
+command -v curl >/dev/null 2>&1 || { echo "$SCRIPT: FAIL: curl is required" >&2; exit 1; }
+
+# Version gate.
+VERSION="$(opencode --version 2>/dev/null | head -1 | tr -d '[:space:]')"
+echo "$SCRIPT: opencode version $VERSION"
+# Require >=1.18 (the tested line). Accept any 1.x >= 1.18.
+MAJOR="${VERSION%%.*}"; MINOR="$(echo "$VERSION" | cut -d. -f2)"
+if [[ -z "$MAJOR" || "$MAJOR" -ne 1 || "${MINOR:-0}" -lt 18 ]]; then
+  echo "$SCRIPT: FAIL: unsupported opencode version $VERSION (need >=1.18)" >&2
+  exit 1
+fi
+
+# Isolated config (no developer ~/.config/opencode interference).
+mkdir -p "$CFG" "$WORKDIR/project/workspace"
+PORT="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+
+XDG_CONFIG_HOME="$CFG" XDG_DATA_HOME="$CFG/data" XDG_CACHE_HOME="$CFG/cache" \
+XDG_STATE_HOME="$CFG/state" \
+opencode serve --hostname 127.0.0.1 --port "$PORT" --pure \
+  >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+
+# Readiness.
+READY=""
+for _ in $(seq 1 30); do
+  READY="$(curl -fsSL "http://127.0.0.1:$PORT/global/health" 2>/dev/null | grep -o '"healthy":true' || true)"
+  [[ -n "$READY" ]] && break
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+  sleep 1
+done
+[[ -n "$READY" ]] || { echo "$SCRIPT: FAIL: opencode serve did not become ready" >&2; exit 1; }
+echo "$SCRIPT: backend ready on 127.0.0.1:$PORT"
+
+# Create session pointing at the temp project workspace.
+SESSION="$(curl -fsSL -X POST "http://127.0.0.1:$PORT/session" \
+  -H 'Content-Type: application/json' \
+  -d "{\"directory\":\"$WORKDIR/project/workspace\"}" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+[[ -n "$SESSION" ]] || { echo "$SCRIPT: FAIL: could not create session" >&2; exit 1; }
+echo "$SCRIPT: session $SESSION"
+
+# Minimal deterministic task: ask for a single plain-text file in workspace/.
+curl -fsSL -X POST "http://127.0.0.1:$PORT/session/$SESSION/prompt_async" \
+  -H 'Content-Type: application/json' \
+  -d '{"parts":[{"type":"text","text":"Create a single plain text file named smoke.txt in the current directory containing exactly the words: smoke-ok"}]}' \
+  >/dev/null 2>&1 || true
+
+# Poll for completion (idle) up to ~90s.
+DONE=""
+for _ in $(seq 1 90); do
+  STATE="$(curl -fsSL "http://127.0.0.1:$PORT/session/$SESSION" 2>/dev/null | grep -oE '"status":"[a-z]+"' | head -1 || true)"
+  case "$STATE" in
+    *idle*|*done*) DONE=1; break ;;
+    *error*|*failed*|*aborted*) break ;;
+  esac
+  sleep 1
+done
+
+# Artifact detection: the workspace must now contain smoke.txt with the marker.
+ARTIFACT="$WORKDIR/project/workspace/smoke.txt"
+if [[ -n "$DONE" && -f "$ARTIFACT" && "$(cat "$ARTIFACT" 2>/dev/null)" == "smoke-ok" ]]; then
+  echo "$SCRIPT: PASS: workspace/smoke.txt -> smoke-ok"
+  exit 0
+fi
+
+if [[ ! -f "$ARTIFACT" ]]; then
+  echo "$SCRIPT: SKIP: no artifact produced (no usable model/provider?); server log:" >&2
+  tail -5 "$SERVER_LOG" >&2 || true
+  exit 3
+fi
+echo "$SCRIPT: FAIL: artifact present but wrong content" >&2
+exit 1

@@ -66,3 +66,17 @@ The real Quick Tunnel round trip is a manual, optional smoke test
 (`scripts/smoke-cloudflare`, Fedora-only). It is never part of `scripts/verify`
 and SKIPs cleanly when `cloudflared` is not installed; release correctness must
 not depend on it.
+
+## M5 agent behavior
+
+M5 adds named offline suites for `project-process` (`supervisor`) and
+`project-agent` (`models`, `opencode_adapter`, `agent_service`,
+`agent_security`, `agent_lifecycle`). Commands match `docs/M5_DESIGN.md`. All M5
+suites are deterministic and offline: they use `FakeAgentEngine`, an in-process
+fake OpenCode HTTP server, and the generic `fake-process` executable; none
+contact the Internet, a real OpenCode server, or an AI provider.
+
+The real OpenCode round trip is a manual, optional smoke test
+(`scripts/smoke-opencode`, Fedora-only). It is never part of `scripts/verify`
+and SKIPs cleanly when `opencode` or a usable model is unavailable; release
+correctness must not depend on it.

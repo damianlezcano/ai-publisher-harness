@@ -1,6 +1,8 @@
 # M5 OpenCode Agent Integration Design
 
-Status: Approved for implementation. ADR-0006 is Accepted.
+Status: Approved and implemented. ADR-0006 is Accepted. M5 closed on
+2026-08-30; `./scripts/verify` reports `M5 contract passed` and `git diff
+--check` is clean.
 
 ## 1. Resumen ejecutivo
 
