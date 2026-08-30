@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Manual, optional Fedora smoke test for M7 AI provider onboarding.
+#
+# NOT part of `scripts/verify`. Requires `opencode` on PATH, `curl`, and a usable
+# free model in the isolated catalog. It starts an isolated `opencode serve` on
+# loopback, lists integrations/models, finds a zero-credential free model,
+# runs a trivial generation on it, then shuts down and always cleans up.
+#
+# Exit codes: 0 = PASS, 3 = SKIP (no opencode or no usable free model),
+# 1 = FAIL.
+
+set -u
+
+SCRIPT="$(basename "$0")"
+WORKDIR="$(mktemp -d)"
+CFG="$WORKDIR/config"
+SERVER_LOG="$WORKDIR/server.log"
+SERVER_PID=""
+PORT=""
+
+cleanup() {
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill -TERM "$SERVER_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep 1; done
+    kill -KILL "$SERVER_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT INT TERM
+
+command -v opencode >/dev/null 2>&1 || { echo "$SCRIPT: SKIP: opencode not found" >&2; exit 3; }
+command -v curl >/dev/null 2>&1 || { echo "$SCRIPT: FAIL: curl is required" >&2; exit 1; }
+
+VERSION="$(opencode --version 2>/dev/null | head -1 | tr -d '[:space:]')"
+echo "$SCRIPT: opencode version $VERSION"
+MAJOR="${VERSION%%.*}"; MINOR="$(echo "$VERSION" | cut -d. -f2)"
+if [[ -z "$MAJOR" || "$MAJOR" -ne 1 || "${MINOR:-0}" -lt 18 ]]; then
+  echo "$SCRIPT: FAIL: unsupported opencode version $VERSION (need >=1.18)" >&2
+  exit 1
+fi
+
+mkdir -p "$CFG" "$WORKDIR/project/workspace"
+PORT="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+
+cd "$WORKDIR"
+XDG_CONFIG_HOME="$CFG" XDG_DATA_HOME="$CFG/data" XDG_CACHE_HOME="$CFG/cache" \
+XDG_STATE_HOME="$CFG/state" \
+opencode serve --hostname 127.0.0.1 --port "$PORT" --pure \
+  >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+
+READY=""
+for _ in $(seq 1 30); do
+  READY="$(curl -fsSL "http://127.0.0.1:$PORT/global/health" 2>/dev/null | grep -o '"healthy":true' || true)"
+  [[ -n "$READY" ]] && break
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+  sleep 1
+done
+[[ -n "$READY" ]] || { echo "$SCRIPT: FAIL: opencode serve did not become ready" >&2; exit 1; }
+echo "$SCRIPT: backend ready on 127.0.0.1:$PORT"
+
+# Provider discovery (integration list).
+INTEGRATIONS="$(curl -fsSL "http://127.0.0.1:$PORT/api/integration" 2>/dev/null || true)"
+if [[ -z "$INTEGRATIONS" ]]; then
+  echo "$SCRIPT: SKIP: /api/integration returned nothing" >&2
+  exit 3
+fi
+echo "$SCRIPT: integrations available ($(echo "$INTEGRATIONS" | grep -o '"id"' | wc -l | tr -d ' ') entries)"
+
+# Model discovery: find a free (cost 0) enabled model under provider "opencode".
+MODEL_ID="$(curl -fsSL "http://127.0.0.1:$PORT/api/model" 2>/dev/null \
+  | python3 -c '
+import json, sys
+try:
+    models = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(models, list):
+    sys.exit(0)
+free = [m for m in models
+        if m.get("providerID") == "opencode"
+        and m.get("cost", -1) == 0
+        and m.get("status") not in ("disabled", "deprecated")]
+if not free:
+    free = [m for m in models
+            if m.get("cost", -1) == 0
+            and m.get("status") not in ("disabled", "deprecated")]
+print(free[0]["id"] if free else "")
+' 2>/dev/null || true)"
+
+if [[ -z "$MODEL_ID" ]]; then
+  echo "$SCRIPT: SKIP: no usable free model in the isolated catalog" >&2
+  exit 3
+fi
+echo "$SCRIPT: free model: $MODEL_ID"
+
+# Trivial generation on the free model in a throwaway session.
+SESSION="$(curl -fsSL -X POST "http://127.0.0.1:$PORT/session" \
+  -H 'Content-Type: application/json' \
+  -d "{\"directory\":\"$WORKDIR/project/workspace\"}" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+[[ -n "$SESSION" ]] || { echo "$SCRIPT: FAIL: could not create session" >&2; exit 1; }
+
+curl -fsSL -X POST "http://127.0.0.1:$PORT/session/$SESSION/prompt_async" \
+  -H 'Content-Type: application/json' \
+  -d "{\"parts\":[{\"type\":\"text\",\"text\":\"Respondé: ok\"}],\"model\":{\"providerID\":\"opencode\",\"modelID\":\"$MODEL_ID\"}}" \
+  >/dev/null 2>&1 || true
+
+DONE=""
+for _ in $(seq 1 60); do
+  STATE="$(curl -fsSL "http://127.0.0.1:$PORT/session/$SESSION" 2>/dev/null | grep -oE '"status":"[a-z]+"' | head -1 || true)"
+  case "$STATE" in
+    *idle*|*done*) DONE=1; break ;;
+    *error*|*failed*|*aborted*) break ;;
+  esac
+  sleep 1
+done
+
+if [[ -n "$DONE" ]]; then
+  echo "$SCRIPT: PASS: free model $MODEL_ID generated successfully"
+  exit 0
+fi
+echo "$SCRIPT: SKIP: free model did not complete (no usable model/provider?); server log:" >&2
+tail -5 "$SERVER_LOG" >&2 || true
+exit 3
