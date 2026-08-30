@@ -17,7 +17,8 @@ for spec in \
   'medium-fallback opencode opencode-go/qwen3.8-max' \
   'medium-high opencode opencode-go/deepseek-v4-flash' \
   'medium-high-fallback opencode opencode-go/kimi-k2.7-code' \
-  'high-coding opencode opencode-go/kimi-k2.7-code'; do
+  'high-coding opencode opencode-go/kimi-k2.7-code' \
+  'high-architecture opencode opencode-go/deepseek-v4-pro'; do
   read -r role provider expected <<<"$spec"
   output=$(./scripts/agent-launch --role "$role" --provider "$provider" --check-config)
   grep -Fxq "MODEL_REQUESTED: $expected" <<<"$output"

@@ -1,6 +1,6 @@
 # M7 AI Provider Onboarding Design
 
-Status: Approved. ADR-0008 and ADR-0009 are Accepted. Not implemented.
+Status: Approved and implemented. ADR-0008 and ADR-0009 are Accepted. Closed on 2026-08-30; `./scripts/verify` reports `M7 contract passed` and `git diff --check` is clean.
 
 ## 1. Executive summary
 

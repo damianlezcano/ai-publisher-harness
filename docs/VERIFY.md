@@ -103,3 +103,31 @@ The Tauri `cargo check` requires the WebKitGTK 4.1 system packages
 (`webkit2gtk4.1-devel` on Fedora); verify reports a clear failure if they are
 missing. The real end-to-end desktop demo is manual (`pnpm --dir app run dev` +
 `cargo tauri dev`-equivalent), never part of verify.
+
+## M7 provider/model behavior
+
+M7 adds the `project-opencode` crate (shared `OpenCodeBackend`) and the
+`project-provider` crate (`ProviderConnector` port + `OpenCodeProviderConnector`
+adapter). On top of the M6 checks, `scripts/verify` adds:
+
+```bash
+cargo test --locked -p project-opencode --all-targets
+cargo test --locked -p project-provider --test provider_models
+cargo test --locked -p project-provider --test provider_adapter
+cargo test --locked -p project-provider --test provider_service
+cargo test --locked -p project-provider --test provider_security
+cargo test --locked -p project-provider --test provider_lifecycle
+cargo test --locked -p project-app --all-targets
+```
+
+The provider frontend components are covered by the existing `pnpm` suite
+(install, format:check, lint, typecheck, test), and the Tauri shell by
+`cargo check --manifest-path app/src-tauri/Cargo.toml`. All M7 suites are
+deterministic and offline: they use `FakeProviderConnector` and an in-process
+fake OpenCode server; none contact the Internet, a real provider, or a real
+credential. When all M7 checks pass, the final gate prints
+`verify: M7 contract passed`.
+
+The real provider round trip is a manual, optional smoke test
+(`scripts/smoke-provider`, Fedora-only). It is never part of `scripts/verify`
+and never replaces the local gate.

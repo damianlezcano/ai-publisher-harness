@@ -6,26 +6,27 @@
 
 ## Estado actual
 
-- Current milestone: M7 — AI Provider Onboarding
-- Current phase: DESIGN_APPROVED_IMPLEMENTATION_PENDING
-- Current main commit: ver `git log -1` tras el commit de cierre de diseño
-- M1-M6: completados y cerrados
-- verify: PASS (M0 harness + M6 contract)
+- Current milestone: M7 — AI Provider Onboarding — **CLOSED / implementado**
+- Current phase: IMPLEMENTED_CLOSED
+- Current main commit: ver `git log -1` tras el commit de cierre de M7
+- M1-M7: completados y cerrados
+- verify: PASS — "M7 contract passed"
 - git diff --check: limpio
-- Worktrees: solo `main`; sin worktrees/panes de M7 abiertos
+- Worktrees: solo `main`; worktrees históricos de tareas M7 limpiados
+- Siguiente milestone: M8 — Attachments / advanced resource UX (no iniciado)
 
 ## ADRs
 
-- ADR-0008 (Accepted): provider onboarding vía API de integraciones de OpenCode.
-- ADR-0009 (Accepted): selección simplificada de modelo + política free-model.
-- ADR-0001..0007: Accepted (previos).
+- ADR-0001..0009: Accepted (ninguno reabierto).
+- ADR-0008 (Accepted): provider onboarding vía API de integraciones de OpenCode — implementado.
+- ADR-0009 (Accepted): selección simplificada de modelo + política free-model — implementado.
 
-## Decisiones de arquitectura (aprobadas)
+## Decisiones de arquitectura (aprobadas e implementadas)
 
 - La app NO es un segundo provider framework. OpenCode sigue siendo la capa de
   provider integrations / auth mechanisms / auth flows / model discovery /
   connection state. Nuestra app es un **conductor fino y seguro**:
-  Frontend → Application facade → `ProviderIntegrationPort` → OpenCode API.
+  Frontend → Application facade → `ProviderConnectorPort` → OpenCode API.
 - **Credential ownership**: pertenece a OpenCode dentro de su config/data
   aislada. M7 NO tiene CredentialStore propio. La app: recibe el secreto una vez
   (frontend), lo envía por loopback al endpoint de integración de OpenCode,
@@ -39,10 +40,10 @@
 - **Free-model policy**: modelos zero-credential/cost:0 de OpenCode como opción
   inicial de bajo roce. No prometer permanencia, no cambiar silenciosamente a
   modelos pagos ni de provider; si desaparecen, informar claramente.
-- **Shared OpenCodeBackend**: extracción mecánica de `OpenCodeBackend` desde
-  `OpenCodeAgentEngine` a `project-opencode` (o boundary equivalente). Un único
-  backend `opencode serve` compartido por AgentEngine + ProviderIntegration. NO
-  duplicar procesos.
+- **Shared OpenCodeBackend**: extraído a `project-opencode`. Un único
+  backend `opencode serve` compartido por AgentEngine + ProviderConnector. NO
+  duplicar procesos. Cualquier mutación de credencial reinicia el backend;
+  la selección de modelo aplica por prompt sin reiniciar.
 
 ## OpenCode research (instalado/testeado)
 
@@ -71,24 +72,23 @@
 - 212 integrations totales; `env` no se ofrece en UX M7.
 - Modelos gratis: provider `opencode` (`*-free`, `apiKey:"public"`, `cost:0`).
 
-## Task graph (M7_DESIGN §27-30)
+## Task graph (M7_DESIGN §27-30) — completado
 
-| # | Task | Level | Dep | Worktree |
-| --- | --- | --- | --- | --- |
-| 1 | Extraer `project-opencode` (`OpenCodeBackend`) + migrar `OpenCodeAgentEngine`; M1-M6 verdes | HIGH_CODING | 0 | `m7/opencode-backend` |
-| 2 | `project-provider`: port + models + errors + `SecretString` + `FakeProviderConnector` | MEDIUM | 1 | `m7/provider-models` |
-| 3 | `OpenCodeProviderConnector` adapter + extender `fake_opencode_server` | HIGH_CODING | 2 | `m7/provider-adapter` |
-| 4 | `ProviderService`: selección/settings + test-connection + restart-on-mutation | HIGH_CODING | 3 | `m7/provider-service` |
-| 5 | `project-app`: backend compartido, facade provider/model + DTOs + error map | MEDIUM_HIGH | 4 | `m7/app-provider` |
-| 6 | Tauri commands + capabilities + state | MEDIUM | 5 | `m7/tauri-provider` |
-| 7 | Frontend "Conectá tu IA" + selector de modelo + tests | MEDIUM | 6 | `m7/provider-ui` |
-| 8 | Security + lifecycle tests + verify + smoke | MEDIUM/HIGH | 7 | `m7/provider-tests` |
-| 9 | Gate/docs/ADR + verify | HIGH_ARCHITECTURE | 8 | main |
+| # | Task | Level | Estado |
+| --- | --- | --- | --- |
+| 1 | Extraer `project-opencode` (`OpenCodeBackend`) + migrar `OpenCodeAgentEngine`; M1-M6 verdes | HIGH_CODING | DONE |
+| 2 | `project-provider`: port + models + errors + `SecretString` + `FakeProviderConnector` | MEDIUM | DONE |
+| 3 | `OpenCodeProviderConnector` adapter + extender `fake_opencode_server` | HIGH_CODING | DONE |
+| 4 | `ProviderService`: selección/settings + test-connection + restart-on-mutation | HIGH_CODING | DONE |
+| 5 | `project-app`: backend compartido, facade provider/model + DTOs + error map | MEDIUM_HIGH | DONE |
+| 6 | Tauri commands + capabilities + state | MEDIUM | DONE |
+| 7 | Frontend "Conectá tu IA" + selector de modelo + tests | MEDIUM | DONE |
+| 8 | Security + lifecycle tests + verify + smoke | MEDIUM/HIGH | DONE |
+| 9 | Gate/docs/ADR + verify | HIGH_ARCHITECTURE | DONE (cierre) |
 
-- **Pre-M7 refactor (task 1)**: mecánico y funcionalmente equivalente; NO cambiar
-  el behavior externo de `AgentService`; `./scripts/verify` y `git diff --check`
-  PASS antes de implementar onboarding.
-- **Next recommended implementation task**: #1 (extracción `OpenCodeBackend`).
+- Tareas 1-8 aterrizaron en `main`; la tarea 9 cierra el milestone en el repo.
+- M7 NO implementó alcance M8 (attachments / advanced resource UX: clipboard
+  image paste, rich previews, embedded web preview). Ese boundary queda intacto.
 
 ## Model policy (implementación)
 
@@ -103,7 +103,7 @@
 ## Documents required by fresh implementation session
 
 - CODEX_HANDOFF.md, docs/AGENT_POLICY.md, docs/ARCHITECTURE.md, docs/SECURITY.md
-- docs/M7_DESIGN.md (diseño aprobado, 35 secciones)
+- docs/M7_DESIGN.md (diseño aprobado e implementado, 35 secciones)
 - docs/decisions/0008-*, 0009-* (Accepted)
 - docs/M5_DESIGN.md, docs/M6_DESIGN.md (boundaries, adapter/backend)
 - docs/VERIFY.md (§M7), docs/WORKTREES.md, docs/MULTI_AGENT_WORKFLOW.md

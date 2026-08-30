@@ -9,7 +9,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/agent-launch --role ROLE --provider cursor|opencode [options]
 
-Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding
+Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, high-architecture
 Options:
   --worktree PATH  Required for --launch.
   --pane ID        Required for --launch; Herdr pane ID.
@@ -53,6 +53,7 @@ case "$role/$provider" in
   medium-high-fallback/opencode) model=$MEDIUM_HIGH_FALLBACK_OPENCODE_MODEL ;;
   high-coding/cursor) model=$HIGH_CODING_CURSOR_MODEL ;;
   high-coding/opencode) model=$HIGH_CODING_OPENCODE_MODEL ;;
+  high-architecture/opencode) model=$HIGH_ARCHITECTURE_OPENCODE_MODEL ;;
   *) echo "agent-launch: unsupported role/provider: $role/$provider" >&2; exit 2 ;;
 esac
 
@@ -68,6 +69,7 @@ case "$model" in
   opencode-go/deepseek-v4-flash) model_display='DeepSeek V4 Flash OpenCode Go' ;;
   opencode-go/qwen3.8-max) model_display='Qwen3.8 Max OpenCode Go' ;;
   opencode-go/kimi-k2.7-code) model_display='Kimi K2.7 Code OpenCode Go' ;;
+  opencode-go/deepseek-v4-pro) model_display='DeepSeek V4 Pro (New) OpenCode Go' ;;
   *) echo "agent-launch: FAIL CLOSED: no active-model display matcher for $model" >&2; exit 3 ;;
 esac
 
