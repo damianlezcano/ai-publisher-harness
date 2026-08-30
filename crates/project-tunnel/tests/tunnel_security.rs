@@ -5,19 +5,30 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
+use project_process::ChildGuard;
 use project_tunnel::TunnelError;
 use project_tunnel::model::{LocalOrigin, PublicBaseUrl};
-use project_tunnel::supervisor::ChildGuard;
 
 fn fake_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_fake-cloudflared"))
+    let exe = std::env::current_exe().expect("current test executable");
+    let mut dir = exe.parent().expect("exe parent").to_path_buf();
+    if dir.file_name().is_some_and(|name| name == "deps") {
+        dir.pop();
+    }
+    let bin = dir.join(format!("fake-process{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        bin.is_file(),
+        "fake-process binary not found at {}",
+        bin.display()
+    );
+    bin
 }
 
 fn spawn_child(mode: &str, envs: &[(&str, String)]) -> ChildGuard {
     let binary = fake_binary();
-    let mut vars: Vec<(String, String)> = vec![("FAKE_CLOUDFLARED_MODE".to_string(), mode.into())];
+    let mut vars: Vec<(String, String)> = vec![("FAKE_PROCESS_MODE".to_string(), mode.into())];
     vars.extend(envs.iter().map(|(k, v)| (k.to_string(), v.clone())));
-    ChildGuard::spawn(&binary, &[], &vars).expect("spawn fake-cloudflared")
+    ChildGuard::spawn(&binary, &[], &vars).expect("spawn fake-process")
 }
 
 fn process_exists(pid: u32) -> bool {
@@ -51,7 +62,7 @@ fn sensitive_key(key: &str) -> bool {
         "CREDENTIAL",
     ]
     .iter()
-    .any(|needle| upper.contains(needle))
+    .any(|needle| upper.contains(*needle))
 }
 
 #[test]
@@ -151,12 +162,12 @@ fn no_env_leakage_to_child() {
         "child must receive HOME, printed: {lines:?}"
     );
     assert_eq!(
-        printed.get("FAKE_CLOUDFLARED_MODE").map(String::as_str),
+        printed.get("FAKE_PROCESS_MODE").map(String::as_str),
         Some("env")
     );
 
     for key in printed.keys() {
-        if key == "FAKE_CLOUDFLARED_MODE" {
+        if key == "FAKE_PROCESS_MODE" {
             continue;
         }
         assert!(
@@ -170,7 +181,7 @@ fn no_env_leakage_to_child() {
         assert_eq!(
             printed.len(),
             3,
-            "child env should be exactly PATH, HOME, FAKE_CLOUDFLARED_MODE, printed: {printed:?}"
+            "child env should be exactly PATH, HOME, FAKE_PROCESS_MODE, printed: {printed:?}"
         );
     }
 

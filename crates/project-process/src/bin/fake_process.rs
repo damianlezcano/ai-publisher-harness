@@ -1,49 +1,35 @@
-//! Test double for `cloudflared`, controlled by `FAKE_CLOUDFLARED_MODE`.
+//! Generic test double for a supervised child, controlled by `FAKE_PROCESS_MODE`
+//! and optional `FAKE_PROCESS_LINE` / `FAKE_PROCESS_LINE2`.
 
 use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
-const BANNER: &str = "2026-01-01T00:00:00Z INF Your quick Tunnel has been created!";
-const URL_LINE: &str = "2026-01-01T00:00:01Z INF https://fake-123.trycloudflare.com";
-
 fn main() {
-    let mode = std::env::var("FAKE_CLOUDFLARED_MODE").unwrap_or_default();
+    let mode = std::env::var("FAKE_PROCESS_MODE").unwrap_or_default();
+    let line = std::env::var("FAKE_PROCESS_LINE").unwrap_or_default();
     match mode.as_str() {
-        "url" => {
-            println!("{BANNER}");
-            println!("{URL_LINE}");
+        "print" => {
+            println!("{line}");
             sleep_forever();
         }
-        "url_stderr" => {
-            eprintln!("{URL_LINE}");
+        "print_stderr" => {
+            eprintln!("{line}");
             let _ = io::stderr().flush();
             sleep_forever();
         }
-        "url_then_exit" => {
-            println!("{URL_LINE}");
+        "print_then_exit" => {
+            println!("{line}");
         }
-        "exit_before_url" => {
-            println!("starting fake cloudflared");
-            println!("no public hostname in this mode");
+        "print_two" => {
+            let line2 = std::env::var("FAKE_PROCESS_LINE2").unwrap_or_default();
+            println!("{line}");
+            println!("{line2}");
+            sleep_forever();
+        }
+        "exit" => {
+            println!("no output");
             std::process::exit(1);
-        }
-        "garbage" => {
-            println!("http://evil.example.com");
-            println!("https://not-trycloudflare.example.com/x");
-            sleep_forever();
-        }
-        "garbage_then_url" => {
-            println!("http://evil.example.com");
-            println!("https://not-trycloudflare.example.com/x");
-            println!("{URL_LINE}");
-            sleep_forever();
-        }
-        "url_ignore_term" => {
-            println!("{BANNER}");
-            println!("{URL_LINE}");
-            ignore_sigterm();
-            sleep_forever();
         }
         "flood" => {
             for i in 0..50_000 {
@@ -55,7 +41,7 @@ fn main() {
             let mut stdout = io::stdout();
             let _ = stdout.write_all(b"bad \xff bytes\n");
             let _ = stdout.flush();
-            println!("{URL_LINE}");
+            println!("{line}");
             sleep_forever();
         }
         "silent" => sleep_forever(),
@@ -69,6 +55,11 @@ fn main() {
                 let _ = writeln!(stdout, "{entry}");
             }
             let _ = stdout.flush();
+            sleep_forever();
+        }
+        "ignore_term" => {
+            println!("{line}");
+            ignore_sigterm();
             sleep_forever();
         }
         _ => sleep_forever(),

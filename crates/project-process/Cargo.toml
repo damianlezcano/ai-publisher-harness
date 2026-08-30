@@ -1,5 +1,5 @@
 [package]
-name = "project-tunnel"
+name = "project-process"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,10 +7,11 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-project-process = { path = "../project-process" }
-
-[dev-dependencies]
 nix = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "fake-process"
+path = "src/bin/fake_process.rs"

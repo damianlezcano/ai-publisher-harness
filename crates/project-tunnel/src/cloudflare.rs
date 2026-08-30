@@ -2,11 +2,12 @@ use std::sync::mpsc::TryRecvError;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use project_process::{ChildGuard, ProcessError};
+
 use crate::log::{self, extract_base_url};
 use crate::model::{LocalOrigin, TunnelSession, TunnelState};
 use crate::port::TunnelProvider;
 use crate::resolver::BinaryResolver;
-use crate::supervisor::ChildGuard;
 use crate::{TunnelError, TunnelResult};
 
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -15,7 +16,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cloudflare Quick Tunnel adapter over `ChildGuard`.
 ///
 /// Extra process environment for tests is injected with [`Self::with_env`]
-/// (for example `FAKE_CLOUDFLARED_MODE`). Production callers leave this empty.
+/// (for example `FAKE_PROCESS_MODE`). Production callers leave this empty.
 pub struct CloudflareQuickTunnel {
     resolver: Box<dyn BinaryResolver>,
     guard: Option<ChildGuard>,
@@ -93,7 +94,9 @@ impl CloudflareQuickTunnel {
         ];
         envs.extend(self.extra_env.iter().cloned());
 
-        let guard = ChildGuard::spawn(&binary, &argv, &envs).map_err(|err| self.fail(err))?;
+        let guard = ChildGuard::spawn(&binary, &argv, &envs)
+            .map_err(map_process_error)
+            .map_err(|err| self.fail(err))?;
         let lines = guard.lines();
         self.guard = Some(guard);
 
@@ -125,6 +128,15 @@ impl CloudflareQuickTunnel {
             }
             thread::sleep(Duration::from_millis(5));
         }
+    }
+}
+
+fn map_process_error(err: ProcessError) -> TunnelError {
+    match err {
+        ProcessError::BinaryNotFound(name) => TunnelError::BinaryNotFound(name),
+        ProcessError::StartFailed(reason) => TunnelError::StartFailed(reason),
+        ProcessError::Timeout => TunnelError::StartFailed("timeout".into()),
+        ProcessError::StopFailed(reason) => TunnelError::StopFailed(reason),
     }
 }
 

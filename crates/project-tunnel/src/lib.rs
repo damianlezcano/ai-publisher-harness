@@ -9,7 +9,6 @@ pub mod log;
 pub mod model;
 pub mod port;
 pub mod resolver;
-pub mod supervisor;
 
 pub use cloudflare::CloudflareQuickTunnel;
 pub use error::{TunnelError, TunnelResult};

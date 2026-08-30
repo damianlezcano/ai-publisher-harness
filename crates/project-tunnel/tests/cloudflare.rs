@@ -8,21 +8,59 @@ use project_tunnel::{
     TunnelProvider,
 };
 
+const FAKE_URL: &str = "https://fake-123.trycloudflare.com";
+const EVIL_LINE: &str = "http://evil.example.com";
+
 fn fake_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_fake-cloudflared"))
+    fake_process_bin()
+}
+
+fn fake_process_bin() -> PathBuf {
+    let exe = std::env::current_exe().expect("current test executable");
+    let mut dir = exe.parent().expect("exe parent").to_path_buf();
+    if dir.file_name().is_some_and(|name| name == "deps") {
+        dir.pop();
+    }
+    let bin = dir.join(format!("fake-process{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        bin.is_file(),
+        "fake-process binary not found at {}",
+        bin.display()
+    );
+    bin
 }
 
 fn origin() -> LocalOrigin {
     LocalOrigin::from_port(8080).expect("valid origin")
 }
 
-fn tunnel_with_mode(mode: &str, startup: Duration, shutdown: Duration) -> CloudflareQuickTunnel {
-    CloudflareQuickTunnel::with_timeouts(
+fn tunnel_with_envs(
+    envs: &[(&str, &str)],
+    startup: Duration,
+    shutdown: Duration,
+) -> CloudflareQuickTunnel {
+    let mut tunnel = CloudflareQuickTunnel::with_timeouts(
         Box::new(FixedBinaryResolver::new(fake_binary())),
         startup,
         shutdown,
+    );
+    for (key, value) in envs {
+        tunnel = tunnel.with_env((*key).to_string(), (*value).to_string());
+    }
+    tunnel
+}
+
+fn tunnel_with_line(
+    mode: &str,
+    line: &str,
+    startup: Duration,
+    shutdown: Duration,
+) -> CloudflareQuickTunnel {
+    tunnel_with_envs(
+        &[("FAKE_PROCESS_MODE", mode), ("FAKE_PROCESS_LINE", line)],
+        startup,
+        shutdown,
     )
-    .with_env("FAKE_CLOUDFLARED_MODE".to_string(), mode.to_string())
 }
 
 fn expected_base() -> PublicBaseUrl {
@@ -49,7 +87,12 @@ fn extract_base_url_rejects_non_https_and_non_trycloudflare() {
 
 #[test]
 fn start_detects_url_from_stdout() {
-    let mut tunnel = tunnel_with_mode("url", Duration::from_secs(2), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_line(
+        "print",
+        FAKE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
     let session = tunnel.start(origin()).expect("start");
     assert_eq!(session.base_url(), &expected_base());
     assert!(tunnel.is_running());
@@ -62,7 +105,12 @@ fn start_detects_url_from_stdout() {
 
 #[test]
 fn start_detects_url_from_stderr() {
-    let mut tunnel = tunnel_with_mode("url_stderr", Duration::from_secs(2), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_line(
+        "print_stderr",
+        FAKE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
     let session = tunnel.start(origin()).expect("start");
     assert_eq!(
         session.base_url().as_str(),
@@ -73,8 +121,12 @@ fn start_detects_url_from_stderr() {
 
 #[test]
 fn garbage_urls_are_ignored_until_valid_url() {
-    let mut tunnel = tunnel_with_mode(
-        "garbage_then_url",
+    let mut tunnel = tunnel_with_envs(
+        &[
+            ("FAKE_PROCESS_MODE", "print_two"),
+            ("FAKE_PROCESS_LINE", EVIL_LINE),
+            ("FAKE_PROCESS_LINE2", FAKE_URL),
+        ],
         Duration::from_secs(2),
         Duration::from_secs(1),
     );
@@ -85,8 +137,9 @@ fn garbage_urls_are_ignored_until_valid_url() {
 
 #[test]
 fn garbage_only_is_not_accepted() {
-    let mut tunnel = tunnel_with_mode(
-        "garbage",
+    let mut tunnel = tunnel_with_line(
+        "print",
+        EVIL_LINE,
         Duration::from_millis(250),
         Duration::from_secs(1),
     );
@@ -98,8 +151,8 @@ fn garbage_only_is_not_accepted() {
 
 #[test]
 fn process_exit_before_url() {
-    let mut tunnel = tunnel_with_mode(
-        "exit_before_url",
+    let mut tunnel = tunnel_with_envs(
+        &[("FAKE_PROCESS_MODE", "exit")],
         Duration::from_secs(2),
         Duration::from_secs(1),
     );
@@ -110,7 +163,11 @@ fn process_exit_before_url() {
 
 #[test]
 fn startup_timeout_on_silent_child() {
-    let mut tunnel = tunnel_with_mode("silent", Duration::from_millis(150), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_envs(
+        &[("FAKE_PROCESS_MODE", "silent")],
+        Duration::from_millis(150),
+        Duration::from_secs(1),
+    );
     let err = tunnel.start(origin()).expect_err("must time out");
     assert_eq!(err, TunnelError::StartupTimeout);
     assert!(matches!(tunnel.state(), TunnelState::Failed { .. }));
@@ -118,7 +175,12 @@ fn startup_timeout_on_silent_child() {
 
 #[test]
 fn repeated_start_while_running_is_already_running() {
-    let mut tunnel = tunnel_with_mode("url", Duration::from_secs(2), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_line(
+        "print",
+        FAKE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
     tunnel.start(origin()).expect("start");
     let err = tunnel.start(origin()).expect_err("already running");
     assert_eq!(err, TunnelError::AlreadyRunning);
@@ -127,7 +189,12 @@ fn repeated_start_while_running_is_already_running() {
 
 #[test]
 fn stop_sets_stopped_and_repeated_stop_is_not_running() {
-    let mut tunnel = tunnel_with_mode("url", Duration::from_secs(2), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_line(
+        "print",
+        FAKE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
     tunnel.start(origin()).expect("start");
     tunnel.stop().expect("stop");
     assert_eq!(tunnel.state(), TunnelState::Stopped);
@@ -139,7 +206,12 @@ fn stop_sets_stopped_and_repeated_stop_is_not_running() {
 
 #[test]
 fn start_after_stop_reuses_adapter() {
-    let mut tunnel = tunnel_with_mode("url", Duration::from_secs(2), Duration::from_secs(1));
+    let mut tunnel = tunnel_with_line(
+        "print",
+        FAKE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
     tunnel.start(origin()).expect("first start");
     tunnel.stop().expect("stop");
     let session = tunnel.start(origin()).expect("second start");
@@ -149,8 +221,9 @@ fn start_after_stop_reuses_adapter() {
 
 #[test]
 fn stop_force_kills_when_graceful_stop_times_out() {
-    let mut tunnel = tunnel_with_mode(
-        "url_ignore_term",
+    let mut tunnel = tunnel_with_line(
+        "ignore_term",
+        FAKE_URL,
         Duration::from_secs(2),
         Duration::from_millis(80),
     );
@@ -169,7 +242,12 @@ fn stop_force_kills_when_graceful_stop_times_out() {
 fn drop_cleans_up_running_tunnel() {
     let pid;
     {
-        let mut tunnel = tunnel_with_mode("url", Duration::from_secs(2), Duration::from_secs(1));
+        let mut tunnel = tunnel_with_line(
+            "print",
+            FAKE_URL,
+            Duration::from_secs(2),
+            Duration::from_secs(1),
+        );
         tunnel.start(origin()).expect("start");
         pid = tunnel.child_pid().expect("pid");
         assert!(process_exists(pid));

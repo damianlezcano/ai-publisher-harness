@@ -578,6 +578,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-process"
+version = "0.0.0"
+dependencies = [
+ "nix",
+]
+
+[[package]]
 name = "project-publication"
 version = "0.0.0"
 dependencies = [
@@ -607,6 +614,7 @@ name = "project-tunnel"
 version = "0.0.0"
 dependencies = [
  "nix",
+ "project-process",
 ]
 
 [[package]]

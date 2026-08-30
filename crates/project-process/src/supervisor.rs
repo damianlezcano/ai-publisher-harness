@@ -4,6 +4,8 @@
 //! sends SIGTERM and `force_kill` sends SIGKILL via `nix`. On non-Unix
 //! targets, `request_stop` falls back to `force_kill`.
 
+#![forbid(unsafe_code)]
+
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -14,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::{TunnelError, TunnelResult};
+use crate::{ProcessError, ProcessResult};
 
 /// Maximum queued output lines. Overflow drops the oldest line.
 const LINE_BUFFER_CAP: usize = 256;
@@ -68,7 +70,7 @@ impl ChildGuard {
         binary: &Path,
         argv: &[String],
         envs: &[(String, String)],
-    ) -> TunnelResult<ChildGuard> {
+    ) -> ProcessResult<ChildGuard> {
         let mut cmd = Command::new(binary);
         cmd.args(argv)
             .env_clear()
@@ -81,20 +83,20 @@ impl ChildGuard {
 
         let mut child = cmd.spawn().map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
-                TunnelError::BinaryNotFound(binary.display().to_string())
+                ProcessError::BinaryNotFound(binary.display().to_string())
             } else {
-                TunnelError::StartFailed(err.to_string())
+                ProcessError::StartFailed(err.to_string())
             }
         })?;
 
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| TunnelError::StartFailed("missing stdout pipe".into()))?;
+            .ok_or_else(|| ProcessError::StartFailed("missing stdout pipe".into()))?;
         let stderr = child
             .stderr
             .take()
-            .ok_or_else(|| TunnelError::StartFailed("missing stderr pipe".into()))?;
+            .ok_or_else(|| ProcessError::StartFailed("missing stderr pipe".into()))?;
 
         let buffer = Arc::new(LineBuffer::new());
         let live_readers = Arc::new(AtomicUsize::new(2));
@@ -160,9 +162,9 @@ impl ChildGuard {
     }
 
     /// Blocking wait up to `timeout` for the child to exit; returns the exit
-    /// status, or Err(StartupTimeout) if it does not exit in time. Reaps the
+    /// status, or Err(Timeout) if it does not exit in time. Reaps the
     /// child (no zombie).
-    pub fn wait(&mut self, timeout: Duration) -> TunnelResult<ExitStatus> {
+    pub fn wait(&mut self, timeout: Duration) -> ProcessResult<ExitStatus> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(status) = self.try_wait() {
@@ -170,7 +172,7 @@ impl ChildGuard {
             }
             let now = Instant::now();
             if now >= deadline {
-                return Err(TunnelError::StartupTimeout);
+                return Err(ProcessError::Timeout);
             }
             thread::sleep(Duration::from_millis(10).min(deadline - now));
         }
