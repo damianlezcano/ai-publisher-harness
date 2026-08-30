@@ -1,6 +1,8 @@
 # M3 Publication Manager Design
 
-Status: Approved for implementation. ADR-0004 is Accepted.
+Status: Approved and implemented. ADR-0004 is Accepted. M3 closed on
+2026-08-29; `./scripts/verify` reports `M3 contract passed` and `git diff
+--check` is clean.
 
 ## 1. Resumen ejecutivo
 
