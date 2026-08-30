@@ -124,7 +124,7 @@ impl
         let engine = OpenCodeAgentEngine::from_backend(Arc::clone(&backend));
         let scratch = config.data_dir.join("opencode-scratch");
         fs::create_dir_all(&scratch)
-            .map_err(|err| AppError::internal(format!("could not create scratch dir: {err}")))?;
+            .map_err(|_| AppError::internal("No se pudo inicializar el directorio de datos."))?;
         let connector =
             OpenCodeProviderConnector::new(Arc::clone(&backend)).with_scratch_root(scratch);
         let restarter = SharedBackendRestarter::new(Arc::clone(&backend));
