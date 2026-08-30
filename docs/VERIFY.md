@@ -80,3 +80,26 @@ The real OpenCode round trip is a manual, optional smoke test
 (`scripts/smoke-opencode`, Fedora-only). It is never part of `scripts/verify`
 and SKIPs cleanly when `opencode` or a usable model is unavailable; release
 correctness must not depend on it.
+
+## M6 desktop + frontend behavior
+
+M6 adds the `project-app` facade, the React/Vite/TypeScript frontend under
+`app/`, and the Tauri 2 shell under `app/src-tauri`. `scripts/verify` adds:
+
+```bash
+cargo test --locked -p project-app --all-targets
+pnpm --dir app install --frozen-lockfile
+pnpm --dir app run format:check
+pnpm --dir app run lint
+pnpm --dir app run typecheck
+pnpm --dir app run test
+cargo check --manifest-path app/src-tauri/Cargo.toml
+```
+
+The frontend checks (format, lint, typecheck, Vitest component tests) are
+deterministic and offline; component tests use mocked Tauri `invoke`/`listen`/
+dialog/webview APIs and never touch OpenCode, cloudflared, or the network.
+The Tauri `cargo check` requires the WebKitGTK 4.1 system packages
+(`webkit2gtk4.1-devel` on Fedora); verify reports a clear failure if they are
+missing. The real end-to-end desktop demo is manual (`pnpm --dir app run dev` +
+`cargo tauri dev`-equivalent), never part of verify.

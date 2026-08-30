@@ -173,10 +173,56 @@ if [[ -f crates/project-agent/tests/agent_lifecycle.rs ]]; then
   cargo test --locked -p project-agent --test agent_lifecycle
 fi
 
+# --- M6: project-app application facade --------------------------------------
+
+if [[ -f crates/project-app/tests/app_facade.rs ]]; then
+  printf 'verify: cargo test --locked -p project-app --all-targets\n'
+  cargo test --locked -p project-app --all-targets
+fi
+
+# --- M6: frontend toolchain --------------------------------------------------
+
+if [[ -d app ]]; then
+  if ! command -v pnpm >/dev/null 2>&1; then
+    printf 'verify: FAIL: required M6 frontend command is unavailable: pnpm\n' >&2
+    exit 1
+  else
+    printf 'verify: pnpm --dir app install --frozen-lockfile\n'
+    pnpm --dir app install --frozen-lockfile
+
+    printf 'verify: pnpm --dir app run format:check\n'
+    pnpm --dir app run format:check
+
+    printf 'verify: pnpm --dir app run lint\n'
+    pnpm --dir app run lint
+
+    printf 'verify: pnpm --dir app run typecheck\n'
+    pnpm --dir app run typecheck
+
+    printf 'verify: pnpm --dir app run test\n'
+    pnpm --dir app run test
+  fi
+fi
+
+# --- M6: Tauri shell check ---------------------------------------------------
+
+if [[ -f app/src-tauri/Cargo.toml ]]; then
+  if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+    printf 'verify: FAIL: M6 Tauri check requires system package webkit2gtk4.1-devel\n' >&2
+    printf '  install with: sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel\n' >&2
+    exit 1
+  else
+    printf 'verify: cargo check --manifest-path app/src-tauri/Cargo.toml\n'
+    cargo check --manifest-path app/src-tauri/Cargo.toml
+  fi
+fi
+
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f crates/project-agent/tests/agent_lifecycle.rs ]]; then
+if [[ -f app/src-tauri/Cargo.toml ]]; then
+  printf 'verify: M6 contract passed\n'
+elif [[ -f crates/project-agent/tests/agent_lifecycle.rs ]]; then
   printf 'verify: M5 contract passed\n'
 elif [[ -f crates/project-publication/tests/publication_tunnel.rs ]]; then
   printf 'verify: M4 contract passed\n'

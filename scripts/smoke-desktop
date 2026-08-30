@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Manual Fedora smoke test for the M6 desktop shell.
+#
+# NOT part of `scripts/verify` and not required for CI. Validates that the
+# frontend builds and the Tauri shell compiles, then prints the manual end-to-end
+# demo steps. Requires the WebKitGTK 4.1 system packages for the Tauri build.
+#
+# Exit codes: 0 = PASS, 3 = SKIP (webkit packages missing), 1 = FAIL.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+  echo "smoke-desktop: SKIP: webkit2gtk4.1-devel not installed" >&2
+  echo "  sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel" >&2
+  exit 3
+fi
+
+echo "smoke-desktop: pnpm --dir app run build"
+pnpm --dir app run build
+
+echo "smoke-desktop: cargo build --manifest-path app/src-tauri/Cargo.toml"
+cargo build --manifest-path app/src-tauri/Cargo.toml
+
+cat <<'EOF'
+smoke-desktop: build OK. Manual demo (Fedora, graphical session):
+  1. Launch:  cd app && pnpm run dev   (Vite dev server on :1420)
+              # in another terminal:
+              cargo tauri dev --manifest-path app/src-tauri/Cargo.toml
+  2. Create "Fotosíntesis"
+  3. Add a material (drag & drop or file picker)
+  4. Send a prompt (provider/OpenCode preconfigured for this dev demo)
+  5. Inspect the generated Creation, mark share intent if needed
+  6. Publish -> see public URL -> copy -> QR -> open -> Stop sharing
+EOF
+
+echo "smoke-desktop: PASS (build validation; manual GUI demo steps above)"
