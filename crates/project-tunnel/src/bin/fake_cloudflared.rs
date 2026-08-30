@@ -33,6 +33,18 @@ fn main() {
             println!("https://not-trycloudflare.example.com/x");
             sleep_forever();
         }
+        "garbage_then_url" => {
+            println!("http://evil.example.com");
+            println!("https://not-trycloudflare.example.com/x");
+            println!("{URL_LINE}");
+            sleep_forever();
+        }
+        "url_ignore_term" => {
+            println!("{BANNER}");
+            println!("{URL_LINE}");
+            ignore_sigterm();
+            sleep_forever();
+        }
         "flood" => {
             for i in 0..50_000 {
                 println!("flood line {i}");
@@ -48,6 +60,23 @@ fn main() {
         }
         "silent" => sleep_forever(),
         _ => sleep_forever(),
+    }
+}
+
+fn ignore_sigterm() {
+    #[cfg(unix)]
+    {
+        // SAFETY: this test binary only ignores SIGTERM so stop() can exercise SIGKILL.
+        let _ = unsafe {
+            nix::sys::signal::sigaction(
+                nix::sys::signal::Signal::SIGTERM,
+                &nix::sys::signal::SigAction::new(
+                    nix::sys::signal::SigHandler::SigIgn,
+                    nix::sys::signal::SaFlags::empty(),
+                    nix::sys::signal::SigSet::empty(),
+                ),
+            )
+        };
     }
 }
 
