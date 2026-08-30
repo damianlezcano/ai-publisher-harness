@@ -133,6 +133,20 @@ impl OpenCodeBackend {
         Ok((status, text))
     }
 
+    pub fn delete(&self, path: &str) -> BackendResult<(u16, String)> {
+        let url = self.url_for(path)?;
+        let response = self
+            .client
+            .delete(&url)
+            .send()
+            .map_err(|err| BackendError::Http(err.to_string()))?;
+        let status = response.status().as_u16();
+        let text = response
+            .text()
+            .map_err(|err| BackendError::Http(err.to_string()))?;
+        Ok((status, text))
+    }
+
     pub fn ensure_ready(&self) -> BackendResult<String> {
         let existing = {
             let inner = lock(&self.inner);

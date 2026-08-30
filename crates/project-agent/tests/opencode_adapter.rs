@@ -3,15 +3,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use fake_opencode_server::FakeServer;
 use project_agent::model::{
     AgentProject, AgentPrompt, AgentStatus, ArtifactKind, ModelRef, TaskStatus,
 };
 use project_agent::{AgentEngine, AgentError, OpenCodeAgentEngine};
-
-#[path = "support/fake_server.rs"]
-mod fake_server;
-
-use fake_server::FakeServer;
 
 fn engine_for(server: &FakeServer) -> OpenCodeAgentEngine {
     OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)

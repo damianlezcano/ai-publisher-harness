@@ -3,15 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+use fake_opencode_server::FakeServer;
 use project_agent::model::{AgentProject, AgentPrompt};
 use project_agent::{AgentEngine, OpenCodeAgentEngine};
 use project_opencode::{build_argv, build_env};
-
-#[path = "support/fake_server.rs"]
-#[allow(dead_code)]
-mod fake_server;
-
-use fake_server::FakeServer;
 
 fn engine_for(server: &FakeServer) -> OpenCodeAgentEngine {
     OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)

@@ -188,6 +188,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fake-opencode-server"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,6 +643,7 @@ dependencies = [
 name = "project-agent"
 version = "0.0.0"
 dependencies = [
+ "fake-opencode-server",
  "project-core",
  "project-fs",
  "project-opencode",
@@ -702,6 +710,8 @@ dependencies = [
 name = "project-provider"
 version = "0.0.0"
 dependencies = [
+ "fake-opencode-server",
+ "project-opencode",
  "serde",
  "serde_json",
 ]

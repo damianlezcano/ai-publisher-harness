@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/fake-opencode-server",
     "crates/project-agent",
     "crates/project-app",
     "crates/project-core",
