@@ -1,5 +1,5 @@
 [package]
-name = "project-agent"
+name = "project-opencode"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,14 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-project-core = { path = "../project-core" }
-project-fs = { path = "../project-fs" }
-project-opencode = { path = "../project-opencode" }
+project-process = { path = "../project-process" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

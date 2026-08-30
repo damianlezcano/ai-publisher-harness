@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use project_agent::model::{AgentProject, AgentPrompt};
-use project_agent::opencode::{build_argv, build_env};
 use project_agent::{AgentEngine, OpenCodeAgentEngine};
+use project_opencode::{build_argv, build_env};
 
 #[path = "support/fake_server.rs"]
 #[allow(dead_code)]

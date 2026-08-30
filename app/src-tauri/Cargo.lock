@@ -2520,8 +2520,7 @@ version = "0.0.0"
 dependencies = [
  "project-core",
  "project-fs",
- "project-process",
- "reqwest 0.12.28",
+ "project-opencode",
  "serde",
  "serde_json",
 ]
@@ -2560,6 +2559,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "project-opencode"
+version = "0.0.0"
+dependencies = [
+ "project-process",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
