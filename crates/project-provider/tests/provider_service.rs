@@ -42,6 +42,17 @@ fn model(provider_id: &str, model_id: &str, free: bool, recommended: bool) -> Mo
     }
 }
 
+fn model_deprecated(provider_id: &str, model_id: &str, free: bool) -> ModelSummary {
+    ModelSummary {
+        provider_id: provider_id.to_owned(),
+        model_id: model_id.to_owned(),
+        name: model_id.to_owned(),
+        free,
+        recommended: false,
+        deprecated: true,
+    }
+}
+
 fn catalog_connector() -> FakeProviderConnector {
     FakeProviderConnector::new()
         .with_provider(provider_detail("opencode", "Gratis"))
@@ -421,4 +432,117 @@ fn connection_view_never_contains_secret() {
     };
     let json = serde_json::to_string(&view).expect("json");
     assert!(!json.contains("sk-"));
+}
+
+#[test]
+fn free_default_is_deterministic_and_prefers_opencode_recommended() {
+    let path = unique_settings_path();
+    let connector = FakeProviderConnector::new()
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_provider(provider_detail("openai", "ChatGPT"))
+        .with_model(model("opencode", "alpha", true, true))
+        .with_model(model("opencode", "beta", true, false))
+        .with_model(model("openai", "gpt-free-rec", true, true));
+    let svc = service(connector, FakeRestarter::new(), path);
+    let selected = svc.get_selected_model().expect("select");
+    assert_eq!(selected.model.provider_id, "opencode");
+    assert_eq!(selected.model.model_id, "alpha");
+    assert!(selected.notice.is_none());
+    assert!(!selected.requires_choice);
+}
+
+#[test]
+fn free_default_stable_under_catalog_reorder() {
+    let path_a = unique_settings_path();
+    let path_b = unique_settings_path();
+    let connector_a = FakeProviderConnector::new()
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_provider(provider_detail("openai", "ChatGPT"))
+        .with_provider(provider_detail("google", "Gemini"))
+        .with_model(model("openai", "gpt-free-rec", true, true))
+        .with_model(model("google", "gem-free-rec", true, true))
+        .with_model(model("opencode", "alpha", true, true))
+        .with_model(model("opencode", "beta", true, false));
+    let connector_b = FakeProviderConnector::new()
+        .with_provider(provider_detail("google", "Gemini"))
+        .with_provider(provider_detail("openai", "ChatGPT"))
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_model(model("opencode", "beta", true, false))
+        .with_model(model("google", "gem-free-rec", true, true))
+        .with_model(model("openai", "gpt-free-rec", true, true))
+        .with_model(model("opencode", "alpha", true, true));
+    let selected_a = service(connector_a, FakeRestarter::new(), path_a)
+        .get_selected_model()
+        .expect("select a");
+    let selected_b = service(connector_b, FakeRestarter::new(), path_b)
+        .get_selected_model()
+        .expect("select b");
+    assert_eq!(selected_a.model.provider_id, "opencode");
+    assert_eq!(selected_a.model.model_id, "alpha");
+    assert_eq!(selected_b.model.provider_id, "opencode");
+    assert_eq!(selected_b.model.model_id, "alpha");
+}
+
+#[test]
+fn no_free_model_requires_choice() {
+    let paid = FakeProviderConnector::new()
+        .with_provider(provider_detail("openai", "ChatGPT"))
+        .with_model(model("openai", "gpt-paid", false, true));
+    let deprecated = FakeProviderConnector::new()
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_model(model_deprecated("opencode", "old-free", true));
+    let empty = FakeProviderConnector::new().with_provider(provider_detail("opencode", "Gratis"));
+    for connector in [paid, deprecated, empty] {
+        let svc = service(connector, FakeRestarter::new(), unique_settings_path());
+        let selected = svc.get_selected_model().expect("select");
+        assert!(selected.requires_choice);
+        assert_eq!(
+            selected.notice.as_deref(),
+            Some("No encontramos un modelo disponible. Elegí uno.")
+        );
+    }
+}
+
+#[test]
+fn paid_or_other_provider_never_auto_selected() {
+    let path = unique_settings_path();
+    let connector = FakeProviderConnector::new()
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_provider(provider_detail("openai", "ChatGPT"))
+        .with_model(model("openai", "gpt-paid", false, true))
+        .with_model(model("openai", "gpt-free", true, false))
+        .with_model(model("opencode", "zeta", true, false));
+    let svc = service(connector, FakeRestarter::new(), path);
+    let selected = svc.get_selected_model().expect("select");
+    assert_eq!(selected.model.provider_id, "opencode");
+    assert_eq!(selected.model.model_id, "zeta");
+    assert!(selected.notice.is_none());
+    assert!(!selected.requires_choice);
+}
+
+#[test]
+fn same_provider_fallback_prefers_opencode_recommended_free() {
+    let path = unique_settings_path();
+    SettingsStore::new(path.clone())
+        .save(&Settings {
+            selected_model: Some(ModelSelection {
+                provider_id: "opencode".into(),
+                model_id: "gone".into(),
+            }),
+            featured_order: None,
+        })
+        .expect("save");
+    let connector = FakeProviderConnector::new()
+        .with_provider(provider_detail("opencode", "Gratis"))
+        .with_model(model("opencode", "beta", true, false))
+        .with_model(model("opencode", "alpha", true, true));
+    let svc = service(connector, FakeRestarter::new(), path);
+    let selected = svc.get_selected_model().expect("select");
+    assert_eq!(selected.model.provider_id, "opencode");
+    assert_eq!(selected.model.model_id, "alpha");
+    assert_eq!(
+        selected.notice.as_deref(),
+        Some("Este modelo ya no está disponible; usamos el recomendado.")
+    );
+    assert!(!selected.requires_choice);
 }
