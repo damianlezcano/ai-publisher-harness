@@ -358,3 +358,137 @@ fn cancelled_agent_run_is_a_normal_cancelled_outcome() {
     assert_eq!(result.status, "cancelled");
     assert!(result.registered_creation_ids.is_empty());
 }
+
+// -- Durable messages ------------------------------------------------------
+
+#[test]
+fn send_message_persists_user_and_assistant_messages() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Fotosíntesis").expect("create");
+    engine.set_message("Listo.".to_owned());
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/index.html",
+        ArtifactKind::Web,
+    )]);
+    write_artifact(tmp.path(), &p.id, "actividad/index.html", b"<h1>");
+
+    let run = app
+        .send_message(&p.id, "crea una actividad", &[])
+        .expect("send");
+    assert_eq!(run.status, "completed");
+    assert_eq!(run.registered_creation_ids.len(), 1);
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 2);
+    assert_eq!(view.messages[0].role, "user");
+    assert_eq!(view.messages[0].text, "crea una actividad");
+    assert_eq!(view.messages[0].status, "ok");
+    assert!(view.messages[0].material_ids.is_empty());
+    assert_eq!(view.messages[1].role, "assistant");
+    assert_eq!(view.messages[1].status, "ok");
+    assert_eq!(view.messages[1].text, "Listo.");
+    assert_eq!(view.messages[1].creation_ids, run.registered_creation_ids);
+}
+
+#[test]
+fn failed_run_persists_failed_assistant_message() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+    engine.fail_send();
+
+    let run = app.send_message(&p.id, "hacé algo", &[]).expect("send");
+    assert_eq!(run.status, "failed");
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 2);
+    assert_eq!(view.messages[0].role, "user");
+    assert_eq!(view.messages[0].text, "hacé algo");
+    assert_eq!(view.messages[0].status, "ok");
+    assert_eq!(view.messages[1].role, "assistant");
+    assert_eq!(view.messages[1].status, "failed");
+}
+
+#[test]
+fn cancel_persists_cancelled_message() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = CancellingEngine(FakeAgentEngine::new());
+    let tunnel = FakeTunnel::new();
+    let app = AppState::with_components(
+        tmp.path().to_path_buf(),
+        engine,
+        tunnel,
+        connector(),
+        FakeRestarter::new(),
+    );
+    let p = app.create_project("P").expect("create");
+
+    let run = app.send_message(&p.id, "hacé algo", &[]).expect("send");
+    assert_eq!(run.status, "cancelled");
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 2);
+    assert_eq!(view.messages[0].role, "user");
+    assert_eq!(view.messages[1].role, "assistant");
+    assert_eq!(view.messages[1].status, "cancelled");
+}
+
+#[test]
+fn project_summary_includes_timestamps_and_shared() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+
+    let summaries = app.list_projects().expect("list");
+    assert_eq!(summaries.len(), 1);
+    let s = &summaries[0];
+    assert_eq!(s.id, p.id);
+    assert!(!s.created_at.is_empty());
+    assert!(!s.updated_at.is_empty());
+    assert!(!s.shared);
+
+    app.publish(&p.id).expect("publish");
+    let summaries = app.list_projects().expect("list");
+    assert!(summaries[0].shared);
+}
+
+#[test]
+fn project_view_includes_messages() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+    engine.set_message("Listo.".to_owned());
+
+    app.send_message(&p.id, "hola", &[]).expect("send");
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 2);
+    assert_eq!(view.messages[0].role, "user");
+    assert_eq!(view.messages[1].role, "assistant");
+}
+
+#[test]
+fn message_append_is_durable_before_agent_run() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+    engine.set_message("Listo.".to_owned());
+
+    let inputs = app
+        .send_message_persist(&p.id, "hola", &[])
+        .expect("persist");
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].role, "user");
+    assert_eq!(view.messages[0].text, "hola");
+    assert_eq!(view.messages[0].status, "ok");
+
+    let run = app.send_message_run(inputs).expect("run");
+    assert_eq!(run.status, "completed");
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 2);
+    assert_eq!(view.messages[1].role, "assistant");
+}

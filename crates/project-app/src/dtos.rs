@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub shared: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,11 +109,24 @@ pub struct PublicationView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MessageView {
+    pub id: String,
+    pub role: String,
+    pub text: String,
+    pub status: String,
+    pub created_at: String,
+    pub material_ids: Vec<String>,
+    pub creation_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectView {
     pub id: String,
     pub name: String,
     pub materials: Vec<MaterialView>,
     pub creations: Vec<CreationView>,
+    pub messages: Vec<MessageView>,
     pub publication: PublicationView,
 }
 

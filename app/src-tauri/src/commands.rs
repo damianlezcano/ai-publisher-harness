@@ -279,23 +279,36 @@ pub async fn agent_send(
     attachment_ids: Vec<String>,
 ) -> Result<(), AppError> {
     let shared = state.inner().clone();
-    let _ = app.emit(
-        "agent://task",
-        AgentTaskEvent {
-            project_id: project_id.clone(),
-            status: "working".to_owned(),
-            message: None,
-            registered_creation_ids: Vec::new(),
-        },
-    );
     std::thread::spawn(move || {
-        let event = match shared.run_agent(&project_id, &prompt, &attachment_ids) {
-            Ok(run) => AgentTaskEvent {
-                project_id,
-                status: run.status,
-                message: run.message,
-                registered_creation_ids: run.registered_creation_ids,
-            },
+        // Persist the raw user message synchronously before emitting "working".
+        // If the app crashes after this point, the user's prompt is already
+        // durable; the assistant outcome is appended by send_message_run.
+        let event = match shared.send_message_persist(&project_id, &prompt, &attachment_ids) {
+            Ok(inputs) => {
+                let _ = app.emit(
+                    "agent://task",
+                    AgentTaskEvent {
+                        project_id: project_id.clone(),
+                        status: "working".to_owned(),
+                        message: None,
+                        registered_creation_ids: Vec::new(),
+                    },
+                );
+                match shared.send_message_run(inputs) {
+                    Ok(run) => AgentTaskEvent {
+                        project_id,
+                        status: run.status,
+                        message: run.message,
+                        registered_creation_ids: run.registered_creation_ids,
+                    },
+                    Err(err) => AgentTaskEvent {
+                        project_id,
+                        status: "failed".to_owned(),
+                        message: Some(err.message),
+                        registered_creation_ids: Vec::new(),
+                    },
+                }
+            }
             Err(err) => AgentTaskEvent {
                 project_id,
                 status: "failed".to_owned(),
