@@ -551,12 +551,23 @@ select {
 .provider-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-3);
 }
 
 .provider-panel-header h2 {
   margin: 0;
+}
+
+.close-button {
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  min-width: 36px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .provider-list {
@@ -1223,4 +1234,56 @@ select {
 
 .message-creations .creation-card {
   background: var(--surface);
+}
+
+/* -- T5d: compact share control + settings close X ---------------------------- */
+
+.share-control {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.share-control-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.share-control-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.share-control-menu button {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+}
+
+.share-control-menu button:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.share-control-hint {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  color: var(--muted);
+  font-size: var(--font-size-meta);
+  line-height: 1.4;
 }

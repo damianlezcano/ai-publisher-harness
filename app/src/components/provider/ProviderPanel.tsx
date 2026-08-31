@@ -58,8 +58,13 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   return (
     <Dialog title={messages.provider.heading} onClose={onClose} className="provider-dialog">
       <header className="provider-panel-header">
-        <button type="button" className="secondary" onClick={onClose}>
-          {messages.common.close}
+        <button
+          type="button"
+          className="ghost close-button"
+          aria-label={messages.common.close}
+          onClick={onClose}
+        >
+          <span aria-hidden="true">×</span>
         </button>
       </header>
       <p className="muted">{messages.provider.privacyNote}</p>

@@ -187,9 +187,6 @@ export const messages = {
   creation: {
     panelLabel: "Creaciones",
     heading: "Creaciones",
-    visibilityPublic: VISIBILITY_PUBLIC,
-    visibilityPrivate: VISIBILITY_PRIVATE,
-    sharedClarifier: "Los recursos 'Se compartirá' ya están visibles en el enlace.",
     preview: "Vista previa",
     openInBrowser: "Abrir en navegador",
     empty: {
@@ -246,8 +243,8 @@ export const messages = {
   },
 
   provider: {
-    panelLabel: "Conectá tu IA",
-    heading: "Conectá tu IA",
+    panelLabel: "Configuración",
+    heading: "Configuración",
     privacyNote:
       "Tu cuenta y tus claves se guardan de forma segura en tu computadora. Nunca se comparten.",
     featuredHeading: "Recomendados",

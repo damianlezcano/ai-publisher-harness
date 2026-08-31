@@ -1,43 +1,61 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { PublicationView } from "../types";
 import QrDialog from "./QrDialog";
-import Badge from "./ui/Badge";
 import Dialog from "./ui/Dialog";
-import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
 
-interface PublishPanelProps {
+interface ShareControlProps {
   projectId: string;
   projectName: string;
   publication: PublicationView;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
 }
 
 type Busy = "publishing" | "unpublishing" | null;
 
-export default function PublishPanel({
+export default function ShareControl({
   projectId,
   projectName,
   publication,
   onRefresh,
-}: PublishPanelProps) {
+}: ShareControlProps) {
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<unknown | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
-  const [stopped, setStopped] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const controlRef = useRef<HTMLDivElement>(null);
+
+  const shared = publication.state === "published" && publication.publicUrl !== null;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    function handleClick(event: MouseEvent) {
+      if (controlRef.current && !controlRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [menuOpen]);
 
   async function publish() {
     setBusy("publishing");
     setError(null);
-    setStopped(false);
     try {
       await api.publish(projectId);
-      onRefresh();
+      await onRefresh();
     } catch (err) {
       setError(err);
     } finally {
@@ -51,8 +69,7 @@ export default function PublishPanel({
     setError(null);
     try {
       await api.unpublish(projectId);
-      setStopped(true);
-      onRefresh();
+      await onRefresh();
     } catch (err) {
       setError(err);
     } finally {
@@ -80,61 +97,82 @@ export default function PublishPanel({
     }
   }
 
-  const shared = publication.state === "published" && publication.publicUrl !== null;
+  const triggerLabel = shared
+    ? busy === "unpublishing"
+      ? messages.sharing.stopping
+      : messages.sharing.shared
+    : busy === "publishing"
+      ? messages.sharing.sharing
+      : messages.sharing.shareAction;
 
   return (
-    <section className="panel" aria-label={messages.sharing.panelLabel}>
-      <h2>{messages.sharing.heading}</h2>
-
+    <div className="share-control" ref={controlRef}>
       {shared ? (
         <>
-          <Badge tone="ok">{messages.sharing.shared}</Badge>
-          <p className="url" aria-label={messages.sharing.linkLabel}>
-            {publication.publicUrl}
-          </p>
-          <div className="row-actions wrap">
-            <button type="button" onClick={() => void copy()}>
-              {copied ? messages.common.copied : messages.sharing.copyLink}
-            </button>
-            <button type="button" onClick={() => void open()}>
-              {messages.sharing.openLink}
-            </button>
-            <button type="button" onClick={() => setShowQr(true)}>
-              {messages.sharing.showQr}
-            </button>
-            <button
-              type="button"
-              className="danger"
-              disabled={busy === "unpublishing"}
-              onClick={() => setConfirmStop(true)}
+          <button
+            type="button"
+            className="secondary share-control-trigger"
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            disabled={busy === "unpublishing"}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            {triggerLabel}
+            <span aria-hidden="true"> ▼</span>
+          </button>
+          {menuOpen && (
+            <div
+              className="share-control-menu"
+              role="menu"
+              aria-label={messages.sharing.panelLabel}
             >
-              {busy === "unpublishing" ? messages.sharing.stopping : messages.sharing.stopSharing}
-            </button>
-          </div>
-          <p className="notice">{messages.sharing.temporaryNote}</p>
-          <p className="notice">{messages.sharing.temporaryGuidance}</p>
+              <button type="button" role="menuitem" onClick={() => void copy()}>
+                {copied ? messages.common.copied : messages.sharing.copyLink}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void open();
+                }}
+              >
+                {messages.sharing.openLink}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setShowQr(true);
+                }}
+              >
+                {messages.sharing.showQr}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setConfirmStop(true);
+                }}
+              >
+                {messages.sharing.stopSharing}
+              </button>
+              <p className="share-control-hint">{messages.sharing.temporaryNote}</p>
+            </div>
+          )}
         </>
       ) : (
-        <>
-          {busy === "publishing" ? (
-            <>
-              <p className="muted">
-                <span className="spinner" aria-hidden="true" />
-                <span>{messages.sharing.sharing}</span> <span>{messages.sharing.sharingNote}</span>
-              </p>
-              <button type="button" className="primary" disabled onClick={() => void publish()}>
-                {messages.sharing.shareAction}
-              </button>
-            </>
-          ) : (
-            <EmptyState
-              title={messages.sharing.empty.title}
-              actionLabel={messages.sharing.shareAction}
-              onAction={() => void publish()}
-            />
-          )}
-          {stopped && <p className="status published">{messages.sharing.stopped}</p>}
-        </>
+        <button
+          type="button"
+          className="secondary share-control-trigger"
+          disabled={busy === "publishing"}
+          onClick={() => void publish()}
+        >
+          {triggerLabel}
+        </button>
       )}
 
       {error ? <ErrorNotice error={error} /> : null}
@@ -144,10 +182,10 @@ export default function PublishPanel({
         </p>
       )}
 
-      {showQr && (
+      {showQr && publication.publicUrl && (
         <QrDialog
           projectId={projectId}
-          url={publication.publicUrl as string}
+          url={publication.publicUrl}
           projectName={projectName}
           onClose={() => setShowQr(false)}
         />
@@ -166,6 +204,6 @@ export default function PublishPanel({
           </div>
         </Dialog>
       )}
-    </section>
+    </div>
   );
 }

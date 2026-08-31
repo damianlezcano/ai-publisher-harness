@@ -87,8 +87,17 @@ describe("ProviderPanel", () => {
   it("renders as a labelled dialog and closes on Escape", async () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
-    expect(await screen.findByRole("dialog", { name: "Conectá tu IA" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes when the labelled X button is clicked", async () => {
+    const onClose = vi.fn();
+    render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
+    const closeButton = await screen.findByRole("button", { name: "Cerrar" });
+    expect(closeButton).toBeInTheDocument();
+    await userEvent.click(closeButton);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
