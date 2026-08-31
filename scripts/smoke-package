@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Manual packaging smoke test for M10 (Fedora Linux x86_64, graphical session).
+#
+# NOT part of `scripts/verify`. Fetches pinned sidecars, builds AppImage + RPM,
+# inspects the AppImage payload for bundled sidecars, and prints manual demo steps.
+#
+# Exit codes: 0 = PASS, 1 = FAIL, 3 = SKIP (missing prerequisites or network).
+
+set -euo pipefail
+
+SCRIPT="$(basename "$0")"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+manifest="$repo_root/app/src-tauri/Cargo.toml"
+bundle_root="$repo_root/app/src-tauri/target/release/bundle"
+appimage_dir="$bundle_root/appimage"
+rpm_dir="$bundle_root/rpm"
+
+skip() {
+  echo "$SCRIPT: SKIP: $*" >&2
+  echo "$SCRIPT: SKIP"
+  exit 3
+}
+
+fail() {
+  echo "$SCRIPT: FAIL: $*" >&2
+  echo "$SCRIPT: FAIL"
+  exit 1
+}
+
+if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+  skip "webkit2gtk-4.1 pkg-config not found (install webkit2gtk4.1-devel)"
+fi
+
+if ! cargo tauri --version >/dev/null 2>&1; then
+  skip "cargo tauri CLI not available (no 'cargo tauri')"
+fi
+
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  skip "rpmbuild not available (install rpm-build)"
+fi
+
+if ! curl -fsSL --connect-timeout 5 --max-time 10 -o /dev/null https://github.com 2>/dev/null; then
+  skip "network unreachable (cannot download sidecars)"
+fi
+
+cd "$repo_root"
+
+echo "$SCRIPT: fetching pinned sidecars"
+"$repo_root/scripts/fetch-sidecars"
+
+echo "$SCRIPT: building AppImage bundle"
+cargo tauri build --manifest-path "$manifest" --bundles appimage
+
+mapfile -t appimages < <(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' 2>/dev/null || true)
+if (( ${#appimages[@]} == 0 )); then
+  fail "AppImage artifact not found (expected $appimage_dir/*.AppImage)"
+fi
+appimage="${appimages[0]}"
+if (( ${#appimages[@]} > 1 )); then
+  echo "$SCRIPT: note: multiple AppImages found; inspecting ${appimages[0]}" >&2
+fi
+echo "$SCRIPT: found AppImage: $appimage"
+
+echo "$SCRIPT: building RPM bundle"
+cargo tauri build --manifest-path "$manifest" --bundles rpm
+
+mapfile -t rpms < <(find "$rpm_dir" -maxdepth 1 -type f -name '*.rpm' 2>/dev/null || true)
+if (( ${#rpms[@]} == 0 )); then
+  fail "RPM artifact not found (expected $rpm_dir/*.rpm)"
+fi
+echo "$SCRIPT: found RPM: ${rpms[0]}"
+
+echo "$SCRIPT: inspecting AppImage payload for bundled sidecars"
+inspect_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "$inspect_dir"
+}
+trap cleanup EXIT
+
+if [[ ! -x "$appimage" ]]; then
+  fail "AppImage is not executable: $appimage"
+fi
+
+(
+  cd "$inspect_dir"
+  "$appimage" --appimage-extract >/dev/null
+) || fail "AppImage extraction failed: $appimage"
+
+extract_root="$inspect_dir/squashfs-root"
+if [[ ! -d "$extract_root" ]]; then
+  fail "AppImage extract did not produce squashfs-root under $inspect_dir"
+fi
+
+for sidecar in opencode cloudflared; do
+  path="$extract_root/usr/bin/$sidecar"
+  if [[ ! -f "$path" ]]; then
+    fail "sidecar missing in AppImage payload: usr/bin/$sidecar"
+  fi
+  if [[ ! -x "$path" ]]; then
+    fail "sidecar not executable in AppImage payload: usr/bin/$sidecar"
+  fi
+  echo "$SCRIPT: verified usr/bin/$sidecar in AppImage"
+done
+
+cat <<'EOF'
+smoke-package: automated checks OK. MANUAL CHECKLIST (human, graphical session):
+  1. Launch the AppImage:
+       chmod +x app/src-tauri/target/release/bundle/appimage/*.AppImage
+       ./app/src-tauri/target/release/bundle/appimage/*.AppImage
+  2. Complete the M9 demo flow:
+       - Create a project (e.g. "Fotosíntesis")
+       - Ask the IA (bundled OpenCode should respond)
+       - Share (bundled cloudflared Quick Tunnel)
+       - Confirm the public link and QR code appear
+  3. Missing-sidecar dev-build fallback (separate dev checkout, no fetched sidecars):
+       - cargo tauri dev without sidecars/ populated
+       - First IA use -> friendly "El asistente no pudo iniciarse." (ai_unavailable) + Reintentar
+       - First share -> friendly "No pudimos compartir en este momento." (publish_failed) + Reintentar
+       - App must not crash at startup for missing sidecars
+EOF
+
+echo "$SCRIPT: PASS"
