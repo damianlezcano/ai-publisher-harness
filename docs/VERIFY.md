@@ -167,6 +167,38 @@ The real desktop preview/attachment round trip is a manual, optional smoke test
 unavailable; real clipboard/drag behavior and the no-IPC preview window are
 exercised there, never in verify.
 
+## M10 packaging behavior
+
+M10 is **packaging + infrastructure**: sidecar resolution, the pinned
+component manifest (`config/components.json`), and Tauri bundle configuration
+(`targets`, `bundle.externalBin`, version `0.1.0`). It adds no product-domain
+or security-invariant change beyond the provenance boundary for bundled
+third-party binaries (ADR-0013).
+
+`scripts/verify` stays fully offline and deterministic. On top of the M9
+checks, it adds:
+
+```bash
+./scripts/fetch-sidecars --check
+# version alignment: tauri.conf.json + project-app + educai all report 0.1.0
+TAURI_CONFIG='{"bundle":{"externalBin":null}}' cargo check --manifest-path app/src-tauri/Cargo.toml
+```
+
+`fetch-sidecars --check` validates manifest shape and SHA-256 checksum format
+only; verify never downloads sidecars or builds installable bundles. Version
+alignment uses simple string assertions against `tauri.conf.json` and the
+relevant `Cargo.toml` files. The Tauri `cargo check` runs with `externalBin`
+neutralized so the offline gate stays green without gitignored `sidecars/`
+binaries on disk.
+
+The real bundle build and sidecar round-trip is a manual, optional smoke test
+(`scripts/smoke-package`, Fedora, graphical session). It is never part of
+`scripts/verify` and SKIPs cleanly (exit 3) when packaging tooling is absent;
+release correctness must not depend on it.
+
+When all M10 checks pass, the final gate discriminates on the component manifest
+and prints `verify: M10 contract passed`.
+
 ## M9 frontend UX polish behavior
 
 M9 is **frontend-only** (`app/src` + docs + tests). It adds no Rust, no Tauri
