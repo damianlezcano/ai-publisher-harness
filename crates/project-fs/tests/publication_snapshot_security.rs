@@ -63,6 +63,9 @@ impl IdGenerator for FakeIds {
         ))
         .unwrap()
     }
+    fn message_id(&self) -> project_core::MessageId {
+        project_core::MessageId::parse("0198e4a6-90ab-7c01-8c0e-8b6fd26f1f22").unwrap()
+    }
 }
 
 fn make_service(

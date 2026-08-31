@@ -63,6 +63,9 @@ impl IdGenerator for FakeIds {
         ))
         .unwrap()
     }
+    fn message_id(&self) -> project_core::MessageId {
+        project_core::MessageId::parse("0198e4a6-90ab-7c01-8c0e-8b6fd26f1f22").unwrap()
+    }
 }
 
 fn make_service(
@@ -145,14 +148,14 @@ fn downgrade_on_disk_to_v1(path: &Path) {
                 .remove("visibility");
         }
     }
-    v.as_object_mut()
-        .expect("project object")
-        .remove("publicationRoute");
+    let project = v.as_object_mut().expect("project object");
+    project.remove("publicationRoute");
+    project.remove("messages");
     fs::write(path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
 }
 
 #[test]
-fn new_project_persists_schema_v2_without_publication_route() {
+fn new_project_persists_schema_v3_without_publication_route() {
     let base = tmp_dir("new-v2");
     let mut svc = make_service(&base);
     let p = svc.create_project("Fotosintesis").unwrap();
@@ -160,7 +163,7 @@ fn new_project_persists_schema_v2_without_publication_route() {
     assert!(p.publication_route.is_none());
 
     let raw = fs::read_to_string(project_json_path(&base, p.id.as_str())).unwrap();
-    assert!(raw.contains("\"schemaVersion\": 2"));
+    assert!(raw.contains("\"schemaVersion\": 3"));
     assert!(!raw.contains("publicationRoute"));
 }
 
@@ -205,7 +208,7 @@ fn first_mutation_migrates_every_legacy_creation_to_private() {
 
     let raw = fs::read_to_string(&path).unwrap();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(v["schemaVersion"], 2);
+    assert_eq!(v["schemaVersion"], 3);
     assert!(v.get("publicationRoute").is_none());
     assert_eq!(v["creations"][0]["visibility"], "private");
     assert_eq!(v["creations"][0]["displayName"], "PUBLIC worksheet");
