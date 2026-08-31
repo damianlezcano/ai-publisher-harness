@@ -174,7 +174,9 @@ fn run_agent_registers_creation_private_by_default() {
         ArtifactKind::Web,
     )]);
     write_artifact(tmp.path(), &p.id, "actividad/index.html", b"<h1>");
-    let result = app.run_agent(&p.id, "crea una actividad").expect("run");
+    let result = app
+        .run_agent(&p.id, "crea una actividad", &[])
+        .expect("run");
     assert_eq!(result.status, "completed");
     assert_eq!(result.registered_creation_ids.len(), 1);
 
@@ -191,7 +193,7 @@ fn set_creation_visibility_toggles() {
     let p = app.create_project("P").expect("create");
     engine.set_artifacts(vec![artifact("workspace/doc.pdf", ArtifactKind::Pdf)]);
     write_artifact(tmp.path(), &p.id, "doc.pdf", b"x");
-    app.run_agent(&p.id, "doc").expect("run");
+    app.run_agent(&p.id, "doc", &[]).expect("run");
     let cid = app.open_project(&p.id).expect("open").creations[0]
         .id
         .clone();
@@ -211,7 +213,7 @@ fn creation_path_rejects_cross_project_id() {
     let a = app.create_project("A").expect("create");
     engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
     write_artifact(tmp.path(), &a.id, "index.html", b"x");
-    app.run_agent(&a.id, "web").expect("run");
+    app.run_agent(&a.id, "web", &[]).expect("run");
     let creation_id = app.open_project(&a.id).expect("open").creations[0]
         .id
         .clone();
@@ -230,7 +232,7 @@ fn agent_failure_maps_to_human_error() {
     let (app, engine, _) = app(tmp.path());
     let p = app.create_project("X").expect("create");
     engine.fail_ready();
-    let err = app.run_agent(&p.id, "hola").unwrap_err();
+    let err = app.run_agent(&p.id, "hola", &[]).unwrap_err();
     assert_eq!(err.code, ErrorCode::AiUnavailable);
     assert_eq!(err.message, "No se pudo iniciar el asistente de IA.");
 }
@@ -240,7 +242,7 @@ fn empty_prompt_is_rejected_without_touching_engine() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());
     let p = app.create_project("X").expect("create");
-    let err = app.run_agent(&p.id, "   ").unwrap_err();
+    let err = app.run_agent(&p.id, "   ", &[]).unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(!engine.calls().contains(&project_agent::FakeCall::Ready));
 }
@@ -300,7 +302,7 @@ fn restart_persists_projects_and_resets_publication_to_local() {
         let p = app.create_project("Fotosíntesis").expect("create");
         engine.set_artifacts(vec![artifact("workspace/guia.pdf", ArtifactKind::Pdf)]);
         write_artifact(tmp.path(), &p.id, "guia.pdf", b"pdf");
-        app.run_agent(&p.id, "hacé una guía").expect("run");
+        app.run_agent(&p.id, "hacé una guía", &[]).expect("run");
         app.publish(&p.id).expect("publish");
         p.id
     };
@@ -352,7 +354,7 @@ fn cancelled_agent_run_is_a_normal_cancelled_outcome() {
         FakeRestarter::new(),
     );
     let p = app.create_project("P").expect("create");
-    let result = app.run_agent(&p.id, "hacé algo").expect("run");
+    let result = app.run_agent(&p.id, "hacé algo", &[]).expect("run");
     assert_eq!(result.status, "cancelled");
     assert!(result.registered_creation_ids.is_empty());
 }
