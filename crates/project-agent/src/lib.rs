@@ -19,4 +19,4 @@ pub use model::{
 pub use opencode::OpenCodeAgentEngine;
 pub use port::AgentEngine;
 pub use registrar::{CreationRegistrar, FilesystemCreationRegistrar};
-pub use service::{AgentRequest, AgentRunResult, AgentService};
+pub use service::{AgentAttachment, AgentRequest, AgentRunResult, AgentService};
