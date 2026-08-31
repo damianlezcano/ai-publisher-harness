@@ -17,7 +17,7 @@ use project_provider::{
     ProviderSummary, SecretString,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::SharedState;
 
@@ -207,7 +207,9 @@ pub async fn preview_open_web(
     .await?;
     let token = web.token.clone();
     let url = web.url.clone();
-    let _ = WebviewWindowBuilder::new(
+    let preview_origin = format!("http://127.0.0.1:{}/preview/{}/", origin_port(&url), token);
+
+    let window = WebviewWindowBuilder::new(
         &app,
         "preview",
         WebviewUrl::External(
@@ -217,6 +219,12 @@ pub async fn preview_open_web(
     )
     .title("Vista previa")
     .inner_size(1100.0, 720.0)
+    .on_navigation(move |request_url| {
+        // Pin navigation to the preview server's own origin and token path.
+        // Generated content must never navigate the preview webview to the app
+        // origin (tauri://localhost / dev server) where other IPC could apply.
+        request_url.to_string().starts_with(&preview_origin)
+    })
     .build()
     .map_err(|_| {
         let _ = shared.preview_close(&token);
@@ -226,15 +234,22 @@ pub async fn preview_open_web(
         )
     })?;
 
-    if let Some(window) = app.get_webview_window("preview") {
-        let state_for_close = shared.clone();
-        window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let _ = state_for_close.preview_close(&token);
-            }
-        });
-    }
+    let state_for_close = shared.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = state_for_close.preview_close(&token);
+        }
+    });
     Ok(())
+}
+
+/// Extracts the port from a `http://127.0.0.1:<port>/…` preview URL.
+fn origin_port(url: &str) -> String {
+    url.split('/')
+        .nth(2)
+        .and_then(|host_port| host_port.rsplit_once(':'))
+        .map(|(_, port)| port.to_owned())
+        .unwrap_or_default()
 }
 
 /// Closes the isolated web preview by its single-use token (belt-and-suspenders
