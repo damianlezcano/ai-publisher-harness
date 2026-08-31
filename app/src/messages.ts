@@ -49,6 +49,20 @@ export const messages = {
     title: "EducAI",
     loading: "Cargando…",
     connectAi: "Conectá tu IA",
+    settings: "Configuración",
+  },
+
+  conversations: {
+    title: "Conversaciones",
+    listAriaLabel: "Conversaciones",
+    newButton: "Nueva conversación",
+    sharedLabel: "Compartido",
+    renameLabel: "Renombrar conversación",
+    renameAriaLabel: "Renombrar",
+  },
+
+  conversation: {
+    defaultName: "Nueva conversación",
   },
 
   common: {

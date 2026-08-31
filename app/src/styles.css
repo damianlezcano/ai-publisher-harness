@@ -878,3 +878,168 @@ select {
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
+
+/* -- T5a: chat-first shell --------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+  min-width: 1024px;
+}
+
+.app-shell-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  justify-content: space-between;
+}
+
+.app-settings-button {
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: var(--space-2) var(--space-3);
+}
+
+.app-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversations-sidebar {
+  flex: 0 0 auto;
+  width: 280px;
+  min-width: 260px;
+  max-width: 320px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.conversations-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.conversations-sidebar-title {
+  font-size: var(--font-size-panel);
+  margin: 0;
+}
+
+.conversations-new-button {
+  white-space: nowrap;
+}
+
+.conversations-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.conversation-item {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.conversation-select {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+  justify-content: center;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  min-width: 0;
+}
+
+.conversation-select:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.conversation-select.selected {
+  background: #eef0ff;
+  border-color: var(--primary);
+}
+
+.conversation-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-meta);
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.conversation-shared-badge {
+  flex: 0 0 auto;
+}
+
+.conversation-timestamp {
+  flex: 0 0 auto;
+}
+
+.conversation-rename-button {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: var(--space-2);
+}
+
+.conversation-rename-form {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex: 1 1 auto;
+  padding: var(--space-1) 0;
+  min-width: 0;
+}
+
+.conversation-rename-form input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.conversation-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-4);
+}
+
+.conversation-placeholder {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}

@@ -2,9 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { AgentPhase, ProjectSummary, ProjectView } from "./types";
 import { guidanceFromError } from "./guidance";
-import ProjectsView from "./components/ProjectsView";
 import WorkspaceView from "./components/WorkspaceView";
-import ModelSelector from "./components/provider/ModelSelector";
+import ConversationsSidebar from "./components/ConversationsSidebar";
 import ProviderPanel from "./components/provider/ProviderPanel";
 import ProviderStatusBanner from "./components/ui/ProviderStatusBanner";
 import type { ProviderStatus } from "./components/ui/ProviderStatusBanner";
@@ -13,37 +12,70 @@ import { useToast } from "./components/ui/useToast";
 import { messages } from "./messages";
 
 export default function App() {
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [conversations, setConversations] = useState<ProjectSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [project, setProject] = useState<ProjectView | null>(null);
+  const [conversation, setConversation] = useState<ProjectView | null>(null);
   const [loading, setLoading] = useState(true);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
   const [agentMessage, setAgentMessage] = useState<string | null>(null);
-  const [providerOpen, setProviderOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [providerRefreshKey, setProviderRefreshKey] = useState(0);
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const { toasts, show } = useToast();
 
-  const refreshProjects = useCallback(async () => {
-    setProjects(await api.projectList());
+  const refreshConversations = useCallback(async () => {
+    setConversations(await api.projectList());
   }, []);
 
-  const refreshProject = useCallback(async (id: string) => {
-    setProject(await api.projectOpen(id));
+  const refreshConversation = useCallback(async (id: string) => {
+    setConversation(await api.projectOpen(id));
   }, []);
+
+  const openConversation = useCallback(
+    async (id: string) => {
+      setSelectedId(id);
+      setAgentPhase("idle");
+      setAgentMessage(null);
+      try {
+        setConversation(await api.projectOpen(id));
+      } catch (error) {
+        setConversation(null);
+        show(guidanceFromError(error).title);
+      }
+    },
+    [show],
+  );
 
   useEffect(() => {
+    let active = true;
     void (async () => {
       try {
-        await refreshProjects();
-      } catch {
-        // The projects view surfaces its own load error on retry.
+        const list = await api.projectList();
+        if (!active) return;
+        if (list.length === 0) {
+          await api.projectCreate(messages.conversation.defaultName);
+          if (!active) return;
+          await refreshConversations();
+          if (!active) return;
+          const refreshed = await api.projectList();
+          if (active && refreshed.length > 0) {
+            await openConversation(refreshed[0].id);
+          }
+        } else {
+          setConversations(list);
+          await openConversation(list[0].id);
+        }
+      } catch (error) {
+        if (active) show(guidanceFromError(error).title);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
-  }, [refreshProjects]);
+    return () => {
+      active = false;
+    };
+  }, [openConversation, refreshConversations, show]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -62,6 +94,9 @@ export default function App() {
           setAgentPhase("failed");
           setAgentMessage(event.message ?? messages.agent.taskFailed);
         }
+        if (selectedId) {
+          void refreshConversation(selectedId);
+        }
       })
       .then((fn) => {
         if (active) unlisten = fn;
@@ -70,7 +105,7 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [selectedId, refreshProject, show]);
+  }, [selectedId, refreshConversation, show]);
 
   useEffect(() => {
     let active = true;
@@ -92,28 +127,11 @@ export default function App() {
     };
   }, [providerRefreshKey]);
 
-  const openProject = useCallback(
-    async (id: string) => {
-      setSelectedId(id);
-      setAgentPhase("idle");
-      setAgentMessage(null);
-      try {
-        setProject(await api.projectOpen(id));
-      } catch (error) {
-        setProject(null);
-        show(guidanceFromError(error).title);
-      }
-    },
-    [show],
-  );
-
-  const goBack = useCallback(() => {
-    setSelectedId(null);
-    setProject(null);
+  const handleBack = useCallback(() => {
     setAgentPhase("idle");
     setAgentMessage(null);
-    void refreshProjects();
-  }, [refreshProjects]);
+    void refreshConversations();
+  }, [refreshConversations]);
 
   const providerChanged = useCallback(() => {
     setNeedsReconnect(false);
@@ -128,47 +146,61 @@ export default function App() {
 
   if (loading) {
     return (
-      <main className="app" aria-busy="true">
+      <main className="app app-shell" aria-busy="true">
         <p className="muted">{messages.app.loading}</p>
       </main>
     );
   }
 
   return (
-    <main className="app">
-      <header className="app-bar">
+    <main className="app app-shell">
+      <header className="app-bar app-shell-header">
         <span className="app-title">{messages.app.title}</span>
-        <ModelSelector refreshKey={providerRefreshKey} />
-        <button type="button" className="secondary" onClick={() => setProviderOpen(true)}>
-          {messages.app.connectAi}
+        <button
+          type="button"
+          className="secondary app-settings-button"
+          aria-label={messages.app.settings}
+          aria-pressed={settingsOpen}
+          onClick={() => setSettingsOpen((open) => !open)}
+        >
+          ⚙
         </button>
       </header>
 
       {bannerStatus && (
-        <ProviderStatusBanner status={bannerStatus} onConnect={() => setProviderOpen(true)} />
+        <ProviderStatusBanner status={bannerStatus} onConnect={() => setSettingsOpen(true)} />
       )}
 
-      {providerOpen && (
-        <ProviderPanel onClose={() => setProviderOpen(false)} onChanged={providerChanged} />
-      )}
+      <div className="app-body">
+        <ConversationsSidebar
+          conversations={conversations}
+          selectedId={selectedId}
+          onSelect={(id) => void openConversation(id)}
+          onRefresh={refreshConversations}
+        />
 
-      {selectedId && project ? (
-        <WorkspaceView
-          project={project}
-          agentPhase={agentPhase}
-          agentMessage={agentMessage}
-          onBack={goBack}
-          onRefresh={() => void refreshProject(selectedId)}
-          aiUsable={providerStatus !== "requires-choice"}
-          onOpenProvider={() => setProviderOpen(true)}
-          onProviderError={handleProviderError}
-        />
-      ) : (
-        <ProjectsView
-          projects={projects}
-          onRefresh={refreshProjects}
-          onOpen={(id) => void openProject(id)}
-        />
+        {selectedId && conversation ? (
+          <div className="conversation-main">
+            <WorkspaceView
+              project={conversation}
+              agentPhase={agentPhase}
+              agentMessage={agentMessage}
+              onBack={handleBack}
+              onRefresh={() => void refreshConversation(selectedId)}
+              aiUsable={providerStatus !== "requires-choice"}
+              onOpenProvider={() => setSettingsOpen(true)}
+              onProviderError={handleProviderError}
+            />
+          </div>
+        ) : (
+          <div className="conversation-placeholder">
+            <p className="muted">{messages.app.loading}</p>
+          </div>
+        )}
+      </div>
+
+      {settingsOpen && (
+        <ProviderPanel onClose={() => setSettingsOpen(false)} onChanged={providerChanged} />
       )}
 
       <ToastRegion toasts={toasts} />
