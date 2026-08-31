@@ -1,6 +1,9 @@
 export interface ProjectSummary {
   id: string;
   name: string;
+  createdAt: string;
+  updatedAt: string;
+  shared: boolean;
 }
 
 export interface MaterialView {
@@ -49,12 +52,23 @@ export interface PublicationView {
   publicUrl: string | null;
 }
 
+export interface MessageView {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  status: "ok" | "failed" | "cancelled";
+  createdAt: string;
+  materialIds: string[];
+  creationIds: string[];
+}
+
 export interface ProjectView {
   id: string;
   name: string;
   materials: MaterialView[];
   creations: CreationView[];
   publication: PublicationView;
+  messages: MessageView[];
 }
 
 export interface AgentTaskEvent {

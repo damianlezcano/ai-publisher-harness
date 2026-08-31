@@ -10,8 +10,20 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const invokeMock = vi.mocked(invoke);
 
 const projects = [
-  { id: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22", name: "Fotosíntesis" },
-  { id: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f23", name: "Sistema solar" },
+  {
+    id: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22",
+    name: "Fotosíntesis",
+    createdAt: "2026-08-31T10:00:00Z",
+    updatedAt: "2026-08-31T10:30:00Z",
+    shared: false,
+  },
+  {
+    id: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f23",
+    name: "Sistema solar",
+    createdAt: "2026-08-31T09:00:00Z",
+    updatedAt: "2026-08-31T09:30:00Z",
+    shared: false,
+  },
 ];
 
 const FIRST_RUN_DISMISSED_KEY = "educai.firstRunDismissed";
@@ -133,7 +145,15 @@ describe("ProjectsView", () => {
   });
 
   it("renders hostile names as text, not as HTML", () => {
-    const hostile = [{ id: "x", name: "<img src=x onerror=alert(1)>" }];
+    const hostile = [
+      {
+        id: "x",
+        name: "<img src=x onerror=alert(1)>",
+        createdAt: "2026-08-31T10:00:00Z",
+        updatedAt: "2026-08-31T10:30:00Z",
+        shared: false,
+      },
+    ];
     render(<ProjectsView projects={hostile} onRefresh={async () => {}} onOpen={() => {}} />);
     expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
