@@ -1043,3 +1043,62 @@ select {
   justify-content: center;
   min-width: 0;
 }
+
+/* -- T5b: composer bar ------------------------------------------------------- */
+
+.composer-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.composer-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.composer-textarea {
+  resize: none;
+  min-height: 44px;
+}
+
+.composer-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.composer-model {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-model-select {
+  width: auto;
+  max-width: 260px;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.composer-share-slot {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.composer-material-picker {
+  margin: 0;
+}
