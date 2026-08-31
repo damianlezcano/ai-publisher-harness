@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
 import { guidanceFromError } from "../guidance";
 import type { GuidanceActionKind } from "../guidance";
@@ -112,23 +112,6 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     }
   }
 
-  const composerRef = useRef<HTMLDivElement>(null);
-  // Compatibility shim: App.test predates the bottom-bar model selector and
-  // asserts that no "Modelo" label exists in the document. The selector is
-  // owned by ComposerBar (tested in isolation); hiding it from the a11y tree
-  // only in test mode keeps that legacy assertion green without affecting
-  // production behaviour.
-  useEffect(() => {
-    if (import.meta.env.MODE !== "test") return;
-    const label = composerRef.current?.querySelector('label[for="composer-model-select"]');
-    label?.removeAttribute("for");
-    composerRef.current
-      ?.querySelectorAll(".composer-model, .composer-model-select")
-      .forEach((element) => {
-        element.setAttribute("aria-hidden", "true");
-      });
-  }, []);
-
   return (
     <div className="view workspace workspace-chat">
       <header className="view-header workspace-header">
@@ -185,7 +168,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
 
       {sendError !== null && <ErrorNotice error={sendError} onAction={handleSendErrorAction} />}
 
-      <div ref={composerRef} className="workspace-composer">
+      <div className="workspace-composer">
         <ComposerBar
           projectId={project.id}
           materials={project.materials}
