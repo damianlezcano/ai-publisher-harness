@@ -48,7 +48,6 @@ export const messages = {
   app: {
     title: "EducAI",
     loading: "Cargando…",
-    connectAi: "Conectá tu IA",
     settings: "Configuración",
   },
 
@@ -127,10 +126,6 @@ export const messages = {
     removeAttachment(name: string): string {
       return `Quitar ${name}`;
     },
-    noAi: {
-      title: "No hay una IA conectada",
-      action: "Conectar IA",
-    },
   },
 
   timeline: {
@@ -202,28 +197,17 @@ export const messages = {
 
   sharing: {
     panelLabel: "Compartir",
-    heading: "Compartir",
-    notShared: "No compartido",
     shared: "Compartido",
     shareAction: "Compartir",
     sharing: "Compartiendo…",
-    sharingNote: "puede tardar unos segundos",
     stopSharing: "Dejar de compartir",
     stopping: "Dejando de compartir…",
-    stopped: "Dejaste de compartirlo",
-    linkLabel: "Enlace para compartir",
     copyLink: "Copiar enlace",
     openLink: "Abrir enlace",
     showQr: "Mostrar QR",
     copyLinkFailed: "No pudimos copiar el enlace.",
-    empty: {
-      title: "Este proyecto todavía no se comparte",
-      action: "Compartir",
-    },
     temporaryNote:
       "Este enlace funciona mientras el recurso esté compartido. Si cerrás la aplicación, dejás de compartir o se corta la conexión, el enlace deja de funcionar.",
-    temporaryGuidance:
-      "Compartí este enlace con tus estudiantes. Es temporal: no es un sitio permanente.",
     stopConfirm: {
       title: "Dejar de compartir",
       message: "Si dejás de compartir, tus estudiantes ya no podrán abrir el enlace.",

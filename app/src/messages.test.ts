@@ -57,6 +57,12 @@ describe("messages catalog", () => {
     expect(messages.project.newButton).toBe("Nuevo proyecto");
   });
 
+  it("uses canonical conversation vocabulary", () => {
+    expect(messages.conversations.title).toBe("Conversaciones");
+    expect(messages.conversations.newButton).toBe("Nueva conversación");
+    expect(messages.conversation.defaultName).toBe("Nueva conversación");
+  });
+
   it("uses canonical assistant terminology", () => {
     expect(messages.assistant.heading).toBe("Asistente");
     expect(messages.assistant.panelLabel).toBe("Asistente");
@@ -66,14 +72,10 @@ describe("messages catalog", () => {
     expect(messages.sharing.shareAction).toBe("Compartir");
     expect(messages.sharing.sharing).toBe("Compartiendo…");
     expect(messages.sharing.shared).toBe("Compartido");
-    expect(messages.sharing.notShared).toBe("No compartido");
-    expect(messages.sharing.linkLabel).toBe("Enlace para compartir");
     expect(messages.sharing.copyLink).toBe("Copiar enlace");
     expect(messages.sharing.openLink).toBe("Abrir enlace");
     expect(messages.sharing.showQr).toBe("Mostrar QR");
     expect(messages.sharing.stopSharing).toBe("Dejar de compartir");
-    expect(messages.sharing.stopped).toBe("Dejaste de compartirlo");
-    expect(messages.sharing.empty.title).toBe("Este proyecto todavía no se comparte");
   });
 
   it("includes the exact temporary-link note", () => {
