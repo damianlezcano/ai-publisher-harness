@@ -31,8 +31,8 @@
       "rpm"
     ],
     "externalBin": [
-      "../sidecars/opencode",
-      "../sidecars/cloudflared"
+      "../../sidecars/opencode",
+      "../../sidecars/cloudflared"
     ],
     "category": "Education",
     "shortDescription": "Asistente educativo con IA para crear y compartir materiales.",

@@ -4,16 +4,30 @@
 # NOT part of `scripts/verify`. Fetches pinned sidecars, builds AppImage + RPM,
 # inspects the AppImage payload for bundled sidecars, and prints manual demo steps.
 #
-# Exit codes: 0 = PASS, 1 = FAIL, 3 = SKIP (missing prerequisites or network).
+# Exit codes: 0 = PASS, 1 = FAIL, 2 = usage, 3 = SKIP (missing prerequisites or network).
+#
+# Usage: $0 [appimage|rpm|all]
+#   appimage   build + validate only the AppImage artifact (no rpmbuild required)
+#   rpm        build + validate only the RPM artifact
+#   all        build + validate both (default; requires rpmbuild)
 
 set -euo pipefail
 
 SCRIPT="$(basename "$0")"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="$repo_root/app/src-tauri/Cargo.toml"
-bundle_root="$repo_root/app/src-tauri/target/release/bundle"
+tauri_dir="$repo_root/app/src-tauri"
+bundle_root="$tauri_dir/target/release/bundle"
 appimage_dir="$bundle_root/appimage"
 rpm_dir="$bundle_root/rpm"
+
+mode="${1:-all}"
+case "$mode" in
+  appimage|rpm|all) ;;
+  *)
+    echo "$SCRIPT: usage: $0 [appimage|rpm|all]" >&2
+    exit 2
+    ;;
+esac
 
 skip() {
   echo "$SCRIPT: SKIP: $*" >&2
@@ -35,7 +49,7 @@ if ! cargo tauri --version >/dev/null 2>&1; then
   skip "cargo tauri CLI not available (no 'cargo tauri')"
 fi
 
-if ! command -v rpmbuild >/dev/null 2>&1; then
+if [[ "$mode" == "rpm" || "$mode" == "all" ]] && ! command -v rpmbuild >/dev/null 2>&1; then
   skip "rpmbuild not available (install rpm-build)"
 fi
 
@@ -48,59 +62,103 @@ cd "$repo_root"
 echo "$SCRIPT: fetching pinned sidecars"
 "$repo_root/scripts/fetch-sidecars"
 
-echo "$SCRIPT: building AppImage bundle"
-cargo tauri build --manifest-path "$manifest" --bundles appimage
-
-mapfile -t appimages < <(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' 2>/dev/null || true)
-if (( ${#appimages[@]} == 0 )); then
-  fail "AppImage artifact not found (expected $appimage_dir/*.AppImage)"
-fi
-appimage="${appimages[0]}"
-if (( ${#appimages[@]} > 1 )); then
-  echo "$SCRIPT: note: multiple AppImages found; inspecting ${appimages[0]}" >&2
-fi
-echo "$SCRIPT: found AppImage: $appimage"
-
-echo "$SCRIPT: building RPM bundle"
-cargo tauri build --manifest-path "$manifest" --bundles rpm
-
-mapfile -t rpms < <(find "$rpm_dir" -maxdepth 1 -type f -name '*.rpm' 2>/dev/null || true)
-if (( ${#rpms[@]} == 0 )); then
-  fail "RPM artifact not found (expected $rpm_dir/*.rpm)"
-fi
-echo "$SCRIPT: found RPM: ${rpms[0]}"
-
-echo "$SCRIPT: inspecting AppImage payload for bundled sidecars"
-inspect_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$inspect_dir"
+run_tauri_build() {
+  local bundles="$1"
+  (
+    cd "$tauri_dir"
+    cargo tauri build --bundles "$bundles"
+  )
 }
-trap cleanup EXIT
 
-if [[ ! -x "$appimage" ]]; then
-  fail "AppImage is not executable: $appimage"
+if [[ "$mode" == "appimage" || "$mode" == "all" ]]; then
+  rm -rf "$appimage_dir"
+  echo "$SCRIPT: building AppImage bundle"
+  # tauri-bundler runs linuxdeploy for the AppImage. On Fedora 44 linuxdeploy is
+  # incompatible (its bundled strip cannot read `.relr.dyn` sections and its
+  # bundled patchelf 0.8 corrupts Bun-style sidecar binaries), so the linuxdeploy
+  # step may exit non-zero AFTER tauri has already assembled a complete AppDir.
+  # If no AppImage is produced, package that AppDir directly with appimagetool.
+  if ! run_tauri_build appimage; then
+    echo "$SCRIPT: note: tauri linuxdeploy step failed; falling back to direct appimagetool packaging" >&2
+  fi
+
+  mapfile -t appimages < <(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' 2>/dev/null || true)
+  if (( ${#appimages[@]} == 0 )); then
+    mapfile -t appdirs < <(find "$appimage_dir" -maxdepth 1 -type d -name '*.AppDir' 2>/dev/null || true)
+    if (( ${#appdirs[@]} != 1 )); then
+      fail "no AppImage artifact and no single AppDir to package (expected $appimage_dir/*.AppImage or one *.AppDir)"
+    fi
+    appdir="${appdirs[0]}"
+    # appimagetool needs the desktop file Icon resolvable at the AppDir root.
+    if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
+      ln -sf EducAI.png "$appdir/educai.png"
+    fi
+    appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
+    if [[ ! -f "$appimagetool" ]]; then
+      fail "appimagetool not found at $appimagetool (expected from a prior tauri bundling step)"
+    fi
+    appimage="$appimage_dir/EducAI_0.1.0_amd64.AppImage"
+    echo "$SCRIPT: packaging AppDir with appimagetool: $appimage"
+    rm -f "$appimage"
+    if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+        "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
+      fail "appimagetool packaging failed for $appdir"
+    fi
+    appimages=("$appimage")
+  fi
+  appimage="${appimages[0]}"
+  if (( ${#appimages[@]} > 1 )); then
+    echo "$SCRIPT: note: multiple AppImages found; inspecting ${appimages[0]}" >&2
+  fi
+  echo "$SCRIPT: found AppImage: $appimage"
+else
+  appimage=""
 fi
 
-(
-  cd "$inspect_dir"
-  "$appimage" --appimage-extract >/dev/null
-) || fail "AppImage extraction failed: $appimage"
+if [[ "$mode" == "rpm" || "$mode" == "all" ]]; then
+  echo "$SCRIPT: building RPM bundle"
+  run_tauri_build rpm
 
-extract_root="$inspect_dir/squashfs-root"
-if [[ ! -d "$extract_root" ]]; then
-  fail "AppImage extract did not produce squashfs-root under $inspect_dir"
+  mapfile -t rpms < <(find "$rpm_dir" -maxdepth 1 -type f -name '*.rpm' 2>/dev/null || true)
+  if (( ${#rpms[@]} == 0 )); then
+    fail "RPM artifact not found (expected $rpm_dir/*.rpm)"
+  fi
+  echo "$SCRIPT: found RPM: ${rpms[0]}"
 fi
 
-for sidecar in opencode cloudflared; do
-  path="$extract_root/usr/bin/$sidecar"
-  if [[ ! -f "$path" ]]; then
-    fail "sidecar missing in AppImage payload: usr/bin/$sidecar"
+if [[ "$mode" == "appimage" || "$mode" == "all" ]]; then
+  echo "$SCRIPT: inspecting AppImage payload for bundled sidecars"
+  inspect_dir="$(mktemp -d)"
+  cleanup() {
+    rm -rf "$inspect_dir"
+  }
+  trap cleanup EXIT
+
+  if [[ ! -x "$appimage" ]]; then
+    fail "AppImage is not executable: $appimage"
   fi
-  if [[ ! -x "$path" ]]; then
-    fail "sidecar not executable in AppImage payload: usr/bin/$sidecar"
+
+  (
+    cd "$inspect_dir"
+    "$appimage" --appimage-extract >/dev/null
+  ) || fail "AppImage extraction failed: $appimage"
+
+  extract_root="$inspect_dir/squashfs-root"
+  if [[ ! -d "$extract_root" ]]; then
+    fail "AppImage extract did not produce squashfs-root under $inspect_dir"
   fi
-  echo "$SCRIPT: verified usr/bin/$sidecar in AppImage"
-done
+
+  for sidecar in opencode cloudflared; do
+    path="$extract_root/usr/bin/$sidecar"
+    if [[ ! -f "$path" ]]; then
+      fail "sidecar missing in AppImage payload: usr/bin/$sidecar"
+    fi
+    if [[ ! -x "$path" ]]; then
+      fail "sidecar not executable in AppImage payload: usr/bin/$sidecar"
+    fi
+    echo "$SCRIPT: verified usr/bin/$sidecar in AppImage"
+  done
+fi
 
 cat <<'EOF'
 smoke-package: automated checks OK. MANUAL CHECKLIST (human, graphical session):
