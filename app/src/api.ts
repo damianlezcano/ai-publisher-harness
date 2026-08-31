@@ -7,10 +7,13 @@ import type {
   ConnectionTest,
   ConnectionView,
   CreationView,
+  MaterialAddImageView,
   MaterialView,
+  MaterialsImportReport,
   ModelSummary,
   OAuthAttempt,
   OAuthStatus,
+  PreviewData,
   ProjectSummary,
   ProjectView,
   ProviderDetail,
@@ -28,6 +31,24 @@ export const api = {
   projectDelete: (projectId: string) => invoke<void>("project_delete", { projectId }),
   materialAddFromPath: (projectId: string, path: string) =>
     invoke<MaterialView>("material_add_from_path", { projectId, path }),
+  materialAddImage: (projectId: string, fileName: string, contentType: string, data: Uint8Array) =>
+    invoke<MaterialAddImageView>("material_add_image", {
+      projectId,
+      fileName,
+      contentType,
+      data: Array.from(data),
+    }),
+  materialsAddFromPaths: (projectId: string, paths: string[]) =>
+    invoke<MaterialsImportReport>("materials_add_from_paths", { projectId, paths }),
+  materialRemove: (projectId: string, materialId: string) =>
+    invoke<void>("material_remove", { projectId, materialId }),
+  materialOpen: (projectId: string, materialId: string) =>
+    invoke<void>("material_open", { projectId, materialId }),
+  previewData: (projectId: string, resourceKind: string, resourceId: string) =>
+    invoke<PreviewData>("preview_data", { projectId, resourceKind, resourceId }),
+  previewOpenWeb: (projectId: string, creationId: string) =>
+    invoke<void>("preview_open_web", { projectId, creationId }),
+  previewClose: (token: string) => invoke<void>("preview_close", { token }),
   creationSetVisibility: (projectId: string, creationId: string, isPublic: boolean) =>
     invoke<CreationView>("creation_set_visibility", {
       projectId,
@@ -37,8 +58,8 @@ export const api = {
   creationOpen: (projectId: string, creationId: string) =>
     invoke<void>("creation_open", { projectId, creationId }),
   openPublicUrl: (projectId: string) => invoke<void>("open_public_url", { projectId }),
-  agentSend: (projectId: string, prompt: string) =>
-    invoke<void>("agent_send", { projectId, prompt }),
+  agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
+    invoke<void>("agent_send", { projectId, prompt, attachmentIds }),
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),
   publish: (projectId: string) => invoke<PublicationView>("publish", { projectId }),
   unpublish: (projectId: string) => invoke<PublicationView>("unpublish", { projectId }),

@@ -451,3 +451,133 @@ textarea {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* -- M8: materials, attachments, preview ------------------------------------ */
+
+.material-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.material-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.material-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.remove-confirm {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.remove-confirm p {
+  margin: 0 0 8px;
+}
+
+.chip-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #eef0ff;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px 4px 12px;
+  font-size: 0.9rem;
+}
+
+.chip-remove {
+  padding: 0 6px;
+  min-width: 28px;
+  line-height: 1.2;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+
+.chip-remove:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.preview-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+}
+
+.preview-modal {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.preview-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  align-self: center;
+}
+
+.preview-text {
+  margin: 0;
+  padding: 12px;
+  background: #f1f1f8;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 70vh;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.creation-card {
+  flex-direction: column;
+  align-items: stretch;
+}

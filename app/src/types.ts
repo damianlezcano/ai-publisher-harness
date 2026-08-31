@@ -9,6 +9,7 @@ export interface MaterialView {
   originalFileName: string;
   kind: string;
   byteSize: number;
+  createdAt: string;
 }
 
 export interface CreationView {
@@ -17,6 +18,30 @@ export interface CreationView {
   kind: string;
   visibility: "public" | "private";
   byteSize: number;
+  createdAt: string;
+  revision: number;
+}
+
+export interface MaterialImportResult {
+  sourceName: string;
+  status: "added" | "duplicate" | "unsupported" | "failed";
+  materialId?: string;
+  reason?: string;
+  material?: MaterialView;
+}
+
+export interface MaterialsImportReport {
+  items: MaterialImportResult[];
+}
+
+export interface MaterialAddImageView {
+  material: MaterialView;
+  duplicate: boolean;
+}
+
+export interface PreviewData {
+  contentType: string;
+  dataBase64: string;
 }
 
 export interface PublicationView {
