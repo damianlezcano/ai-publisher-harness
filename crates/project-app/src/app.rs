@@ -12,18 +12,20 @@ use std::sync::{Arc, Mutex};
 
 use project_agent::model::{ModelRef, TaskStatus};
 use project_agent::{
-    AgentEngine, AgentPrompt, AgentRequest, AgentRunResult, AgentService, AgentStatus, AgentTask,
-    FilesystemCreationRegistrar, OpenCodeAgentEngine,
+    AgentAttachment, AgentEngine, AgentPrompt, AgentRequest, AgentRunResult, AgentService,
+    AgentStatus, AgentTask, FilesystemCreationRegistrar, OpenCodeAgentEngine,
 };
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
-    MaterialContent, ProjectId, ProjectService, SystemClock, UuidV7IdGenerator,
+    MaterialContent, MaterialId, ProjectContentStore, ProjectId, ProjectService, SystemClock,
+    UuidV7IdGenerator,
 };
 use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
     PublicationSnapshotStore,
 };
 use project_opencode::OpenCodeBackend;
+use project_preview::PreviewServer;
 use project_provider::{
     BackendRestarter, ConnectionTest, ConnectionView, ModelSummary, OAuthAttempt, OAuthStatus,
     OpenCodeProviderConnector, ProviderConnector, ProviderDetail, ProviderError, ProviderResult,
@@ -34,6 +36,7 @@ use project_publisher::AxumLocalPublisher;
 use project_tunnel::{
     BinaryResolver, CloudflareQuickTunnel, FixedBinaryResolver, PathBinaryResolver, TunnelProvider,
 };
+use sha2::{Digest, Sha256};
 
 use crate::dtos::*;
 use crate::error::{AppError, AppResult, ErrorCode};
@@ -100,6 +103,20 @@ pub struct AppState<
     >,
     agent: AgentService<E, FilesystemCreationRegistrar>,
     provider: ProviderService<P, R>,
+    /// Live isolated web-preview servers keyed by their single-use token. Each
+    /// entry serves one immutable copy of a creation's `outputs/<id>` tree on a
+    /// loopback-only, token-guarded endpoint (ADR-0010). Removed (and torn down)
+    /// by `preview_close`.
+    previews: Mutex<std::collections::HashMap<String, LivePreview>>,
+}
+
+/// A running isolated web preview: the loopback token server plus the immutable
+/// snapshot it serves. Dropping this stops the server, invalidates the token,
+/// and removes the snapshot directory.
+#[expect(dead_code)]
+struct LivePreview {
+    server: PreviewServer,
+    snapshot: tempfile::TempDir,
 }
 
 impl
@@ -188,6 +205,7 @@ where
             publication,
             agent,
             provider,
+            previews: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -293,6 +311,237 @@ where
         Ok(material_view(&material))
     }
 
+    /// Clipboard image paste (M8 §4). The image bytes are validated fail-closed
+    /// (allowed type, magic-byte sniff, 25 MB cap, empty rejection), the file
+    /// name is deterministically synthesized, and a content SHA-256 duplicate of
+    /// an existing project material returns the existing material (`duplicate:
+    /// true`) instead of storing a second copy. The original clipboard bytes are
+    /// never modified and no new clipboard privilege is granted.
+    pub fn add_material_image(
+        &self,
+        project_id: &str,
+        file_name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> AppResult<MaterialAddImageView> {
+        let pid = parse_project_id(project_id)?;
+        let image = validate_clipboard_image(file_name, content_type, &bytes)?;
+        let sha = sha256_hex(&bytes);
+        if let Some(existing) = self.find_material_by_sha(&pid, &sha)? {
+            return Ok(MaterialAddImageView {
+                material: material_view(&existing),
+                duplicate: true,
+            });
+        }
+        let request = AddMaterial {
+            display_name: "Captura".to_owned(),
+            original_file_name: image.synthesized_name,
+            content_type: Some(ContentType::parse(image.content_type).expect("validated type")),
+            source: MaterialContent { bytes },
+        };
+        let material = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_material(&pid, request)
+            .map_err(AppError::from_material)?;
+        Ok(MaterialAddImageView {
+            material: material_view(&material),
+            duplicate: false,
+        })
+    }
+
+    /// Multi-file import (M8 §5). Each input file is processed independently and
+    /// reported in input order with a deterministic per-file status
+    /// (`added` / `duplicate` / `unsupported` / `failed`); one bad file never
+    /// aborts the batch. Sources are only ever read; originals are never
+    /// modified. Dedup uses content SHA-256 against existing project materials
+    /// and earlier entries in the same batch.
+    pub fn import_materials(
+        &self,
+        project_id: &str,
+        paths: Vec<String>,
+    ) -> AppResult<MaterialsImportReport> {
+        let pid = parse_project_id(project_id)?;
+        let mut items = Vec::with_capacity(paths.len());
+        for path in paths {
+            items.push(self.import_one_material(&pid, &path)?);
+        }
+        Ok(MaterialsImportReport { items })
+    }
+
+    fn import_one_material(&self, pid: &ProjectId, path: &str) -> AppResult<MaterialImportResult> {
+        let source_name = Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(project_core::safe_file_name)
+            .unwrap_or_default();
+        let source_name = if source_name.is_empty() {
+            "archivo".to_owned()
+        } else {
+            source_name
+        };
+        // Reject oversize and non-regular sources BEFORE reading any bytes so
+        // the backend never buffers an unbounded frontend-supplied path.
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_file() && meta.len() <= MAX_IMPORT_FILE_BYTES => {}
+            Ok(meta) if meta.file_type().is_file() => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "unsupported".to_owned(),
+                    material_id: None,
+                    reason: Some("Ese archivo es demasiado grande.".to_owned()),
+                    material: None,
+                });
+            }
+            Ok(_) => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "unsupported".to_owned(),
+                    material_id: None,
+                    reason: Some("Ese archivo no es válido.".to_owned()),
+                    material: None,
+                });
+            }
+            Err(_) => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "failed".to_owned(),
+                    material_id: None,
+                    reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                    material: None,
+                });
+            }
+        }
+        match read_source_file(Path::new(path)) {
+            Err(AppError {
+                code: ErrorCode::MaterialFailed,
+                ..
+            }) => Ok(MaterialImportResult {
+                source_name,
+                status: "failed".to_owned(),
+                material_id: None,
+                reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                material: None,
+            }),
+            Err(_) => Ok(MaterialImportResult {
+                source_name,
+                status: "unsupported".to_owned(),
+                material_id: None,
+                reason: Some("Ese archivo no es válido.".to_owned()),
+                material: None,
+            }),
+            Ok((file_name, bytes, content_type)) => {
+                let sha = sha256_hex(&bytes);
+                match self.find_material_by_sha(pid, &sha) {
+                    Ok(Some(existing)) => {
+                        return Ok(MaterialImportResult {
+                            source_name,
+                            status: "duplicate".to_owned(),
+                            material_id: Some(existing.id.as_str().to_owned()),
+                            reason: Some("Ese archivo ya está en el proyecto.".to_owned()),
+                            material: Some(material_view(&existing)),
+                        });
+                    }
+                    // A read error on the project metadata marks this item
+                    // failed rather than aborting the whole batch.
+                    Err(_) => {
+                        return Ok(MaterialImportResult {
+                            source_name,
+                            status: "failed".to_owned(),
+                            material_id: None,
+                            reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                            material: None,
+                        });
+                    }
+                    Ok(None) => {}
+                }
+                let request = AddMaterial {
+                    display_name: file_name.clone(),
+                    original_file_name: file_name,
+                    content_type,
+                    source: MaterialContent { bytes },
+                };
+                match self
+                    .projects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .add_material(pid, request)
+                {
+                    Ok(material) => Ok(MaterialImportResult {
+                        source_name,
+                        status: "added".to_owned(),
+                        material_id: Some(material.id.as_str().to_owned()),
+                        reason: None,
+                        material: Some(material_view(&material)),
+                    }),
+                    Err(_) => Ok(MaterialImportResult {
+                        source_name,
+                        status: "failed".to_owned(),
+                        material_id: None,
+                        reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                        material: None,
+                    }),
+                }
+            }
+        }
+    }
+
+    fn find_material_by_sha(&self, pid: &ProjectId, sha: &str) -> AppResult<Option<Material>> {
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(pid)
+            .map_err(AppError::from_core)?;
+        Ok(project
+            .materials
+            .iter()
+            .find(|m| m.sha256.as_str() == sha)
+            .cloned())
+    }
+
+    /// Removes a material: the metadata reference is removed under optimistic
+    /// concurrency and the app-managed `inputs/<id>` copy is deleted. The user's
+    /// original source file is never touched.
+    pub fn remove_material(&self, project_id: &str, material_id: &str) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let mid = parse_material_id(material_id)?;
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove_material(&pid, &mid)
+            .map_err(AppError::from_material)
+    }
+
+    /// Resolves the validated, canonical on-disk path for a material. Used by
+    /// `open_material`; never exposes an arbitrary-path open capability.
+    pub fn material_path(&self, project_id: &str, material_id: &str) -> AppResult<PathBuf> {
+        let pid = parse_project_id(project_id)?;
+        let mid = parse_material_id(material_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        let material = project
+            .materials
+            .iter()
+            .find(|m| m.id == mid)
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese material."))?;
+        self.content
+            .material_path(&pid, material)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
+    }
+
+    /// Opens a material with the host system default handler (read-only).
+    pub fn open_material(&self, project_id: &str, material_id: &str) -> AppResult<()> {
+        let path = self.material_path(project_id, material_id)?;
+        opener::open(path)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
+    }
+
     // -- Creations ---------------------------------------------------------
 
     pub fn set_creation_visibility(
@@ -346,9 +595,229 @@ where
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
     }
 
+    // -- Preview ------------------------------------------------------------
+
+    /// In-app preview bytes for images and text/Markdown (M8 §10). Resolves the
+    /// resource against the current project (authorization), reads bytes through
+    /// the content store, and never returns a path. Resources above the 2 MB
+    /// preview cap fall back to the system handler (`PreviewTooLarge`).
+    pub fn preview_data(
+        &self,
+        project_id: &str,
+        resource_kind: &str,
+        resource_id: &str,
+    ) -> AppResult<PreviewData> {
+        let pid = parse_project_id(project_id)?;
+        let (bytes, content_type) = match resource_kind {
+            "material" => {
+                let mid = parse_material_id(resource_id)?;
+                let material = self.find_material(&pid, &mid)?;
+                (
+                    self.read_material_bytes(&pid, &material)?,
+                    material.content_type,
+                )
+            }
+            "creation" => {
+                let cid = parse_creation_id(resource_id)?;
+                let creation = self.find_creation(&pid, &cid)?;
+                (
+                    self.read_creation_bytes(&pid, &creation)?,
+                    creation.content_type,
+                )
+            }
+            _ => return Err(AppError::invalid("Ese recurso no es válido.")),
+        };
+        if bytes.len() as u64 > PREVIEW_MAX_BYTES {
+            return Err(AppError::new(
+                ErrorCode::PreviewTooLarge,
+                "Este recurso es grande; abrilo con la aplicación.",
+            ));
+        }
+        let content_type = content_type
+            .map(|c| c.as_str().to_owned())
+            .unwrap_or_else(|| "application/octet-stream".to_owned());
+        Ok(PreviewData {
+            content_type,
+            data_base64: encode_base64(&bytes),
+        })
+    }
+
+    /// Isolated web preview (M8 §11 / ADR-0010). Resolves the creation within
+    /// the project, copies its `outputs/<id>` tree into an immutable snapshot,
+    /// and starts a loopback-only, token-guarded preview server for that single
+    /// copy. Returns the backend-created URL and the single-use teardown token.
+    /// The generated content never gains Tauri IPC (empty preview capability).
+    pub fn preview_open_web(&self, project_id: &str, creation_id: &str) -> AppResult<WebPreview> {
+        let pid = parse_project_id(project_id)?;
+        let cid = parse_creation_id(creation_id)?;
+        let creation = self.find_creation(&pid, &cid)?;
+        let src_dir = self.content.creation_dir(&pid, &creation).map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })?;
+
+        let snapshot = tempfile::Builder::new()
+            .prefix("m8-preview-")
+            .tempdir()
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::PreviewUnavailable,
+                    "No pudimos mostrar la vista previa.",
+                )
+            })?;
+        copy_tree(&src_dir, snapshot.path()).map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })?;
+
+        let mut server = PreviewServer::new();
+        let endpoint = server
+            .start(snapshot.path().to_path_buf(), None)
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::PreviewUnavailable,
+                    "No pudimos mostrar la vista previa.",
+                )
+            })?;
+        let token = endpoint.token().to_string();
+        self.previews
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token.clone(), LivePreview { server, snapshot });
+        Ok(WebPreview {
+            url: endpoint.url().to_owned(),
+            token,
+        })
+    }
+
+    /// Tears down a live web preview: the loopback server is stopped, its
+    /// single-use token invalidated, and the immutable snapshot removed.
+    pub fn preview_close(&self, token: &str) -> AppResult<()> {
+        let mut previews = self.previews.lock().unwrap_or_else(|e| e.into_inner());
+        if previews.remove(token).is_none() {
+            return Err(AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos cerrar la vista previa.",
+            ));
+        }
+        Ok(())
+    }
+
+    fn find_material(&self, pid: &ProjectId, mid: &MaterialId) -> AppResult<Material> {
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(pid)
+            .map_err(AppError::from_core)?;
+        project
+            .materials
+            .iter()
+            .find(|m| m.id == *mid)
+            .cloned()
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese material."))
+    }
+
+    /// Resolves prompt attachments (M8 §6 / ADR-0011). Each opaque material ID
+    /// is validated, authorized against the CURRENT project's materials (a
+    /// foreign/unknown ID is rejected), and its bytes are read through the
+    /// content store (which re-checks SHA-256). Only sanitized names, stable
+    /// kind labels, and bytes reach the agent; no paths cross the boundary.
+    fn resolve_attachments(
+        &self,
+        project_id: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<Vec<AgentAttachment>> {
+        if attachment_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pid = parse_project_id(project_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        let mut attachments = Vec::with_capacity(attachment_ids.len());
+        for id in attachment_ids {
+            let mid = MaterialId::parse(id).map_err(|_| {
+                AppError::new(
+                    ErrorCode::AttachmentInvalid,
+                    "No pudimos adjuntar ese material.",
+                )
+            })?;
+            let material = project
+                .materials
+                .iter()
+                .find(|m| m.id == mid)
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::AttachmentInvalid,
+                        "No pudimos adjuntar ese material.",
+                    )
+                })?;
+            let bytes = self.content.read_material(&pid, material).map_err(|_| {
+                AppError::new(
+                    ErrorCode::AttachmentInvalid,
+                    "No pudimos adjuntar ese material.",
+                )
+            })?;
+            attachments.push(AgentAttachment {
+                // Sanitized name only (never a path); the agent re-sanitizes
+                // defensively for the prompt (ADR-0011).
+                display_name: project_core::safe_file_name(&material.original_file_name),
+                kind: material_kind(&material.original_file_name).to_owned(),
+                bytes,
+            });
+        }
+        Ok(attachments)
+    }
+
+    fn find_creation(&self, pid: &ProjectId, cid: &CreationId) -> AppResult<Creation> {
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(pid)
+            .map_err(AppError::from_core)?;
+        project
+            .creations
+            .iter()
+            .find(|c| c.id == *cid)
+            .cloned()
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró esa creación."))
+    }
+
+    fn read_material_bytes(&self, pid: &ProjectId, material: &Material) -> AppResult<Vec<u8>> {
+        self.content.read_material(pid, material).map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })
+    }
+
+    fn read_creation_bytes(&self, pid: &ProjectId, creation: &Creation) -> AppResult<Vec<u8>> {
+        self.content.read_creation(pid, creation).map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })
+    }
+
     // -- Agent -------------------------------------------------------------
 
-    pub fn run_agent(&self, project_id: &str, prompt: &str) -> AppResult<AgentRunView> {
+    pub fn run_agent(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<AgentRunView> {
         if project_id.trim().is_empty() {
             return Err(AppError::invalid("Ese proyecto no es válido."));
         }
@@ -357,6 +826,7 @@ where
         }
         // The global model selection applies to the next prompt (design §12).
         let model = self.selected_model_ref()?;
+        let attachments = self.resolve_attachments(project_id, attachment_ids)?;
         let result = self
             .agent
             .run(AgentRequest {
@@ -365,6 +835,7 @@ where
                     text: prompt.to_owned(),
                     model,
                 },
+                attachments,
             })
             .or_else(|error| match error {
                 project_agent::AgentError::Cancelled => Ok(AgentRunResult {
@@ -624,6 +1095,10 @@ fn parse_creation_id(id: &str) -> AppResult<CreationId> {
     CreationId::parse(id).map_err(|_| AppError::invalid("Esa creación no es válida."))
 }
 
+fn parse_material_id(id: &str) -> AppResult<MaterialId> {
+    MaterialId::parse(id).map_err(|_| AppError::invalid("Ese material no es válido."))
+}
+
 fn material_view(m: &Material) -> MaterialView {
     MaterialView {
         id: m.id.as_str().to_owned(),
@@ -631,6 +1106,7 @@ fn material_view(m: &Material) -> MaterialView {
         original_file_name: m.original_file_name.clone(),
         kind: material_kind(&m.original_file_name).to_owned(),
         byte_size: m.byte_size,
+        created_at: m.created_at.as_str().to_owned(),
     }
 }
 
@@ -644,6 +1120,8 @@ fn creation_view(c: &Creation) -> CreationView {
             CreationVisibility::Private => "private".to_owned(),
         },
         byte_size: c.byte_size,
+        created_at: c.created_at.as_str().to_owned(),
+        revision: c.revision,
     }
 }
 
@@ -719,4 +1197,229 @@ fn read_source_file(path: &Path) -> AppResult<(String, Vec<u8>, Option<ContentTy
         .map_err(|_| AppError::new(ErrorCode::MaterialFailed, "No pudimos agregar ese archivo."))?;
     let content_type = content_type_from_name(&file_name);
     Ok((file_name, bytes, content_type))
+}
+
+/// Per-file size cap for batch imports (M8 §5). Clipboard images use a stricter
+/// cap ([`CLIPBOARD_IMAGE_MAX_BYTES`]).
+const MAX_IMPORT_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Per-image size cap for clipboard paste (M8 §4).
+const CLIPBOARD_IMAGE_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Preview cap for in-app image/text previews (M8 §10). Larger resources fall
+/// back to the system handler.
+const PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Allowed clipboard image content types (M8 §4).
+const ALLOWED_IMAGE_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/svg+xml",
+];
+
+/// Validated clipboard image: detected content type plus a deterministic,
+/// sanitized file name synthesized from the format.
+struct ValidatedClipboardImage {
+    content_type: &'static str,
+    synthesized_name: String,
+}
+
+/// Fail-closed clipboard image validation (M8 §4): allowed declared type,
+/// non-empty bytes, 25 MB cap, and a magic-byte sniff that must match the
+/// declared type. SVG is validated for the `svg` root element only (it is text;
+/// the renderer never executes it). The original bytes are never modified.
+fn validate_clipboard_image(
+    file_name: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> AppResult<ValidatedClipboardImage> {
+    let declared = content_type.trim().to_ascii_lowercase();
+    if !ALLOWED_IMAGE_TYPES.contains(&declared.as_str()) {
+        return Err(AppError::new(
+            ErrorCode::MaterialImageInvalid,
+            "Esa imagen no es válida.",
+        ));
+    }
+    if bytes.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::MaterialImageInvalid,
+            "Esa imagen no es válida.",
+        ));
+    }
+    if bytes.len() as u64 > CLIPBOARD_IMAGE_MAX_BYTES {
+        return Err(AppError::new(
+            ErrorCode::MaterialTooLarge,
+            "Esa imagen es demasiado grande.",
+        ));
+    }
+    let detected = sniff_image_type(bytes).ok_or_else(|| {
+        AppError::new(ErrorCode::MaterialImageInvalid, "Esa imagen no es válida.")
+    })?;
+    if detected != declared {
+        return Err(AppError::new(
+            ErrorCode::MaterialImageInvalid,
+            "Esa imagen no es válida.",
+        ));
+    }
+    let extension = match detected {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        _ => "png",
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let _ = file_name; // name is synthesized deterministically; the pasted name is ignored
+    let synthesized_name = project_core::safe_file_name(&format!("captura-{stamp}.{extension}"));
+    Ok(ValidatedClipboardImage {
+        content_type: match detected {
+            "image/jpeg" => "image/jpeg",
+            other => other,
+        },
+        synthesized_name,
+    })
+}
+
+/// Magic-byte sniff for the allowed clipboard image formats (M8 §4).
+/// Returns the detected content type, or `None` when the bytes do not match a
+/// known signature.
+fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    if is_svg_root(bytes) {
+        return Some("image/svg+xml");
+    }
+    None
+}
+
+/// SVG is validated for the `svg` root element only: the bytes are text and must
+/// contain an `<svg` opening tag within a small leading window (after an optional
+/// XML prolog, BOM, and whitespace). The renderer never executes it (rendered via
+/// `<img>` only). An XML prolog without an actual `<svg` root is rejected.
+fn is_svg_root(bytes: &[u8]) -> bool {
+    let window = &bytes[..bytes.len().min(1024)];
+    let Ok(text) = std::str::from_utf8(window) else {
+        return false;
+    };
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    let text = match text.strip_prefix("<?xml") {
+        Some(rest) => {
+            // Skip the prolog up to its closing '?>' (bounded window).
+            match rest.find("?>") {
+                Some(end) => rest[end + 2..].trim_start(),
+                None => return false,
+            }
+        }
+        None => text,
+    };
+    text.starts_with("<svg") || text.starts_with("<svg:")
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    let mut hex = String::with_capacity(64);
+    for b in digest {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    hex
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Recursively copies a validated creation tree into an immutable snapshot.
+/// Rejects symlinks and non-regular files fail-closed so the copy can never
+/// escape the creation's own `outputs/<id>` tree.
+fn copy_tree(src: &Path, dst: &Path) -> AppResult<()> {
+    for entry in fs::read_dir(src).map_err(|_| {
+        AppError::new(
+            ErrorCode::PreviewUnavailable,
+            "No pudimos mostrar la vista previa.",
+        )
+    })? {
+        let entry = entry.map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })?;
+        let meta = fs::symlink_metadata(entry.path()).map_err(|_| {
+            AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            )
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            ));
+        }
+        let file_name = entry.file_name();
+        let target = dst.join(&file_name);
+        if meta.is_dir() {
+            fs::create_dir(&target).map_err(|_| {
+                AppError::new(
+                    ErrorCode::PreviewUnavailable,
+                    "No pudimos mostrar la vista previa.",
+                )
+            })?;
+            copy_tree(&entry.path(), &target)?;
+        } else if meta.is_file() {
+            fs::copy(entry.path(), &target).map_err(|_| {
+                AppError::new(
+                    ErrorCode::PreviewUnavailable,
+                    "No pudimos mostrar la vista previa.",
+                )
+            })?;
+        } else {
+            return Err(AppError::new(
+                ErrorCode::PreviewUnavailable,
+                "No pudimos mostrar la vista previa.",
+            ));
+        }
+    }
+    Ok(())
 }

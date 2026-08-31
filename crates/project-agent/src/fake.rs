@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::AgentError;
@@ -32,6 +34,8 @@ struct FakeAgentState {
     artifacts: Vec<Artifact>,
     message: Option<String>,
     next_task_id: u64,
+    files_at_open_session: Vec<String>,
+    last_prompt_text: Option<String>,
 }
 
 impl Default for FakeAgentEngine {
@@ -52,6 +56,8 @@ impl FakeAgentEngine {
                 artifacts: Vec::new(),
                 message: None,
                 next_task_id: 1,
+                files_at_open_session: Vec::new(),
+                last_prompt_text: None,
             })),
         }
     }
@@ -95,6 +101,23 @@ impl FakeAgentEngine {
     pub fn set_message(&self, message: String) {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).message = Some(message);
     }
+
+    /// Workspace-relative file paths observed when `open_session` ran.
+    pub fn files_at_open_session(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .files_at_open_session
+            .clone()
+    }
+
+    pub fn last_prompt_text(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_prompt_text
+            .clone()
+    }
 }
 
 impl AgentEngine for FakeAgentEngine {
@@ -115,8 +138,10 @@ impl AgentEngine for FakeAgentEngine {
     }
 
     fn open_session(&self, project: &AgentProject) -> AgentResult<AgentSession> {
+        let files = list_files_relative(&project.directory);
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.calls.push(FakeCall::OpenSession);
+        state.files_at_open_session = files;
         if state.fail_session {
             state.fail_session = false;
             return Err(AgentError::SessionCreationFailed("injected".into()));
@@ -130,9 +155,10 @@ impl AgentEngine for FakeAgentEngine {
         })
     }
 
-    fn send(&self, _session: &AgentSession, _req: &AgentPrompt) -> AgentResult<AgentTask> {
+    fn send(&self, _session: &AgentSession, req: &AgentPrompt) -> AgentResult<AgentTask> {
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.calls.push(FakeCall::Send);
+        state.last_prompt_text = Some(req.text.clone());
         if state.fail_send {
             state.fail_send = false;
             return Err(AgentError::TaskFailed("injected".into()));
@@ -174,5 +200,34 @@ impl AgentEngine for FakeAgentEngine {
         state.calls.push(FakeCall::Shutdown);
         state.ready = false;
         Ok(())
+    }
+}
+
+fn list_files_relative(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_files(root, root, &mut files);
+    files.sort();
+    files
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_files(root, &path, out);
+        } else if metadata.is_file()
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            out.push(relative.to_string_lossy().replace('\\', "/"));
+        }
     }
 }

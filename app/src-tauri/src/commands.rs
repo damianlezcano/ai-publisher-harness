@@ -8,15 +8,16 @@
 use std::sync::Arc;
 
 use project_app::{
-    AppError, AppState, AppStatusView, CreationView, MaterialView, ProjectSummary, ProjectView,
-    PublicationView, SelectedModelView,
+    AppError, AppState, AppStatusView, CreationView, MaterialAddImageView, MaterialView,
+    MaterialsImportReport, PreviewData, ProjectSummary, ProjectView, PublicationView,
+    SelectedModelView,
 };
 use project_provider::{
     ConnectionTest, ConnectionView, ModelSummary, OAuthAttempt, OAuthStatus, ProviderDetail,
     ProviderSummary, SecretString,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::SharedState;
 
@@ -58,7 +59,10 @@ pub async fn project_open(
     state: State<'_, SharedState>,
     project_id: String,
 ) -> Result<ProjectView, AppError> {
-    blocking(state.inner().clone(), move |app| app.open_project(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.open_project(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -67,7 +71,10 @@ pub async fn project_rename(
     project_id: String,
     name: String,
 ) -> Result<ProjectSummary, AppError> {
-    blocking(state.inner().clone(), move |app| app.rename_project(&project_id, &name)).await
+    blocking(state.inner().clone(), move |app| {
+        app.rename_project(&project_id, &name)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -75,7 +82,10 @@ pub async fn project_delete(
     state: State<'_, SharedState>,
     project_id: String,
 ) -> Result<(), AppError> {
-    blocking(state.inner().clone(), move |app| app.delete_project(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.delete_project(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -86,6 +96,56 @@ pub async fn material_add_from_path(
 ) -> Result<MaterialView, AppError> {
     blocking(state.inner().clone(), move |app| {
         app.add_material_from_path(&project_id, &path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn material_add_image(
+    state: State<'_, SharedState>,
+    project_id: String,
+    file_name: String,
+    content_type: String,
+    data: Vec<u8>,
+) -> Result<MaterialAddImageView, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.add_material_image(&project_id, &file_name, &content_type, data)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn materials_add_from_paths(
+    state: State<'_, SharedState>,
+    project_id: String,
+    paths: Vec<String>,
+) -> Result<MaterialsImportReport, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.import_materials(&project_id, paths)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn material_remove(
+    state: State<'_, SharedState>,
+    project_id: String,
+    material_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.remove_material(&project_id, &material_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn material_open(
+    state: State<'_, SharedState>,
+    project_id: String,
+    material_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.open_material(&project_id, &material_id)
     })
     .await
 }
@@ -116,11 +176,83 @@ pub async fn creation_open(
 }
 
 #[tauri::command]
+pub async fn preview_data(
+    state: State<'_, SharedState>,
+    project_id: String,
+    resource_kind: String,
+    resource_id: String,
+) -> Result<PreviewData, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.preview_data(&project_id, &resource_kind, &resource_id)
+    })
+    .await
+}
+
+/// Opens the isolated web preview (ADR-0010). The facade copies the creation
+/// tree and starts a loopback token server; this command creates the dedicated
+/// `preview` WebviewWindow (zero-capability `preview.json`) pointing at the
+/// backend-created URL, and tears the server down when that window closes. The
+/// frontend never chooses the URL or capabilities.
+#[tauri::command]
+pub async fn preview_open_web(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    project_id: String,
+    creation_id: String,
+) -> Result<(), AppError> {
+    let shared = state.inner().clone();
+    let web = blocking(shared.clone(), move |app| {
+        app.preview_open_web(&project_id, &creation_id)
+    })
+    .await?;
+    let token = web.token.clone();
+    let url = web.url.clone();
+    let _ = WebviewWindowBuilder::new(
+        &app,
+        "preview",
+        WebviewUrl::External(
+            url.parse()
+                .map_err(|_| AppError::internal("La vista previa no es válida."))?,
+        ),
+    )
+    .title("Vista previa")
+    .inner_size(1100.0, 720.0)
+    .build()
+    .map_err(|_| {
+        let _ = shared.preview_close(&token);
+        AppError::new(
+            project_app::ErrorCode::PreviewUnavailable,
+            "No pudimos mostrar la vista previa.",
+        )
+    })?;
+
+    if let Some(window) = app.get_webview_window("preview") {
+        let state_for_close = shared.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let _ = state_for_close.preview_close(&token);
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Closes the isolated web preview by its single-use token (belt-and-suspenders
+/// alongside the window-closed teardown).
+#[tauri::command]
+pub async fn preview_close(state: State<'_, SharedState>, token: String) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| app.preview_close(&token)).await
+}
+
+#[tauri::command]
 pub async fn open_public_url(
     state: State<'_, SharedState>,
     project_id: String,
 ) -> Result<(), AppError> {
-    blocking(state.inner().clone(), move |app| app.open_public_url(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.open_public_url(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -129,6 +261,7 @@ pub async fn agent_send(
     state: State<'_, SharedState>,
     project_id: String,
     prompt: String,
+    attachment_ids: Vec<String>,
 ) -> Result<(), AppError> {
     let shared = state.inner().clone();
     let _ = app.emit(
@@ -141,7 +274,7 @@ pub async fn agent_send(
         },
     );
     std::thread::spawn(move || {
-        let event = match shared.run_agent(&project_id, &prompt) {
+        let event = match shared.run_agent(&project_id, &prompt, &attachment_ids) {
             Ok(run) => AgentTaskEvent {
                 project_id,
                 status: run.status,
@@ -165,7 +298,10 @@ pub async fn agent_cancel(
     state: State<'_, SharedState>,
     project_id: String,
 ) -> Result<(), AppError> {
-    blocking(state.inner().clone(), move |app| app.cancel_agent(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.cancel_agent(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -194,7 +330,10 @@ pub async fn publication_status(
     state: State<'_, SharedState>,
     project_id: String,
 ) -> Result<PublicationView, AppError> {
-    blocking(state.inner().clone(), move |app| app.publication_status(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.publication_status(&project_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -209,7 +348,9 @@ pub async fn app_status(state: State<'_, SharedState>) -> Result<AppStatusView, 
 // and the credential flows exactly once through `provider_connect_key`.
 
 #[tauri::command]
-pub async fn provider_list(state: State<'_, SharedState>) -> Result<Vec<ProviderSummary>, AppError> {
+pub async fn provider_list(
+    state: State<'_, SharedState>,
+) -> Result<Vec<ProviderSummary>, AppError> {
     blocking(state.inner().clone(), |app| app.provider_list()).await
 }
 
