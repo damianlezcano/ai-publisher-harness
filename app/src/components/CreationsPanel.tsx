@@ -15,6 +15,12 @@ interface CreationsPanelProps {
   shared?: boolean;
 }
 
+interface CreationCardProps {
+  projectId: string;
+  creation: CreationView;
+  onRefresh: () => void | Promise<void>;
+}
+
 function supportsInAppPreview(kind: string): boolean {
   return kind === "image" || kind === "file";
 }
@@ -33,21 +39,16 @@ function visibilityStateLabel(visibility: string): string {
     : messages.creation.visibilityPrivate;
 }
 
-export default function CreationsPanel({
-  projectId,
-  creations,
-  onRefresh,
-  shared = false,
-}: CreationsPanelProps) {
+export function CreationCard({ projectId, creation, onRefresh }: CreationCardProps) {
   const [error, setError] = useState<unknown>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [previewAnnouncement, setPreviewAnnouncement] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ creation: CreationView; data: PreviewData } | null>(
     null,
   );
 
-  async function toggle(creation: CreationView) {
-    setBusyId(creation.id);
+  async function toggle() {
+    setBusy(true);
     setError(null);
     try {
       await api.creationSetVisibility(projectId, creation.id, creation.visibility !== "public");
@@ -55,20 +56,20 @@ export default function CreationsPanel({
     } catch (err) {
       setError(err);
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
-  async function open(creationId: string) {
+  async function open() {
     setError(null);
     try {
-      await api.creationOpen(projectId, creationId);
+      await api.creationOpen(projectId, creation.id);
     } catch (err) {
       setError(err);
     }
   }
 
-  async function showPreview(creation: CreationView) {
+  async function showPreview() {
     setError(null);
     setPreviewAnnouncement(null);
     if (isWebKind(creation.kind)) {
@@ -82,84 +83,88 @@ export default function CreationsPanel({
       return;
     }
     if (!supportsInAppPreview(creation.kind)) return;
-    setBusyId(creation.id);
+    setBusy(true);
     try {
       const data = await api.previewData(projectId, "creation", creation.id);
       setPreview({ creation, data });
     } catch (err) {
       setError(err);
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
+  const isPublic = isPublicVisibility(creation.visibility);
+  const stateLabel = visibilityStateLabel(creation.visibility);
+
   return (
-    <section className="panel" aria-label={messages.creation.panelLabel}>
-      <h2>{messages.creation.heading}</h2>
-      {shared && <p className="muted">{messages.creation.sharedClarifier}</p>}
+    <div className="item-row creation-card">
       <p className="sr-only" aria-live="polite">
         {previewAnnouncement ?? ""}
       </p>
       {error != null ? <ErrorNotice error={error} /> : null}
-      {creations.length === 0 ? (
-        <EmptyState title={messages.creation.empty.title} body={messages.creation.empty.hint} />
-      ) : (
-        <ul className="item-list">
-          {creations.map((creation) => {
-            const isPublic = isPublicVisibility(creation.visibility);
-            const stateLabel = visibilityStateLabel(creation.visibility);
-
-            return (
-              <li key={creation.id} className="item-row creation-card">
-                <span className="item-name">{creation.displayName}</span>
-                <span className="item-meta">
-                  {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
-                  {humanDate(creation.createdAt)}
-                </span>
-                <span className="row-actions wrap">
-                  {(supportsInAppPreview(creation.kind) || isWebKind(creation.kind)) && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busyId === creation.id}
-                      onClick={() => void showPreview(creation)}
-                    >
-                      {messages.creation.preview}
-                    </button>
-                  )}
-                  <Badge tone={isPublic ? "ok" : "neutral"}>{stateLabel}</Badge>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={isPublic}
-                    className="secondary"
-                    disabled={busyId === creation.id}
-                    onClick={() => void toggle(creation)}
-                  >
-                    {stateLabel}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={busyId === creation.id}
-                    onClick={() => void open(creation.id)}
-                  >
-                    {isWebKind(creation.kind)
-                      ? messages.creation.openInBrowser
-                      : messages.common.open}
-                  </button>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <span className="item-name">{creation.displayName}</span>
+      <span className="item-meta">
+        {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
+        {humanDate(creation.createdAt)}
+      </span>
+      <span className="row-actions wrap">
+        {(supportsInAppPreview(creation.kind) || isWebKind(creation.kind)) && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={() => void showPreview()}
+          >
+            {messages.creation.preview}
+          </button>
+        )}
+        <Badge tone={isPublic ? "ok" : "neutral"}>{stateLabel}</Badge>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isPublic}
+          className="secondary"
+          disabled={busy}
+          onClick={() => void toggle()}
+        >
+          {stateLabel}
+        </button>
+        <button type="button" className="primary" disabled={busy} onClick={() => void open()}>
+          {isWebKind(creation.kind) ? messages.creation.openInBrowser : messages.common.open}
+        </button>
+      </span>
       {preview && (
         <PreviewModal
           title={preview.creation.displayName}
           preview={preview.data}
           onClose={() => setPreview(null)}
         />
+      )}
+    </div>
+  );
+}
+
+export default function CreationsPanel({
+  projectId,
+  creations,
+  onRefresh,
+  shared = false,
+}: CreationsPanelProps) {
+  return (
+    <section className="panel" aria-label={messages.creation.panelLabel}>
+      <h2>{messages.creation.heading}</h2>
+      {shared && <p className="muted">{messages.creation.sharedClarifier}</p>}
+      {creations.length === 0 ? (
+        <EmptyState title={messages.creation.empty.title} body={messages.creation.empty.hint} />
+      ) : (
+        <ul className="item-list">
+          {creations.map((creation) => (
+            <li key={creation.id}>
+              <CreationCard projectId={projectId} creation={creation} onRefresh={onRefresh} />
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

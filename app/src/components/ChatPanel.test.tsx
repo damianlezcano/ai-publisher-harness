@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel from "./ChatPanel";
+import { messages } from "../messages";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -19,204 +20,217 @@ const materials = [
     byteSize: 1024,
     createdAt: "2026-08-28T15:00:00Z",
   },
+  {
+    id: "m2",
+    displayName: "manual.pdf",
+    originalFileName: "manual.pdf",
+    kind: "pdf",
+    byteSize: 2048,
+    createdAt: "2026-08-28T15:00:00Z",
+  },
+];
+
+const creations = [
+  {
+    id: "c1",
+    displayName: "actividad",
+    kind: "web",
+    visibility: "private" as const,
+    byteSize: 1024,
+    createdAt: "2026-08-28T15:00:00Z",
+    revision: 1,
+  },
 ];
 
 const base = {
   projectId,
   materials,
+  creations,
+  messages: [] as {
+    id: string;
+    role: "user" | "assistant";
+    text: string;
+    status: "ok" | "failed" | "cancelled";
+    createdAt: string;
+    materialIds: string[];
+    creationIds: string[];
+  }[],
   agentPhase: "idle" as const,
   agentMessage: null as string | null,
   onRefresh: vi.fn(),
 };
 
-function pasteImage(textarea: HTMLTextAreaElement) {
-  const file = new File([new Uint8Array([1, 2, 3])], "foto.png", { type: "image/png" });
-  fireEvent.paste(textarea, {
-    clipboardData: {
-      items: [
-        {
-          kind: "file",
-          type: "image/png",
-          getAsFile: () => file,
-        },
-      ],
-    },
-  });
-}
-
 beforeEach(() => {
   invokeMock.mockReset();
+  base.messages = [];
   base.onRefresh.mockReset();
 });
 
-describe("ChatPanel", () => {
-  it("sends a prompt with attachment ids and clears the input", async () => {
-    invokeMock
-      .mockResolvedValueOnce({ material: materials[0], duplicate: false })
-      .mockResolvedValueOnce(undefined);
+describe("ChatPanel timeline", () => {
+  it("renders the empty hint when there are no messages", () => {
     render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    pasteImage(textarea);
-    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
-    await userEvent.type(textarea, "Creá una actividad");
-    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    expect(invokeMock).toHaveBeenLastCalledWith("agent_send", {
-      projectId,
-      prompt: "Creá una actividad",
-      attachmentIds: ["m1"],
-    });
-    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
-    expect(screen.queryByText("diagrama.png")).not.toBeInTheDocument();
+    expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
   });
 
-  it("renders attachment chips, removes one, and clears on send", async () => {
-    invokeMock
-      .mockResolvedValueOnce({ material: materials[0], duplicate: false })
-      .mockResolvedValueOnce(undefined);
-    render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    pasteImage(textarea);
-    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
-    expect(screen.queryByText("diagrama.png")).not.toBeInTheDocument();
-    await userEvent.type(textarea, "Hola");
-    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    expect(invokeMock).toHaveBeenLastCalledWith("agent_send", {
-      projectId,
-      prompt: "Hola",
-      attachmentIds: [],
-    });
-  });
-
-  it("sends on Ctrl+Enter but not on Enter alone", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    await userEvent.type(textarea, "Primera línea");
-    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
-    expect(invokeMock).not.toHaveBeenCalled();
-    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", ctrlKey: true });
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
-        projectId,
-        prompt: "Primera línea",
-        attachmentIds: [],
-      }),
-    );
-  });
-
-  it("toggles the material picker, selects a material, and removes it via chip", async () => {
-    render(<ChatPanel {...base} />);
-    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
-    const materialButton = screen.getByRole("button", { name: "diagrama.png" });
-    expect(materialButton).toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(materialButton);
-    expect(materialButton).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
-    expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
-    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
-  });
-
-  it("shows the no-AI empty state, disables the composer, and opens the provider panel", async () => {
-    const onOpenProvider = vi.fn();
-    render(<ChatPanel {...base} aiUsable={false} onOpenProvider={onOpenProvider} />);
-    expect(screen.getByText("No hay una IA conectada")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Conectar IA" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
-    await userEvent.click(screen.getByRole("button", { name: "Conectar IA" }));
-    expect(onOpenProvider).toHaveBeenCalledOnce();
-  });
-
-  it("imports an image on paste and attaches the material", async () => {
-    invokeMock.mockResolvedValueOnce({
-      material: materials[0],
-      duplicate: false,
-    });
-    render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    pasteImage(textarea);
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith(
-        "material_add_image",
-        expect.objectContaining({
-          projectId,
-          fileName: "foto.png",
-          contentType: "image/png",
-        }),
-      ),
-    );
-    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
-    expect(base.onRefresh).toHaveBeenCalled();
-  });
-
-  it("allows text-only paste without importing an image", async () => {
-    render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    fireEvent.paste(textarea, {
-      clipboardData: {
-        items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
-        getData: () => "texto plano",
-      },
-    });
-    expect(invokeMock).not.toHaveBeenCalled();
-  });
-
-  it("shows a working state with progress text, spinner, and cancel button", () => {
-    render(<ChatPanel {...base} agentPhase="working" />);
-    expect(screen.getByText("Creando tu recurso…")).toBeInTheDocument();
-    expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
-  });
-
-  it("cancels an in-flight task", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    render(<ChatPanel {...base} agentPhase="working" />);
-    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
-    expect(invokeMock).toHaveBeenCalledWith("agent_cancel", { projectId });
-  });
-
-  it("shows a failure message", () => {
+  it("renders a user message with its text and role label", () => {
     render(
-      <ChatPanel {...base} agentPhase="failed" agentMessage="No se pudo completar la creación." />,
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Creá una actividad",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+        ]}
+      />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("No se pudo completar la creación.");
+    expect(screen.getByText("Creá una actividad")).toBeInTheDocument();
+    expect(screen.getByText(messages.timeline.userLabel)).toBeInTheDocument();
   });
 
-  it("calls onProviderError when a send error guides to connect a provider", async () => {
-    const onProviderError = vi.fn();
-    invokeMock.mockRejectedValueOnce({ code: "credential_revoked", message: "raw backend" });
-    render(<ChatPanel {...base} onProviderError={onProviderError} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    await userEvent.type(textarea, "Creá algo");
-    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    await waitFor(() => expect(onProviderError).toHaveBeenCalledTimes(1));
-  });
-
-  it("does not call onProviderError for unrelated errors", async () => {
-    const onProviderError = vi.fn();
-    invokeMock.mockRejectedValueOnce({ code: "ai_task_failed", message: "raw" });
-    render(<ChatPanel {...base} onProviderError={onProviderError} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    await userEvent.type(textarea, "Creá algo");
-    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-    expect(onProviderError).not.toHaveBeenCalled();
-  });
-
-  it("renders guided error feedback instead of raw backend messages", async () => {
-    invokeMock.mockRejectedValueOnce({ code: "ai_task_failed", message: "raw backend detail" });
-    render(<ChatPanel {...base} />);
-    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
-    await userEvent.type(textarea, "Creá algo");
-    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    await waitFor(() => {
-      const alert = screen.getByRole("alert");
-      expect(alert).toHaveTextContent("No se pudo completar la creación.");
-      expect(alert).not.toHaveTextContent("raw backend detail");
-      expect(alert).not.toHaveTextContent("ai_task_failed");
+  it("renders material chips on a user message and opens a material on click", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Usá este material",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:00Z",
+            materialIds: ["m1"],
+            creationIds: [],
+          },
+        ]}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` });
+    expect(chip).toBeInTheDocument();
+    await userEvent.click(chip);
+    expect(invokeMock).toHaveBeenCalledWith("material_open", {
+      projectId,
+      materialId: "m1",
     });
+  });
+
+  it("renders an assistant message with inline creation cards", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "Acá tenés la actividad",
+            status: "ok",
+            createdAt: "2026-08-28T15:01:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Acá tenés la actividad")).toBeInTheDocument();
+    expect(screen.getByText(messages.timeline.assistantLabel)).toBeInTheDocument();
+    expect(screen.getByText(creations[0].displayName)).toBeInTheDocument();
+  });
+
+  it("renders a failed assistant message as an alert without creation cards", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-3",
+            role: "assistant",
+            text: "No se pudo completar.",
+            status: "failed",
+            createdAt: "2026-08-28T15:02:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("No se pudo completar.");
+    expect(screen.queryByText(creations[0].displayName)).not.toBeInTheDocument();
+  });
+
+  it("renders a cancelled assistant message as an alert", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-4",
+            role: "assistant",
+            text: "Cancelado.",
+            status: "cancelled",
+            createdAt: "2026-08-28T15:03:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Cancelado.");
+  });
+
+  it("shows the working status with a spinner", () => {
+    render(<ChatPanel {...base} agentPhase="working" />);
+    expect(screen.getByText(messages.agent.creating)).toBeInTheDocument();
+    expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("shows a completed status line", () => {
+    render(<ChatPanel {...base} agentPhase="completed" agentMessage="Listo." />);
+    expect(screen.getByText("Listo.")).toHaveClass("ok");
+  });
+
+  it("shows a failed status line as an alert", () => {
+    render(<ChatPanel {...base} agentPhase="failed" agentMessage="Falló." />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Falló.");
+  });
+
+  it("renders a pending user message until it matches a persisted message", () => {
+    const { rerender } = render(
+      <ChatPanel
+        {...base}
+        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
+        messages={[]}
+      />,
+    );
+    expect(screen.getByText("Pendiente")).toBeInTheDocument();
+    expect(screen.getByText(materials[0].displayName)).toBeInTheDocument();
+
+    rerender(
+      <ChatPanel
+        {...base}
+        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
+        messages={[
+          {
+            id: "msg-5",
+            role: "user",
+            text: "Pendiente",
+            status: "ok",
+            createdAt: "2026-08-28T15:04:00Z",
+            materialIds: ["m1"],
+            creationIds: [],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Pendiente")).toBeInTheDocument();
+    // The pending duplicate is suppressed; only the persisted message chip is rendered.
+    const chips = screen.getAllByRole("button", { name: `Abrir ${materials[0].displayName}` });
+    expect(chips.length).toBe(1);
   });
 });
