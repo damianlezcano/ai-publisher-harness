@@ -84,6 +84,14 @@ beforeEach(() => {
 });
 
 describe("ProviderPanel", () => {
+  it("renders as a labelled dialog and closes on Escape", async () => {
+    const onClose = vi.fn();
+    render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
+    expect(await screen.findByRole("dialog", { name: "Conectá tu IA" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("shows featured providers first and the rest collapsed", async () => {
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
     expect(await screen.findByText("ChatGPT")).toBeInTheDocument();

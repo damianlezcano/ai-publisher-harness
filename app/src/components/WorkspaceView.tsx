@@ -11,6 +11,9 @@ interface WorkspaceViewProps {
   agentMessage: string | null;
   onBack: () => void;
   onRefresh: () => void;
+  aiUsable: boolean;
+  onOpenProvider: () => void;
+  onProviderError: () => void;
 }
 
 export default function WorkspaceView({
@@ -19,6 +22,9 @@ export default function WorkspaceView({
   agentMessage,
   onBack,
   onRefresh,
+  aiUsable,
+  onOpenProvider,
+  onProviderError,
 }: WorkspaceViewProps) {
   return (
     <div className="view workspace">
@@ -36,6 +42,9 @@ export default function WorkspaceView({
           agentPhase={agentPhase}
           agentMessage={agentMessage}
           onRefresh={onRefresh}
+          aiUsable={aiUsable}
+          onOpenProvider={onOpenProvider}
+          onProviderError={onProviderError}
         />
         <MaterialsPanel
           projectId={project.id}
@@ -46,6 +55,7 @@ export default function WorkspaceView({
           projectId={project.id}
           creations={project.creations}
           onRefresh={onRefresh}
+          shared={project.publication.state === "published"}
         />
         <PublishPanel
           projectId={project.id}

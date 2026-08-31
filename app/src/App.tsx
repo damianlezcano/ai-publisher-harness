@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, errorMessage } from "./api";
+import { api } from "./api";
 import type { AgentPhase, ProjectSummary, ProjectView } from "./types";
+import { guidanceFromError } from "./guidance";
 import ProjectsView from "./components/ProjectsView";
 import WorkspaceView from "./components/WorkspaceView";
 import ModelSelector from "./components/provider/ModelSelector";
 import ProviderPanel from "./components/provider/ProviderPanel";
+import ProviderStatusBanner from "./components/ui/ProviderStatusBanner";
+import type { ProviderStatus } from "./components/ui/ProviderStatusBanner";
+import ToastRegion from "./components/ui/ToastRegion";
+import { useToast } from "./components/ui/useToast";
 import { messages } from "./messages";
 
 export default function App() {
@@ -16,6 +21,9 @@ export default function App() {
   const [agentMessage, setAgentMessage] = useState<string | null>(null);
   const [providerOpen, setProviderOpen] = useState(false);
   const [providerRefreshKey, setProviderRefreshKey] = useState(0);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  const { toasts, show } = useToast();
 
   const refreshProjects = useCallback(async () => {
     setProjects(await api.projectList());
@@ -49,6 +57,7 @@ export default function App() {
         } else if (event.status === "completed") {
           setAgentPhase("completed");
           setAgentMessage(event.message ?? messages.agent.completed);
+          show(messages.agent.ready);
         } else {
           setAgentPhase("failed");
           setAgentMessage(event.message ?? messages.agent.taskFailed);
@@ -61,19 +70,42 @@ export default function App() {
       active = false;
       unlisten?.();
     };
-  }, [selectedId, refreshProject]);
+  }, [selectedId, refreshProject, show]);
 
-  const openProject = useCallback(async (id: string) => {
-    setSelectedId(id);
-    setAgentPhase("idle");
-    setAgentMessage(null);
-    try {
-      setProject(await api.projectOpen(id));
-    } catch (error) {
-      setProject(null);
-      setAgentMessage(errorMessage(error));
-    }
-  }, []);
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const current = await api.modelGetSelected();
+        const models = await api.modelList();
+        if (!active) return;
+        const freeAvailable = current.model?.free === true || models.some((m) => m.free);
+        setProviderStatus(
+          current.requiresChoice ? "requires-choice" : freeAvailable ? "free" : null,
+        );
+      } catch {
+        if (active) setProviderStatus(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [providerRefreshKey]);
+
+  const openProject = useCallback(
+    async (id: string) => {
+      setSelectedId(id);
+      setAgentPhase("idle");
+      setAgentMessage(null);
+      try {
+        setProject(await api.projectOpen(id));
+      } catch (error) {
+        setProject(null);
+        show(guidanceFromError(error).title);
+      }
+    },
+    [show],
+  );
 
   const goBack = useCallback(() => {
     setSelectedId(null);
@@ -84,10 +116,15 @@ export default function App() {
   }, [refreshProjects]);
 
   const providerChanged = useCallback(() => {
-    // Credential mutations or a model selection can change the catalog;
-    // bump the key so the selector reloads its groups/selection.
+    setNeedsReconnect(false);
     setProviderRefreshKey((k) => k + 1);
   }, []);
+
+  const handleProviderError = useCallback(() => {
+    setNeedsReconnect(true);
+  }, []);
+
+  const bannerStatus: ProviderStatus | null = needsReconnect ? "needs-reconnect" : providerStatus;
 
   if (loading) {
     return (
@@ -107,6 +144,10 @@ export default function App() {
         </button>
       </header>
 
+      {bannerStatus && (
+        <ProviderStatusBanner status={bannerStatus} onConnect={() => setProviderOpen(true)} />
+      )}
+
       {providerOpen && (
         <ProviderPanel onClose={() => setProviderOpen(false)} onChanged={providerChanged} />
       )}
@@ -118,6 +159,9 @@ export default function App() {
           agentMessage={agentMessage}
           onBack={goBack}
           onRefresh={() => void refreshProject(selectedId)}
+          aiUsable={providerStatus !== "requires-choice"}
+          onOpenProvider={() => setProviderOpen(true)}
+          onProviderError={handleProviderError}
         />
       ) : (
         <ProjectsView
@@ -126,6 +170,8 @@ export default function App() {
           onOpen={(id) => void openProject(id)}
         />
       )}
+
+      <ToastRegion toasts={toasts} />
     </main>
   );
 }

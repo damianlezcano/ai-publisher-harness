@@ -185,6 +185,27 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("No se pudo completar la creación.");
   });
 
+  it("calls onProviderError when a send error guides to connect a provider", async () => {
+    const onProviderError = vi.fn();
+    invokeMock.mockRejectedValueOnce({ code: "credential_revoked", message: "raw backend" });
+    render(<ChatPanel {...base} onProviderError={onProviderError} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Creá algo");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(onProviderError).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not call onProviderError for unrelated errors", async () => {
+    const onProviderError = vi.fn();
+    invokeMock.mockRejectedValueOnce({ code: "ai_task_failed", message: "raw" });
+    render(<ChatPanel {...base} onProviderError={onProviderError} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Creá algo");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(onProviderError).not.toHaveBeenCalled();
+  });
+
   it("renders guided error feedback instead of raw backend messages", async () => {
     invokeMock.mockRejectedValueOnce({ code: "ai_task_failed", message: "raw backend detail" });
     render(<ChatPanel {...base} />);
