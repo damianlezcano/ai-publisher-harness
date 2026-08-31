@@ -166,3 +166,25 @@ The real desktop preview/attachment round trip is a manual, optional smoke test
 `scripts/verify` and SKIPs cleanly when a desktop/webkit environment is
 unavailable; real clipboard/drag behavior and the no-IPC preview window are
 exercised there, never in verify.
+
+## M9 frontend UX polish behavior
+
+M9 is **frontend-only** (`app/src` + docs + tests). It adds no Rust, no Tauri
+command, no capability, and no security-invariant change. On top of the M8
+checks, `scripts/verify` adds nothing new beyond the existing `pnpm` suite
+(install, format:check, lint, typecheck, test), which now covers the M9 message
+catalog (`messages.test.ts`), error guidance (`guidance.test.ts`), and the
+component/UX tests (empty states, first-run, sharing/QR, keyboard, dialogs,
+provider-status banner). The gate discriminates on the M9 contract files:
+
+```bash
+if [[ -f app/src/messages.ts && -f app/src/guidance.ts ]]; then
+  printf 'verify: M9 contract passed\n'
+```
+
+When all M9 checks pass, the final gate prints `verify: M9 contract passed`.
+
+M9 does not modify `app/src-tauri` capabilities or the Tauri command surface
+(the T10 checklist confirms no capability/command file changed and that
+`git diff --check` is clean). The desktop visual/responsive result is a manual
+`scripts/smoke-ux` checklist (Fedora, graphical session), never part of verify.

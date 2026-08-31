@@ -7,61 +7,64 @@
 ## Estado actual
 
 - Current milestone: M9 — Education UX Polish
-- Current phase: **IMPLEMENTATION_IN_PROGRESS**
-- Current main commit: `75f0747` (merge T8)
-- M1-M8: cerrados. M9 design approved. ADR-0012: Accepted.
-- Terminología canónica: **`Compartir`**. IDs internos sin renombrar.
-- M9 boundary: frontend-only. Cero cambios backend/Tauri/capabilities.
-- verify (baseline M8): PASS. Gate M9 se agrega en T10.
-- M10: **no iniciado**
+- Current phase: **CLOSED** (M9 implementation complete)
+- Current main commit: (ver el final de esta sección; merge final de T9 + gate T10)
+- M1-M9: cerrados. M9 design Implemented. ADR-0012: Accepted.
+- Terminología canónica: **`Compartir`** (Compartir/Compartiendo…/Compartido/
+  Enlace para compartir/Copiar enlace/Abrir enlace/Mostrar QR/Dejar de
+  compartir/No compartido). IDs internos `Publication*`/`publish`/`unpublish`
+  NO renombrados.
+- M9 boundary: frontend-only. Cero cambios de project-core/fs, AgentEngine,
+  PublicationManager; cero Tauri commands/capabilities/window nuevos; cero
+  invariantes de seguridad tocadas.
+- verify (final): **PASS — "M9 contract passed"** (gate discrimina en
+  `app/src/messages.ts` + `app/src/guidance.ts`). 1097 tests determinísticos
+  (949 Rust + 148 frontend). `git diff --check` limpio.
+- M10 (packaging): **no iniciado**
 
-## Implementación M9 — estado por tarea
+## Resultado por tarea M9 (T1-T10)
 
-| # | Task | Estado | Autor | Revisor |
-| --- | --- | --- | --- | --- |
-| 1 | Message catalog + terminology | **INTEGRADO** `9384e1d` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
-| 2 | Visual system + responsive | **INTEGRADO** `09bf097` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
-| 3 | Shared primitives + guidance | **INTEGRADO** `fbcd8a7`+`da4842a` | DeepSeek V4 Flash | Qwen3.8 Max (APPROVE tras fix IMPORTANT×2) |
-| 4 | Projects UX | **INTEGRADO** `2b4c5f5` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
-| 5 | Chat/composer UX | **INTEGRADO** `79a7afc` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
-| 6 | Materials UX | **INTEGRADO** `477f0e4` | DeepSeek V4 Flash | Composer 2.5 (APPROVE) |
-| 7 | Creations UX | **INTEGRADO** `b58bf16` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
-| 8 | Sharing UX + QR | **INTEGRADO** `e663891` | DeepSeek V4 Flash | Composer 2.5 (APPROVE; +1 key common.confirm) |
-| 9 | Cross-cutting a11y + keyboard + errors | EN CURSO | DeepSeek V4 Flash | Qwen3.8 Max |
-| 10 | Gate + docs + verify + checkpoint | PENDIENTE | lead | Qwen3.8 Max |
+| # | Task | Resultado | Commit(s) integrados |
+| --- | --- | --- | --- |
+| 1 | Message catalog + terminology | INTEGRADO | 9384e1d |
+| 2 | Visual system + responsive tokens | INTEGRADO | 09bf097 |
+| 3 | Shared primitives + a11y hooks + guidance | INTEGRADO (2 fixes review) | fbcd8a7, da4842a |
+| 4 | Projects UX (first-run, empty, Ctrl+N) | INTEGRADO | 2b4c5f5 |
+| 5 | Chat/composer UX (multiline, Ctrl+Enter, attach) | INTEGRADO | 79a7afc |
+| 6 | Materials UX (summary, empty, busy) | INTEGRADO | 477f0e4 |
+| 7 | Creations UX (switch + badge + clarifier) | INTEGRADO | b58bf16 |
+| 8 | Sharing UX + QR + temporary-link + stop confirm | INTEGRADO (+1 key common.confirm) | e663891 |
+| 9 | Cross-cutting a11y + keyboard + errors | INTEGRADO | f5c8719 |
+| 10 | Gate + docs + verify + checkpoint | COMPLETO | este commit |
 
-Frontend tras T1-T8: **134 tests / 19 files, todos verdes** en main.
+Canonical UX alcanzado: first-run guide dismissible; empty states con siguiente
+acción; composer multilinea con Ctrl/Cmd+Enter, "Adjuntar material" y estado
+"Conectá una IA"; resumen de importación por lotes; toggle de visibilidad claro
+con badge; flujo Compartir → Compartiendo… → Compartido con mensaje de enlace
+temporal honesto; QR grande con título del proyecto; banner de estado de
+proveedor (gratis/requires-choice/needs-reconnect); errores guiados (título +
+mensaje + acción), nunca raw; confirmaciones destructivas solo donde aplica;
+foco/teclado/Esc consistentes vía Dialog compartido; layout responsive desktop
+3 anchos; sin IDs/paths/puertos/Cloudflare/OpenCode en la UI.
 
-## T9 pendiente (trabajo EN CURSO en ../ai-publisher-m9-a11y-pass, branch m9/a11y-pass)
+## Modelos usados (MODEL_REQUESTED == MODEL_ACTUAL)
 
-- Migrar ConfirmDialog y ProviderPanel al Dialog compartido (T8 ya migró QrDialog + stop-confirm).
-- Live region única (ToastRegion + useToast) en App; toast "Tu recurso está listo" (agent.ready) al completar.
-- ProviderStatusBanner en App: query modelGetSelected + providerList; free / requires-choice / needs-reconnect; Conectar IA abre ProviderPanel.
-- ChatPanel: pasar aiUsable + onOpenProvider + onProviderError (needs-reconnect).
-- CreationsPanel: pasar shared={project.publication.state === "published"} desde WorkspaceView.
-- Errores de apertura/carga con guidance (ErrorNotice) sin raw.
-- Tests App/ProviderPanel/ConfirmDialog actualizados.
+- Autores: T1/T2/T4/T5/T7 Composer 2.5; T3/T6/T8/T9 DeepSeek V4 Flash.
+- Revisores: T1/T2/T4/T5/T7 DeepSeek V4 Flash (PASS); T3/T9 Qwen3.8 Max
+  (APPROVE); T6/T8 Composer 2.5 (APPROVE).
+- Nota: en algunos lanzamientos el wait-output de UI del launcher timeouteó por
+  wraplínea; el modelo se confirmó por inspección directa del panel. Un agente
+  opencode (T6) crasheó una vez (illegal instruction) y se relanzó OK.
 
-## Modelos usados (MODEL_REQUESTED == MODEL_ACTUAL, verificado)
+## Worktrees / panes
 
-- T1/T2/T4/T5/T7 + T6rev/T8rev: `composer-2.5` (confirmado por launcher).
-- T3, T6, T8, T9 (autor): `opencode-go/deepseek-v4-flash`.
-- T3rev: `opencode-go/qwen3.8-max`.
-- Nota: en 3 lanzamientos la verificación de UI del launcher timeouteó por wraplínea del estado; se confirmó el modelo por inspección directa del panel. T6 autor falló una vez (illegal instruction opencode) y se relanzó secuencialmente OK.
-
-## Worktrees vivos (limpiar en cierre)
-
-- ../ai-publisher-m9-messages, -visual-system (fusionadas)
-- ../ai-publisher-m9-shared-primitives (+ review) (fusionadas)
-- ../ai-publisher-m9-projects-ux, -chat-ux, -materials-ux (+review), -creations-ux, -sharing-ux (+review) (fusionadas)
-- ../ai-publisher-m9-a11y-pass (EN CURSO)
+- Limpieza pendiente en cierre: worktrees de M9 y panes de Herdr (autores y
+  revisores ya terminaron; todos los commits están integrados y verificados).
+- Integration checkout (main) es lead-only y queda limpio.
 
 ## Documentos para la próxima sesión fresca
 
 - CODEX_HANDOFF.md, docs/AGENT_POLICY.md, docs/ARCHITECTURE.md, docs/SECURITY.md
-- docs/M9_DESIGN.md (Approved), docs/UX.md (Compartir), docs/VERIFY.md
+- docs/M9_DESIGN.md (Implemented), docs/UX.md (Compartir), docs/VERIFY.md (M9)
 - docs/decisions/0012-* (Accepted), docs/CURRENT_CHECKPOINT.md (este documento)
-
-## Presupuesto de sesión
-
-- Rotar a ~100K, nunca a 300K+. Próximo hit: tras T9 y tras T10.
+- **M10 = Packaging** (Linux AppImage/RPM; sidecars OpenCode/cloudflared). No iniciar.

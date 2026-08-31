@@ -1,8 +1,9 @@
 # M9 Education UX Polish — Design
 
-Status: **Approved** (design approved by the human owner). ADR-0012 is Accepted.
-This document is the durable design handoff for the M9 implementation session (a
-fresh `opencode-go/deepseek-v4-flash` orchestrator).
+Status: **Implemented** (M9 T1-T10 integrated and verified; design was
+Approved by the human owner, ADR-0012 Accepted). This document is the durable
+design handoff for the M9 implementation session (a fresh
+`opencode-go/deepseek-v4-flash` orchestrator).
 
 ## 1. Executive summary
 

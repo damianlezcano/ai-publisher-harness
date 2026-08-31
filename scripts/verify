@@ -257,7 +257,9 @@ fi
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f crates/project-preview/tests/preview_security.rs ]]; then
+if [[ -f app/src/messages.ts && -f app/src/guidance.ts ]]; then
+  printf 'verify: M9 contract passed\n'
+elif [[ -f crates/project-preview/tests/preview_security.rs ]]; then
   printf 'verify: M8 contract passed\n'
 elif [[ -f crates/project-provider/tests/provider_security.rs ]]; then
   printf 'verify: M7 contract passed\n'
