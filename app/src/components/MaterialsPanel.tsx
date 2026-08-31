@@ -13,6 +13,18 @@ interface MaterialsPanelProps {
   onRefresh: () => void | Promise<void>;
 }
 
+interface MaterialChipProps {
+  projectId: string;
+  material: MaterialView;
+}
+
+interface MaterialItemProps {
+  projectId: string;
+  material: MaterialView;
+  onRefresh: () => void | Promise<void>;
+  disabled?: boolean;
+}
+
 function importDetailLabel(item: MaterialImportResult): string {
   switch (item.status) {
     case "added":
@@ -24,13 +36,126 @@ function importDetailLabel(item: MaterialImportResult): string {
   }
 }
 
+export function MaterialChip({ projectId, material }: MaterialChipProps) {
+  async function open() {
+    try {
+      await api.materialOpen(projectId, material.id);
+    } catch {
+      // Intentionally silent: the chip is a convenience open action.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="chip"
+      onClick={() => void open()}
+      aria-label={`${messages.common.open} ${material.displayName}`}
+    >
+      {material.displayName}
+    </button>
+  );
+}
+
+export function MaterialItem({
+  projectId,
+  material,
+  onRefresh,
+  disabled = false,
+}: MaterialItemProps) {
+  const [error, setError] = useState<unknown | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  async function open() {
+    setError(null);
+    try {
+      await api.materialOpen(projectId, material.id);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.materialRemove(projectId, material.id);
+      setConfirming(false);
+      await onRefresh();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="material-card">
+      {error !== null && <ErrorNotice error={error} />}
+      <div className="material-card-body">
+        <span className="item-name">{material.displayName}</span>
+        <span className="item-meta">
+          {kindLabel(material.kind)} · {humanSize(material.byteSize)} ·{" "}
+          {humanDate(material.createdAt)}
+        </span>
+      </div>
+      {confirming ? (
+        <div
+          className="remove-confirm"
+          role="group"
+          aria-label={messages.material.removeConfirmAriaLabel}
+        >
+          <p>{messages.material.removeConfirm(material.displayName)}</p>
+          <div className="row-actions wrap">
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || disabled}
+              onClick={() => setConfirming(false)}
+            >
+              {messages.common.cancel}
+            </button>
+            <button
+              type="button"
+              className="danger"
+              disabled={busy || disabled}
+              onClick={() => void remove()}
+            >
+              {messages.common.remove}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="row-actions wrap">
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || disabled}
+            onClick={() => void open()}
+          >
+            {messages.common.open}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={busy || disabled}
+            onClick={() => setConfirming(true)}
+          >
+            {messages.common.remove}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MaterialsPanel({ projectId, materials, onRefresh }: MaterialsPanelProps) {
   const [error, setError] = useState<unknown | null>(null);
   const [importSummary, setImportSummary] = useState<string | null>(null);
   const [importDetails, setImportDetails] = useState<MaterialImportResult[] | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
@@ -107,29 +232,6 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
     }
   }
 
-  async function openMaterial(materialId: string) {
-    setError(null);
-    try {
-      await api.materialOpen(projectId, materialId);
-    } catch (err) {
-      setError(err);
-    }
-  }
-
-  async function removeMaterial(material: MaterialView) {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.materialRemove(projectId, material.id);
-      setConfirmingId(null);
-      await onRefresh();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section
       className="panel"
@@ -173,60 +275,13 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
       ) : (
         <ul className="material-list">
           {materials.map((material) => (
-            <li key={material.id} className="material-card">
-              <div className="material-card-body">
-                <span className="item-name">{material.displayName}</span>
-                <span className="item-meta">
-                  {kindLabel(material.kind)} · {humanSize(material.byteSize)} ·{" "}
-                  {humanDate(material.createdAt)}
-                </span>
-              </div>
-              {confirmingId === material.id ? (
-                <div
-                  className="remove-confirm"
-                  role="group"
-                  aria-label={messages.material.removeConfirmAriaLabel}
-                >
-                  <p>{messages.material.removeConfirm(material.displayName)}</p>
-                  <div className="row-actions wrap">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => setConfirmingId(null)}
-                    >
-                      {messages.common.cancel}
-                    </button>
-                    <button
-                      type="button"
-                      className="danger"
-                      disabled={busy}
-                      onClick={() => void removeMaterial(material)}
-                    >
-                      {messages.common.remove}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="row-actions wrap">
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => void openMaterial(material.id)}
-                  >
-                    {messages.common.open}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => setConfirmingId(material.id)}
-                  >
-                    {messages.common.remove}
-                  </button>
-                </div>
-              )}
+            <li key={material.id}>
+              <MaterialItem
+                projectId={projectId}
+                material={material}
+                onRefresh={onRefresh}
+                disabled={busy}
+              />
             </li>
           ))}
         </ul>

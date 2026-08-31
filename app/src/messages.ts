@@ -133,6 +133,14 @@ export const messages = {
     },
   },
 
+  timeline: {
+    userLabel: "Vos",
+    assistantLabel: "Asistente",
+    unattachedTitle: "Materiales",
+    collapse: "Ocultar",
+    expand: "Mostrar",
+  },
+
   agent: {
     creating: "Creando tu recurso…",
     completed: "Listo.",

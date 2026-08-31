@@ -265,7 +265,8 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Modelo gratuito")).toBeInTheDocument());
     expect(screen.queryByText(/No hay una IA conectada/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Conectar IA" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(messages.model.label)).toBeInTheDocument();
+    expect(screen.queryByText(/::/)).not.toBeInTheDocument();
   });
 
   it("shows the requires-choice banner and opens the panel from Conectar IA", async () => {
