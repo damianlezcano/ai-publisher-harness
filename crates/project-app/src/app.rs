@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex};
 use project_agent::model::{ModelRef, TaskStatus};
 use project_agent::{
     AgentAttachment, AgentEngine, AgentPrompt, AgentRequest, AgentRunResult, AgentService,
-    AgentStatus, AgentTask, FilesystemCreationRegistrar, OpenCodeAgentEngine,
+    AgentStatus, FilesystemCreationRegistrar, OpenCodeAgentEngine,
 };
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
-    MaterialContent, MaterialId, ProjectContentStore, ProjectId, ProjectService, SystemClock,
-    UuidV7IdGenerator,
+    MaterialContent, MaterialId, Message, MessageRole, MessageStatus, ProjectContentStore,
+    ProjectId, ProjectService, SystemClock, UuidV7IdGenerator,
 };
 use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
@@ -181,6 +181,15 @@ impl
     }
 }
 
+/// Validated inputs for one agent run. The raw prompt is preserved so the
+/// durable user message contains exactly what the user typed.
+pub struct AgentRunInputs {
+    project_id: ProjectId,
+    prompt: String,
+    model: Option<ModelRef>,
+    attachments: Vec<AgentAttachment>,
+}
+
 impl<E, T, P, R> AppState<E, T, P, R>
 where
     E: AgentEngine,
@@ -243,11 +252,21 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .list_projects()
             .map_err(AppError::from_core)?;
+        let published: std::collections::HashSet<ProjectId> = self
+            .publication
+            .list_published()
+            .map_err(AppError::from_publication)?
+            .into_iter()
+            .map(|p| p.project_id)
+            .collect();
         Ok(projects
             .into_iter()
             .map(|p| ProjectSummary {
                 id: p.id.as_str().to_owned(),
                 name: p.name.as_str().to_owned(),
+                created_at: p.created_at.as_str().to_owned(),
+                updated_at: p.updated_at.as_str().to_owned(),
+                shared: published.contains(&p.id),
             })
             .collect())
     }
@@ -262,6 +281,9 @@ where
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
+            created_at: project.created_at.as_str().to_owned(),
+            updated_at: project.updated_at.as_str().to_owned(),
+            shared: false,
         })
     }
 
@@ -276,6 +298,12 @@ where
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
+            created_at: project.created_at.as_str().to_owned(),
+            updated_at: project.updated_at.as_str().to_owned(),
+            shared: self
+                .publication_status(id)
+                .map(|p| p.state == "published")
+                .unwrap_or(false),
         })
     }
 
@@ -298,12 +326,14 @@ where
             .map_err(AppError::from_core)?;
         let materials = project.materials.iter().map(material_view).collect();
         let creations = project.creations.iter().map(creation_view).collect();
+        let messages = project.messages.iter().map(message_view).collect();
         let publication = self.publication_status(id)?;
         Ok(ProjectView {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
             materials,
             creations,
+            messages,
             publication,
         })
     }
@@ -833,51 +863,162 @@ where
 
     // -- Agent -------------------------------------------------------------
 
+    /// Durable send: persists the raw user message, runs the agent, then
+    /// persists the assistant outcome. The whole flow is exposed for tests and
+    /// direct callers; the Tauri layer uses the split `send_message_persist` /
+    /// `send_message_run` so it can emit `agent://task/working` only after the
+    /// user message is durably appended.
+    pub fn send_message(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<AgentRunView> {
+        let inputs = self.send_message_persist(project_id, prompt, attachment_ids)?;
+        self.send_message_run(inputs)
+    }
+
+    /// Validates the prompt/model/attachments and appends the raw user message
+    /// to the project. Returns the prepared inputs needed to run the agent.
+    /// The user message is persisted before this returns, even if the caller
+    /// never invokes `send_message_run`.
+    pub fn send_message_persist(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<AgentRunInputs> {
+        let inputs = self.resolve_agent_inputs(project_id, prompt, attachment_ids)?;
+        let material_ids: Vec<MaterialId> = attachment_ids
+            .iter()
+            .map(|id| parse_material_id(id))
+            .collect::<AppResult<Vec<_>>>()?;
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_user_message(&inputs.project_id, prompt, &material_ids)
+            .map_err(AppError::from_core)?;
+        Ok(inputs)
+    }
+
+    /// Runs the agent using the prepared inputs and appends an assistant
+    /// message reflecting the outcome (`ok`, `failed`, or `cancelled`).
+    pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
+        let project_id = inputs.project_id.clone();
+        match self.run_agent_with_inputs(inputs) {
+            Ok(result) => {
+                let creation_ids: Vec<CreationId> = result
+                    .registered
+                    .iter()
+                    .map(|id| parse_creation_id(id))
+                    .collect::<AppResult<Vec<_>>>()?;
+                let text = result.task.message.clone().unwrap_or_default();
+                self.projects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .append_assistant_message(&project_id, &text, MessageStatus::Ok, &creation_ids)
+                    .map_err(AppError::from_core)?;
+                Ok(AgentRunView {
+                    status: "completed".to_owned(),
+                    registered_creation_ids: result.registered,
+                    message: result.task.message,
+                })
+            }
+            Err(project_agent::AgentError::Cancelled) => {
+                let text = "La creación se canceló.".to_owned();
+                self.projects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .append_assistant_message(&project_id, &text, MessageStatus::Cancelled, &[])
+                    .map_err(AppError::from_core)?;
+                Ok(AgentRunView {
+                    status: "cancelled".to_owned(),
+                    registered_creation_ids: Vec::new(),
+                    message: Some(text),
+                })
+            }
+            Err(other) => {
+                let err = AppError::from_agent(other);
+                self.projects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .append_assistant_message(&project_id, &err.message, MessageStatus::Failed, &[])
+                    .map_err(AppError::from_core)?;
+                Ok(AgentRunView {
+                    status: "failed".to_owned(),
+                    registered_creation_ids: Vec::new(),
+                    message: Some(err.message),
+                })
+            }
+        }
+    }
+
     pub fn run_agent(
         &self,
         project_id: &str,
         prompt: &str,
         attachment_ids: &[String],
     ) -> AppResult<AgentRunView> {
+        let inputs = self.resolve_agent_inputs(project_id, prompt, attachment_ids)?;
+        let result = self.run_agent_with_inputs(inputs);
+        match result {
+            Ok(run) => Ok(AgentRunView {
+                status: match run.task.status {
+                    TaskStatus::Completed => "completed".to_owned(),
+                    TaskStatus::Cancelled => "cancelled".to_owned(),
+                    _ => "failed".to_owned(),
+                },
+                registered_creation_ids: run.registered,
+                message: run.task.message,
+            }),
+            Err(project_agent::AgentError::Cancelled) => Ok(AgentRunView {
+                status: "cancelled".to_owned(),
+                registered_creation_ids: Vec::new(),
+                message: Some("La creación se canceló.".to_owned()),
+            }),
+            Err(other) => Err(AppError::from_agent(other)),
+        }
+    }
+
+    /// Validates prompt, global model, and attachments. Does not persist any
+    /// message; callers decide when to append the user/assistant messages.
+    fn resolve_agent_inputs(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<AgentRunInputs> {
         if project_id.trim().is_empty() {
             return Err(AppError::invalid("Ese proyecto no es válido."));
         }
         if prompt.trim().is_empty() {
             return Err(AppError::invalid("Escribí qué querés crear."));
         }
+        let project_id = parse_project_id(project_id)?;
         // The global model selection applies to the next prompt (design §12).
         let model = self.selected_model_ref()?;
-        let attachments = self.resolve_attachments(project_id, attachment_ids)?;
-        let result = self
-            .agent
-            .run(AgentRequest {
-                project_id: project_id.to_owned(),
-                prompt: AgentPrompt {
-                    text: prompt.to_owned(),
-                    model,
-                },
-                attachments,
-            })
-            .or_else(|error| match error {
-                project_agent::AgentError::Cancelled => Ok(AgentRunResult {
-                    task: AgentTask {
-                        id: "cancelled".to_owned(),
-                        status: TaskStatus::Cancelled,
-                        artifacts: Vec::new(),
-                        message: Some("La creación se canceló.".to_owned()),
-                    },
-                    registered: Vec::new(),
-                }),
-                other => Err(AppError::from_agent(other)),
-            })?;
-        Ok(AgentRunView {
-            status: match result.task.status {
-                TaskStatus::Completed => "completed".to_owned(),
-                TaskStatus::Cancelled => "cancelled".to_owned(),
-                _ => "failed".to_owned(),
+        let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
+        Ok(AgentRunInputs {
+            project_id,
+            prompt: prompt.to_owned(),
+            model,
+            attachments,
+        })
+    }
+
+    /// Runs the agent without holding the projects mutex. The long agent task
+    /// is serialized per project by `AgentService`.
+    fn run_agent_with_inputs(
+        &self,
+        inputs: AgentRunInputs,
+    ) -> project_agent::AgentResult<AgentRunResult> {
+        self.agent.run(AgentRequest {
+            project_id: inputs.project_id.as_str().to_owned(),
+            prompt: AgentPrompt {
+                text: inputs.prompt,
+                model: inputs.model,
             },
-            registered_creation_ids: result.registered,
-            message: result.task.message,
+            attachments: inputs.attachments,
         })
     }
 
@@ -1143,6 +1284,33 @@ fn creation_view(c: &Creation) -> CreationView {
         byte_size: c.byte_size,
         created_at: c.created_at.as_str().to_owned(),
         revision: c.revision,
+    }
+}
+
+fn message_view(m: &Message) -> MessageView {
+    MessageView {
+        id: m.id.as_str().to_owned(),
+        role: match m.role {
+            MessageRole::User => "user".to_owned(),
+            MessageRole::Assistant => "assistant".to_owned(),
+        },
+        text: m.text.clone(),
+        status: match m.status {
+            MessageStatus::Ok => "ok".to_owned(),
+            MessageStatus::Failed => "failed".to_owned(),
+            MessageStatus::Cancelled => "cancelled".to_owned(),
+        },
+        created_at: m.created_at.as_str().to_owned(),
+        material_ids: m
+            .material_ids
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect(),
+        creation_ids: m
+            .creation_ids
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect(),
     }
 }
 

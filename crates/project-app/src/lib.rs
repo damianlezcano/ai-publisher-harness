@@ -14,7 +14,7 @@ pub mod sidecar;
 pub use app::{APP_VERSION, AppConfig, AppState, SharedBackendRestarter};
 pub use dtos::{
     AgentRunView, AppStatusView, CreationView, MaterialAddImageView, MaterialImportResult,
-    MaterialView, MaterialsImportReport, PreviewData, ProjectSummary, ProjectView, PublicationView,
-    SelectedModelView, WebPreview,
+    MaterialView, MaterialsImportReport, MessageView, PreviewData, ProjectSummary, ProjectView,
+    PublicationView, SelectedModelView, WebPreview,
 };
 pub use error::{AppError, AppResult, ErrorCode};
