@@ -4,84 +4,88 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual
+## Estado actual (SAFE CHECKPOINT — fin de sesión de orquestación UX_REDESIGN_01, 2026-08-31)
 
-- Current main commit: (see `git log -1` after the UX_REDESIGN_01 design commit)
-- **M1-M10: CLOSED.** M10 implementado, revisado e integrado (T1-T5).
-- **UX_RELEASE_GATE_01: APROBADO** (2026-08-31) — ver `docs/UX_RELEASE_GATE_01.md` §11.
-- **UX_REDESIGN_01: APROBADO** (2026-08-31) — ver `docs/UX_REDESIGN_01_DESIGN.md`.
-- **ADR-0014: Accepted** — historial de conversación durable en el aggregate `Project`.
-- **ADR-0015: Accepted** — descubrimiento determinista del modelo gratis.
-- **M11 (Component Updates + Windows CI): NO iniciado.** No se empezó work de M11.
+- Current main commit: `9019b33` (merge T3). `git log --oneline -5` para el detalle.
+- **M1-M10: CLOSED.** UX_RELEASE_GATE_01: APROBADO. UX_REDESIGN_01: APROBADO.
+  ADR-0014 / ADR-0015: Accepted. **M11 NO iniciado.**
+- **Toolchain resuelto:** `rustup` instalado en user scope (`~/.cargo`, `~/.rustup`);
+  `rust-toolchain.toml` pinea 1.97.1 y ahora es honrado (`rustc/cargo/clippy 1.97.1`).
+  El Rust de Fedora (`/usr/bin/rustc` 1.98.0) NO fue alterado. `./scripts/verify` → **M10 contract passed**.
+- **T1-T4: INTEGRADOS y VERIFICADOS** en `main` (backbone completo del historial durable).
+  `./scripts/verify` verde tras cada lote.
+- **T5-T7: NO iniciados.** Siguiente tarea: **T5a** (shell + sidebar + first-launch).
+- Trabajo de producto T1-T4 realizado en worktrees `../ai-publisher-ux-t*` (ver §Worktrees);
+  los panes de agentes de esas tareas fueron cerrados (checkpoint); los worktrees quedan para auditoría.
 
-## Decisiones de arquitectura aprobadas (UX_REDESIGN_01)
+## Tareas integradas en `main` (UX_REDESIGN_01)
 
-1. **Vocabulario:** "Conversación" (user-facing) ↔ `Project`/`ProjectId` (dominio interno).
-   NO se introduce un aggregate `Conversation` separado.
-2. **Historial durable:** `Project.messages: Vec<Message>` persistido en `project.json`
-   (aggregate existente, atomic/CAS). **NO** localStorage como store autoritativo.
-3. **Schema:** `project.json` v2 → **v3** (migración lossless; `messages` default vacío).
-4. **Mensaje:** identidad estable, role (user/assistant), text, status (ok/failed/cancelled),
-   timestamp, `material_ids`, `creation_ids`. Materials/Creations siguen siendo los recursos
-   autoritativos; los mensajes solo los referencian (no duplican contenido).
-5. **Durabilidad de envío:** persistir mensaje USER **antes** de ejecutar el agente; persistir
-   mensaje ASSISTANT/resultado **después** del resultado exitoso. Fallos preservan el mensaje
-   user y exponen estado recuperable. El historial sobrevive restart, cambio de conversación,
-   fallo de proveedor y fallo de agente.
-6. **Modelo gratis:** dinámico desde el catálogo de OpenCode (disponible, usable, `cost==0`,
-   ranking determinista + tie-break `(provider_id, model_id)`). **Sin** hardcodear Big Pickle ni
-   ningún ID de modelo. Selección explícita del usuario pisa la automática; la automática es
-   efímera, la explícita persiste en `settings.json`.
-7. **Proveedores:** reusar M7. Settings es opcional; el usuario puede usar EducAI con el modelo
-   gratis auto-seleccionado sin configurar ChatGPT/Gemini/DeepSeek. NO crear una segunda capa de
-   proveedores.
-8. **UI objetivo:** LEFT lista de conversaciones / CENTER conversación / BOTTOM prompt + modelo +
-   Compartir / SETTINGS con X que vuelve a la conversación exacta / recursos en contexto.
-   NO restaurar el dashboard 2×2.
-9. **Lista de conversaciones:** más recientes primero (según diseño aprobado), renameable,
-   durable, backed by Project, sin exponer `ProjectId` crudo.
-10. **Arquitectura existente:** reusar sin rediseñar M1 filesystem, M2 HTTP, M3 publication,
-    M4 tunnel, M5 AgentEngine, M7 providers, M8 materials/previews, M10 packaging. Cualquier
-    tarea que requiera un rewrite mayor debe devolver `ARCHITECTURE_ESCALATION_REQUIRED`.
+| Tarea | Rama (branch) | Commits | Estado |
+| --- | --- | --- | --- |
+| T1 message domain + schema v3 + migración + validación | `m-ux/t1-message-core` | `04082a2` + fix `2f5912c` | MERGED, review APPROVED |
+| T2 fs rehidratación + tests de migración/durabilidad | `m-ux/t2-fs-migration` | `ccf1b22` | MERGED, review APPROVED |
+| T3 facade `send_message` + DTOs + commands | `m-ux/t3-service-facade` | `7964b16` | MERGED, review APPROVED |
+| T4 ranking determinista free-model (ADR-0015) | `m-ux/t4-free-model` | `3c9c61b` | MERGED, review APPROVED |
 
-## Task graph (T1-T7, ver `docs/UX_REDESIGN_01_DESIGN.md` §22)
+Merge commits en `main`: `cee9ed7` (T4), `85705e7` (T1), `db6680d` (T2), `9019b33` (T3).
 
-- **T1** core: `Message` + schema v3 + migración + validación — `crates/project-core/src/lib.rs`.
-- **T2** fs: rehidratación/validación de mensajes + tests de migración — `crates/project-fs`.
-- **T3** service/facade/commands: `append_*`, `send_message`, DTOs (`MessageView`,
-  `ProjectSummary{createdAt,updatedAt,shared}`, `ProjectView.messages`), `agent_send`/`project_open`/
-  `project_list` — `crates/project-core`, `crates/project-app`, `app/src-tauri`.
-- **T4** ranking determinista del modelo gratis — `crates/project-provider/src/service.rs`.
-- **T5a–T5e** frontend: shell + sidebar + first-launch, ComposerBar, timeline + recursos en
-  contexto, Settings (gear+X) + Compartir único, catálogo de copy — `app/src`.
-- **T6** Playwright headed (1366×768 / 1440×900 / 1920×1080) + a11y (gate final).
-- **T7** `scripts/verify` gate UX + docs.
+## Detalle técnico integrado
 
-## Model allocation (aprobada)
+1. **Schema v3:** `PROJECT_SCHEMA_VERSION = 3`; v2 → pure bump, v1 → reglas existentes
+   (creations private, route None) luego bump; lector acepta 1/2/3, persist sólo 3;
+   `messages` con `#[serde(default)]`. `MAX_MESSAGE_TEXT_CHARS = 40_000`.
+2. **Message:** `MessageId` (UUIDv7), `MessageRole` (user|assistant), `MessageStatus`
+   (ok|failed|cancelled), `created_at`, `material_ids`, `creation_ids`. `MessageView`
+   (strings) en DTOs. `IdGenerator::message_id`.
+3. **Durabilidad de envío:** `AppState::send_message_persist` persiste el mensaje USER
+   (prompt crudo + material_ids) ANTES de emitir `agent://task/working` y antes de correr
+   el agente; `send_message_run` (fuera del lock `projects`) anexa assistant ok/failed/
+   cancelled al final. Fallo NUNCA pierde el mensaje del usuario. Referencias validadas
+   como subconjunto del project (core `append_*`).
+4. **DTOs:** `ProjectSummary` += `createdAt`, `updatedAt`, `shared` (derivado de
+   `list_published`); `ProjectView` += `messages`.
+5. **Ranking free-model:** ADR-0015 determinista — usable (`!deprecated`) → free
+   (`free==true`) → rank (opencode+recommended > opencode > recommended > any free) →
+   tie-break `(provider_id, model_id)` asc. `default_free_model` y `pick_free` reescritos.
+   Sin nombres de modelo hardcodeados; selección explícita persiste en `settings.json`.
 
-- Orchestrator/integración: `opencode-go/deepseek-v4-flash` (coordina e integra, no implementa todo).
-- Coding normal/complejo: `opencode-go/kimi-k2.7-code`.
-- Reasoning / review independiente: `opencode-go/qwen3.8-max`.
-- LOW/visual/CSS/copy: Cursor Composer 2.5 (fallback `opencode-go/mimo-v2.5`).
-- Cross-cutting difícil: Kimi K2.7 Code (fallback Cursor Grok 4.6 medium).
-- HIGH_ARCHITECTURE: fresh `opencode-go/deepseek-v4-pro` SOLO en escalada.
-- Prohibido: Big Pickle; GPT/Grok vía OpenCode Go. AUTHOR != REVIEWER.
+## Model allocation usada (sesión cerrada)
 
-## Hallazgo de entorno (pre-existente, requiere diagnóstico del orchestrator)
+- Orchestrator/integración: `opencode-go/deepseek-v4-flash` (esta sesión).
+- Autores T1-T4: `opencode-go/kimi-k2.7-code`. Revisores T1-T4: `opencode-go/qwen3.8-max`.
+- `MODEL_ACTUAL == MODEL_REQUESTED` verificado por `scripts/agent-launch` en cada worker
+  (T2 requirió re-verificación manual del modelo activo: confirmado Kimi).
+- AUTHOR != REVIEWER cumplido en las 4 tareas.
 
-`./scripts/verify` falla en `cargo clippy` con `clippy::chunks-exact-to-as-chunks`
-(`crates/project-preview/src/token.rs:27`): el entorno tiene `cargo/rustc/clippy 1.98.0`
-(Fedora) mientras `rust-toolchain.toml` pinea `1.97.1` sin rustup que lo honre. **No** se
-modificó `rust-toolchain.toml` ni la política de toolchain en esta sesión de arquitectura. El
-orchestrator de implementación debe diagnosticar el mismatch exacto antes de tocar toolchain.
+## Próximo paso (resumir aquí)
 
-## Próximo paso
+- **T5a** App shell + `ConversationsSidebar` (nuevo) + first-launch bootstrap:
+  `app/src/App.tsx`, `app/src/components/ConversationsSidebar.tsx`. Frontend: `app/src/types.ts`
+  ya debe reflejar `ProjectSummary.createdAt/updatedAt/shared` y `ProjectView.messages`
+  (agregar `MessageView`). Autor: Cursor Composer 2.5 (LOW/MEDIUM) o Kimi para wiring;
+  revisor: Qwen3.8 Max. Ver `docs/UX_REDESIGN_01_DESIGN.md` §16, §22.
+- Luego T5b, T5c, T5d, T5e (frontend), T6 (Playwright headed), T7 (verify gate + docs).
 
-- Diagnóstico del mismatch de toolchain (Rust/clippy) como primera tarea de implementación.
-- Luego T1 (schema v3 + `Message`) como primera tarea de producto del milestone de UX, con
-  `scripts/agent-launch` para el worker asignado (Kimi K2.7 Code).
-- **M11 NO iniciado.** B1/B2 siguen siendo blockers de release.
+## Worktrees (para auditoría; NO borrados en este checkpoint)
+
+`git worktree list`:
+- `../ai-publisher-ux-t1` → `m-ux/t1-message-core` (2f5912c, merged)
+- `../ai-publisher-ux-t1-review` → `m-ux/t1-review`
+- `../ai-publisher-ux-t2` → `m-ux/t2-fs-migration` (ccf1b22, merged)
+- `../ai-publisher-ux-t2-review` → `m-ux/t2-review`
+- `../ai-publisher-ux-t3` → `m-ux/t3-service-facade` (7964b16, merged)
+- `../ai-publisher-ux-t3-review` → `m-ux/t3-review`
+- `../ai-publisher-ux-t4` → `m-ux/t4-free-model` (3c9c61b, merged)
+- `../ai-publisher-ux-t4-review` → `m-ux/t4-review`
+- Checkout principal: `main` (9019b33), integración-only.
+
+Limpieza de worktrees históricos: al cierre del milestone (WORKTREES.md).
 
 ## Pines de sidecar (M10, en `config/components.json` / ADR-0013)
 
 - `opencode` 1.18.25, `cloudflared` 2026.8.3 (SHA-256 commiteados). Sin cambios en esta sesión.
+
+## Pendientes de release (sin cambio)
+
+- B1/B2 (UX_RELEASE_GATE_01) se resuelven con T5 (frontend chat-first).
+- **M11 NO iniciado.**
