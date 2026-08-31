@@ -242,7 +242,7 @@ describe("App", () => {
     captureTaskListener();
     render(<App />);
     await waitForWorkspace();
-    act(() => {
+    await act(async () => {
       taskHandler?.({
         event: "agent://task",
         id: 1,
@@ -254,7 +254,9 @@ describe("App", () => {
         },
       });
     });
-    expect(await screen.findByText("Tu recurso está listo.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(messages.agent.ready, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
   });
 
   it("shows the free-model banner without claiming a blocked AI", async () => {
