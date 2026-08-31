@@ -211,6 +211,29 @@ describe("WorkspaceView", () => {
     await waitFor(() => expect(baseProps.onProviderError).toHaveBeenCalledTimes(1));
   });
 
+  it("clears the optimistic pending bubble after a send error", async () => {
+    setupApi({ agentSendError: { code: "credential_revoked", message: "raw" } });
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    await userEvent.type(textarea, "Este mensaje falla");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    await waitFor(() => expect(baseProps.onProviderError).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Este mensaje falla")).not.toBeInTheDocument();
+  });
+
+  it("cancels an in-flight task and refreshes", async () => {
+    setupApi();
+    render(<WorkspaceView project={makeProject()} {...baseProps} agentPhase="working" />);
+
+    await userEvent.click(screen.getByRole("button", { name: messages.common.cancel }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("agent_cancel", { projectId }));
+    expect(baseProps.onRefresh).toHaveBeenCalled();
+  });
+
   it("lists unattached materials and excludes attached materials", () => {
     const project = makeProject();
     render(<WorkspaceView project={project} {...baseProps} />);
