@@ -61,6 +61,7 @@ export const messages = {
     remove: "Quitar",
     send: "Enviar",
     retry: "Reintentar",
+    confirm: "Confirmar",
     confirmNameLabel: "Nombre para confirmar",
     copied: "Copiado",
   },

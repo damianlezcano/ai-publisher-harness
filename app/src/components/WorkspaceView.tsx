@@ -49,6 +49,7 @@ export default function WorkspaceView({
         />
         <PublishPanel
           projectId={project.id}
+          projectName={project.name}
           publication={project.publication}
           onRefresh={onRefresh}
         />
