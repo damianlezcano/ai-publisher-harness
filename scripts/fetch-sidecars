@@ -3,7 +3,8 @@
 #
 # Default mode (network): for each component, download from its official pinned
 # source, verify the pinned SHA-256 (fail closed: partial artifacts deleted,
-# never install an unverified binary), and install to sidecars/<bundleName>.
+# never install an unverified binary), and install to
+# sidecars/<bundleName>-<target_triple>.
 #
 # --check mode (offline, deterministic): validate the manifest shape,
 # schemaVersion, per-component fields, format, and sha256 format. No network.
@@ -15,6 +16,10 @@ set -euo pipefail
 SCRIPT="$(basename "$0")"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 manifest="$repo_root/config/components.json"
+# Tauri bundle.externalBin appends "-<target_triple>" to each configured path and
+# expects the source file to already be triple-suffixed. Matches TARGET_TRIPLE in
+# crates/project-app/src/sidecar.rs.
+triple="x86_64-unknown-linux-gnu"
 workdir="$(mktemp -d)"
 
 trap 'rm -rf "$workdir"' EXIT
@@ -95,7 +100,7 @@ check_mode() {
 
 fetch_one() {
   local name="$1" version="$2" source="$3" expected="$4" format="$5" bundle_name="$6"
-  local dest_dir="$sidecars_dir" dest="$sidecars_dir/$bundle_name"
+  local dest_dir="$sidecars_dir" dest="$sidecars_dir/$bundle_name-$triple"
   local artifact="$workdir/artifact-$bundle_name" actual candidate tmpdir count
 
   printf '%s: fetching %s %s (%s)\n' "$SCRIPT" "$name" "$version" "$source"
@@ -115,8 +120,9 @@ fetch_one() {
   printf '%s: verified %s (sha256 %s)\n' "$SCRIPT" "$name" "$actual"
 
   if [[ "$format" == "binary" ]]; then
-    cp "$artifact" "$dest"
-    chmod +x "$dest"
+    cp "$artifact" "$dest.tmp.$$"
+    chmod +x "$dest.tmp.$$"
+    mv -f "$dest.tmp.$$" "$dest"
     printf '%s: installed %s %s to %s\n' "$SCRIPT" "$name" "$version" "$dest"
   elif [[ "$format" == "tar.gz" ]]; then
     tmpdir="$(mktemp -d "$dest_dir/.tmp.XXXXXX")"
