@@ -9,11 +9,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_V2: u32 = 2;
 pub const LEGACY_PROJECT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_PROJECT_NAME_CHARS: usize = 120;
 pub const MAX_FILE_NAME_CHARS: usize = 180;
 pub const MAX_PUBLICATION_ROUTE_CHARS: usize = 80;
+pub const MAX_MESSAGE_TEXT_CHARS: usize = 40_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectCoreError {
@@ -27,8 +29,10 @@ pub enum ProjectCoreError {
     InvalidPublicationRoute(String),
     DuplicateMaterial(MaterialId),
     DuplicateCreation(CreationId),
+    DuplicateMessage(MessageId),
     MissingMaterial(MaterialId),
     MissingCreation(CreationId),
+    InvalidMessage(String),
     NotFound(ProjectId),
     AlreadyExists(ProjectId),
     Conflict { project_id: ProjectId },
@@ -57,8 +61,10 @@ impl fmt::Display for ProjectCoreError {
             InvalidPublicationRoute(_) => f.write_str("invalid publication route"),
             DuplicateMaterial(_) => f.write_str("duplicate material"),
             DuplicateCreation(_) => f.write_str("duplicate creation"),
+            DuplicateMessage(_) => f.write_str("duplicate message"),
             MissingMaterial(_) => f.write_str("material not found"),
             MissingCreation(_) => f.write_str("creation not found"),
+            InvalidMessage(_) => f.write_str("invalid message"),
             NotFound(_) => f.write_str("project not found"),
             AlreadyExists(_) => f.write_str("project already exists"),
             Conflict { .. } => f.write_str("project was changed elsewhere"),
@@ -106,6 +112,7 @@ macro_rules! uuid_id {
 uuid_id!(ProjectId, "project ID");
 uuid_id!(MaterialId, "material ID");
 uuid_id!(CreationId, "creation ID");
+uuid_id!(MessageId, "message ID");
 fn is_uuid_v7(v: &str) -> bool {
     let b = v.as_bytes();
     b.len() == 36
@@ -319,6 +326,35 @@ pub enum CreationVisibility {
     #[default]
     Private,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    User,
+    Assistant,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageStatus {
+    Ok,
+    Failed,
+    Cancelled,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct Message {
+    #[serde(rename = "messageId")]
+    pub id: MessageId,
+    pub role: MessageRole,
+    pub text: String,
+    pub status: MessageStatus,
+    #[serde(rename = "createdAt")]
+    pub created_at: Timestamp,
+    #[serde(rename = "materialIds")]
+    pub material_ids: Vec<MaterialId>,
+    #[serde(rename = "creationIds")]
+    pub creation_ids: Vec<CreationId>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -379,6 +415,8 @@ pub struct Project {
     pub publication_route: Option<PublicationRoute>,
     pub materials: Vec<Material>,
     pub creations: Vec<Creation>,
+    #[serde(default)]
+    pub messages: Vec<Message>,
 }
 impl Project {
     pub fn new(id: ProjectId, name: ProjectName, now: Timestamp) -> Self {
@@ -392,6 +430,7 @@ impl Project {
             publication_route: None,
             materials: vec![],
             creations: vec![],
+            messages: vec![],
         }
     }
     pub fn from_json(s: &str) -> CoreResult<Self> {
@@ -404,6 +443,8 @@ impl Project {
                     .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?;
                 v1.into_project()
             }
+            SCHEMA_V2 => serde_json::from_value(value)
+                .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?,
             PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
                 .map_err(|e| ProjectCoreError::CorruptMetadata(e.to_string()))?,
             other => return Err(ProjectCoreError::UnsupportedSchema(other)),
@@ -411,9 +452,13 @@ impl Project {
         project.validate()?;
         Ok(project)
     }
-    pub fn migrate_to_v2(&mut self) -> CoreResult<()> {
+    pub fn migrate_to_v3(&mut self) -> CoreResult<()> {
         match self.schema_version {
             PROJECT_SCHEMA_VERSION => Ok(()),
+            SCHEMA_V2 => {
+                self.schema_version = PROJECT_SCHEMA_VERSION;
+                Ok(())
+            }
             LEGACY_PROJECT_SCHEMA_VERSION => {
                 for creation in &mut self.creations {
                     creation.visibility = CreationVisibility::Private;
@@ -433,7 +478,7 @@ impl Project {
     }
     pub fn validate(&self) -> CoreResult<()> {
         match self.schema_version {
-            LEGACY_PROJECT_SCHEMA_VERSION | PROJECT_SCHEMA_VERSION => {}
+            LEGACY_PROJECT_SCHEMA_VERSION | SCHEMA_V2 | PROJECT_SCHEMA_VERSION => {}
             other => return Err(ProjectCoreError::UnsupportedSchema(other)),
         }
         if self.schema_version == LEGACY_PROJECT_SCHEMA_VERSION && self.publication_route.is_some()
@@ -481,6 +526,57 @@ impl Project {
                 return Err(ProjectCoreError::InvalidCreation(
                     "parent creation is absent".into(),
                 ));
+            }
+        }
+        let mut message_ids = HashSet::new();
+        for msg in &self.messages {
+            MessageId::parse(msg.id.as_str())?;
+            Timestamp::parse(msg.created_at.as_str())?;
+            if msg.text.chars().count() > MAX_MESSAGE_TEXT_CHARS {
+                return Err(ProjectCoreError::InvalidMessage(format!(
+                    "message text exceeds {MAX_MESSAGE_TEXT_CHARS} characters"
+                )));
+            }
+            let material_set: HashSet<_> = msg.material_ids.iter().collect();
+            if material_set.len() != msg.material_ids.len() {
+                return Err(ProjectCoreError::InvalidMessage(
+                    "duplicate material id in message".into(),
+                ));
+            }
+            for mid in &msg.material_ids {
+                if !ms.contains(mid) {
+                    return Err(ProjectCoreError::MissingMaterial(mid.clone()));
+                }
+            }
+            let creation_set: HashSet<_> = msg.creation_ids.iter().collect();
+            if creation_set.len() != msg.creation_ids.len() {
+                return Err(ProjectCoreError::InvalidMessage(
+                    "duplicate creation id in message".into(),
+                ));
+            }
+            for cid in &msg.creation_ids {
+                if !cs.contains(cid) {
+                    return Err(ProjectCoreError::MissingCreation(cid.clone()));
+                }
+            }
+            match msg.role {
+                MessageRole::User => {
+                    if !msg.creation_ids.is_empty() {
+                        return Err(ProjectCoreError::InvalidMessage(
+                            "user message cannot reference creations".into(),
+                        ));
+                    }
+                }
+                MessageRole::Assistant => {
+                    if !msg.material_ids.is_empty() {
+                        return Err(ProjectCoreError::InvalidMessage(
+                            "assistant message cannot reference materials".into(),
+                        ));
+                    }
+                }
+            }
+            if !message_ids.insert(msg.id.clone()) {
+                return Err(ProjectCoreError::DuplicateMessage(msg.id.clone()));
             }
         }
         Ok(())
@@ -577,6 +673,7 @@ impl SchemaV1Project {
                     created_at: c.created_at,
                 })
                 .collect(),
+            messages: vec![],
         }
     }
 }
@@ -588,6 +685,7 @@ pub trait IdGenerator {
     fn project_id(&self) -> ProjectId;
     fn material_id(&self) -> MaterialId;
     fn creation_id(&self) -> CreationId;
+    fn message_id(&self) -> MessageId;
 }
 pub trait ProjectRepository {
     fn create(&mut self, project: &Project) -> CoreResult<()>;
@@ -700,7 +798,7 @@ where
     pub fn rename_project(&mut self, id: &ProjectId, name: impl AsRef<str>) -> CoreResult<Project> {
         let mut p = self.repository.get(id)?;
         let e = p.updated_at.clone();
-        p.migrate_to_v2()?;
+        p.migrate_to_v3()?;
         p.name = ProjectName::parse(name)?;
         p.updated_at = self.clock.now();
         self.repository.replace(&p, &e)?;
@@ -717,7 +815,7 @@ where
         }
         let mut p = self.repository.get(pid)?;
         let e = p.updated_at.clone();
-        p.migrate_to_v2()?;
+        p.migrate_to_v3()?;
         let id = self.ids.material_id();
         if p.materials.iter().any(|m| m.id == id) {
             return Err(ProjectCoreError::DuplicateMaterial(id));
@@ -758,13 +856,16 @@ where
     pub fn remove_material(&mut self, pid: &ProjectId, mid: &MaterialId) -> CoreResult<()> {
         let mut p = self.repository.get(pid)?;
         let e = p.updated_at.clone();
-        p.migrate_to_v2()?;
+        p.migrate_to_v3()?;
         let idx = p
             .materials
             .iter()
             .position(|m| &m.id == mid)
             .ok_or_else(|| ProjectCoreError::MissingMaterial(mid.clone()))?;
         p.materials.remove(idx);
+        for msg in &mut p.messages {
+            msg.material_ids.retain(|m| m != mid);
+        }
         p.updated_at = self.clock.now();
         self.repository.replace(&p, &e)?;
         self.content.remove_material(pid, mid)?;
@@ -776,7 +877,7 @@ where
         }
         let mut p = self.repository.get(pid)?;
         let e = p.updated_at.clone();
-        p.migrate_to_v2()?;
+        p.migrate_to_v3()?;
         if let Some(parent) = &r.parent_creation_id
             && !p.creations.iter().any(|c| &c.id == parent)
         {
@@ -828,7 +929,7 @@ where
     ) -> CoreResult<Creation> {
         let mut p = self.repository.get(pid)?;
         let e = p.updated_at.clone();
-        p.migrate_to_v2()?;
+        p.migrate_to_v3()?;
         let idx = p
             .creations
             .iter()
@@ -838,6 +939,94 @@ where
         p.updated_at = self.clock.now();
         self.repository.replace(&p, &e)?;
         Ok(p.creations[idx].clone())
+    }
+    pub fn append_user_message(
+        &mut self,
+        pid: &ProjectId,
+        text: &str,
+        material_ids: &[MaterialId],
+    ) -> CoreResult<Message> {
+        if text.chars().count() > MAX_MESSAGE_TEXT_CHARS {
+            return Err(ProjectCoreError::InvalidMessage(format!(
+                "message text exceeds {MAX_MESSAGE_TEXT_CHARS} characters"
+            )));
+        }
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v3()?;
+        let material_set: HashSet<_> = material_ids.iter().collect();
+        if material_set.len() != material_ids.len() {
+            return Err(ProjectCoreError::InvalidMessage(
+                "duplicate material id in message".into(),
+            ));
+        }
+        let project_materials: HashSet<_> = p.materials.iter().map(|m| &m.id).collect();
+        for mid in material_ids {
+            if !project_materials.contains(mid) {
+                return Err(ProjectCoreError::MissingMaterial(mid.clone()));
+            }
+        }
+        let id = self.ids.message_id();
+        let created_at = self.clock.now();
+        let msg = Message {
+            id,
+            role: MessageRole::User,
+            text: text.to_owned(),
+            status: MessageStatus::Ok,
+            created_at: created_at.clone(),
+            material_ids: material_ids.to_vec(),
+            creation_ids: vec![],
+        };
+        p.messages.push(msg.clone());
+        p.updated_at = created_at;
+        self.repository.replace(&p, &e)?;
+        Ok(msg)
+    }
+    pub fn append_assistant_message(
+        &mut self,
+        pid: &ProjectId,
+        text: &str,
+        status: MessageStatus,
+        creation_ids: &[CreationId],
+    ) -> CoreResult<Message> {
+        if text.chars().count() > MAX_MESSAGE_TEXT_CHARS {
+            return Err(ProjectCoreError::InvalidMessage(format!(
+                "message text exceeds {MAX_MESSAGE_TEXT_CHARS} characters"
+            )));
+        }
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v3()?;
+        let creation_set: HashSet<_> = creation_ids.iter().collect();
+        if creation_set.len() != creation_ids.len() {
+            return Err(ProjectCoreError::InvalidMessage(
+                "duplicate creation id in message".into(),
+            ));
+        }
+        let project_creations: HashSet<_> = p.creations.iter().map(|c| &c.id).collect();
+        for cid in creation_ids {
+            if !project_creations.contains(cid) {
+                return Err(ProjectCoreError::MissingCreation(cid.clone()));
+            }
+        }
+        let id = self.ids.message_id();
+        let created_at = self.clock.now();
+        let msg = Message {
+            id,
+            role: MessageRole::Assistant,
+            text: text.to_owned(),
+            status,
+            created_at: created_at.clone(),
+            material_ids: vec![],
+            creation_ids: creation_ids.to_vec(),
+        };
+        p.messages.push(msg.clone());
+        p.updated_at = created_at;
+        self.repository.replace(&p, &e)?;
+        Ok(msg)
+    }
+    pub fn messages(&self, pid: &ProjectId) -> CoreResult<Vec<Message>> {
+        Ok(self.repository.get(pid)?.messages)
     }
 }
 fn ensure_stored_path(path: &RelativeProjectPath, root: &str, id: &str) -> CoreResult<()> {
@@ -885,6 +1074,9 @@ impl IdGenerator for UuidV7IdGenerator {
     }
     fn creation_id(&self) -> CreationId {
         CreationId::parse(uuid_v7()).expect("generated id is UUID v7")
+    }
+    fn message_id(&self) -> MessageId {
+        MessageId::parse(uuid_v7()).expect("generated id is UUID v7")
     }
 }
 
@@ -975,9 +1167,17 @@ fn uuid_v7() -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     const P: &str = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
     const M: &str = "0198e4a6-79b2-7b51-9e68-c2eb7af3db14";
     const C: &str = "0198e4a6-86d6-7c16-b4c4-3197b355cf10";
+    const MSG_IDS: &[&str] = &[
+        "0198e4a6-93fa-7c81-9e68-c2eb7af3db15",
+        "0198e4a6-93fa-7c82-9e68-c2eb7af3db15",
+        "0198e4a6-93fa-7c83-9e68-c2eb7af3db15",
+        "0198e4a6-93fa-7c84-9e68-c2eb7af3db15",
+        "0198e4a6-93fa-7c85-9e68-c2eb7af3db15",
+    ];
     fn pid() -> ProjectId {
         ProjectId::parse(P).unwrap()
     }
@@ -1001,6 +1201,11 @@ mod tests {
         }
         fn creation_id(&self) -> CreationId {
             CreationId::parse(C).unwrap()
+        }
+        fn message_id(&self) -> MessageId {
+            static IDX: AtomicUsize = AtomicUsize::new(0);
+            let i = IDX.fetch_add(1, Ordering::Relaxed);
+            MessageId::parse(MSG_IDS[i % MSG_IDS.len()]).unwrap()
         }
     }
     #[derive(Default)]
@@ -1438,10 +1643,11 @@ mod tests {
         )
     }
     #[test]
-    fn new_project_is_schema_v2_without_publication_route() {
+    fn new_project_is_schema_v3_without_publication_route() {
         let p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
         assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
         assert!(p.publication_route.is_none());
+        assert!(p.messages.is_empty());
         assert!(p.validate_for_persist().is_ok())
     }
     #[test]
@@ -1494,7 +1700,7 @@ mod tests {
         ))
         .unwrap();
         p.creations[0].visibility = CreationVisibility::Public;
-        p.migrate_to_v2().unwrap();
+        p.migrate_to_v3().unwrap();
         assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
         assert!(p.publication_route.is_none());
         assert_eq!(p.creations[0].visibility, CreationVisibility::Private);
@@ -1502,7 +1708,7 @@ mod tests {
         assert_eq!(p.creations[0].display_name, "PUBLIC worksheet")
     }
     #[test]
-    fn v2_migration_is_idempotent_and_preserves_explicit_public() {
+    fn v3_migration_is_idempotent_and_preserves_explicit_public() {
         let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
         p.creations.push(Creation {
             id: CreationId::parse(C).unwrap(),
@@ -1517,8 +1723,8 @@ mod tests {
             created_at: time(),
         });
         p.publication_route = Some(PublicationRoute::parse("fotosintesis-a7k2m9").unwrap());
-        p.migrate_to_v2().unwrap();
-        p.migrate_to_v2().unwrap();
+        p.migrate_to_v3().unwrap();
+        p.migrate_to_v3().unwrap();
         assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
         assert_eq!(p.creations[0].visibility, CreationVisibility::Public);
         assert_eq!(
@@ -1618,6 +1824,193 @@ mod tests {
                 "expected {bad:?} to be rejected"
             )
         }
+    }
+    #[derive(Clone)]
+    struct CountingClock(std::cell::Cell<u64>);
+    impl CountingClock {
+        fn new() -> Self {
+            Self(std::cell::Cell::new(0))
+        }
+    }
+    impl Clock for CountingClock {
+        fn now(&self) -> Timestamp {
+            let i = self.0.get();
+            self.0.set(i + 1);
+            Timestamp::parse(format!("2026-08-28T15:{:02}:{:02}Z", i / 60, i % 60)).unwrap()
+        }
+    }
+    fn advancing_service() -> ProjectService<Repo, Store, CountingClock, TestIds> {
+        ProjectService::new(
+            Repo::default(),
+            Store::default(),
+            CountingClock::new(),
+            TestIds,
+        )
+    }
+    #[test]
+    fn messages_are_append_only_and_ordered() {
+        let mut s = advancing_service();
+        s.create_project("one").unwrap();
+        let first = s.append_user_message(&pid(), "hello", &[]).unwrap();
+        let second = s
+            .append_assistant_message(&pid(), "hi there", MessageStatus::Ok, &[])
+            .unwrap();
+        let msgs = s.messages(&pid()).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].id, first.id);
+        assert_eq!(msgs[0].role, MessageRole::User);
+        assert_eq!(msgs[1].id, second.id);
+        assert_eq!(msgs[1].role, MessageRole::Assistant);
+        assert_eq!(
+            s.open_project(&pid()).unwrap().updated_at,
+            second.created_at
+        );
+    }
+    #[test]
+    fn message_references_must_be_subset_of_project() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let missing_material = MaterialId::parse(M).unwrap();
+        assert!(matches!(
+            s.append_user_message(&pid(), "x", &[missing_material]),
+            Err(ProjectCoreError::MissingMaterial(_))
+        ));
+        let c = s
+            .create_creation(
+                &pid(),
+                CreateCreation {
+                    display_name: "Activity".into(),
+                    kind: CreationKind::Web,
+                    visibility: CreationVisibility::Private,
+                    content_type: None,
+                    content: CreationContent {
+                        bytes: b"x".to_vec(),
+                        file_name: "index.html".into(),
+                    },
+                    parent_creation_id: None,
+                },
+            )
+            .unwrap();
+        let missing_creation = CreationId::parse("0198e4a6-86d6-7c16-b4c4-3197b355cf11").unwrap();
+        assert!(matches!(
+            s.append_assistant_message(&pid(), "x", MessageStatus::Ok, &[missing_creation]),
+            Err(ProjectCoreError::MissingCreation(_))
+        ));
+        assert!(
+            s.append_assistant_message(&pid(), "y", MessageStatus::Ok, &[c.id])
+                .is_ok()
+        );
+    }
+    #[test]
+    fn user_message_cannot_reference_creations() {
+        let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        let cid = CreationId::parse(C).unwrap();
+        p.creations.push(Creation {
+            id: cid.clone(),
+            display_name: "x".into(),
+            kind: CreationKind::Web,
+            visibility: CreationVisibility::Private,
+            relative_path: RelativeProjectPath::parse(format!("outputs/{C}/x.txt")).unwrap(),
+            content_type: None,
+            byte_size: 0,
+            revision: 1,
+            parent_creation_id: None,
+            created_at: time(),
+        });
+        p.messages.push(Message {
+            id: MessageId::parse(MSG_IDS[0]).unwrap(),
+            role: MessageRole::User,
+            text: "x".into(),
+            status: MessageStatus::Ok,
+            created_at: time(),
+            material_ids: vec![],
+            creation_ids: vec![cid],
+        });
+        assert!(matches!(
+            p.validate(),
+            Err(ProjectCoreError::InvalidMessage(_))
+        ));
+    }
+    #[test]
+    fn assistant_message_cannot_reference_materials() {
+        let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        let mid = MaterialId::parse(M).unwrap();
+        p.materials.push(Material {
+            id: mid.clone(),
+            display_name: "x".into(),
+            original_file_name: "x.txt".into(),
+            relative_path: RelativeProjectPath::parse(format!("inputs/{M}/x.txt")).unwrap(),
+            content_type: None,
+            byte_size: 0,
+            sha256: hash(b""),
+            created_at: time(),
+        });
+        p.messages.push(Message {
+            id: MessageId::parse(MSG_IDS[0]).unwrap(),
+            role: MessageRole::Assistant,
+            text: "x".into(),
+            status: MessageStatus::Ok,
+            created_at: time(),
+            material_ids: vec![mid],
+            creation_ids: vec![],
+        });
+        assert!(matches!(
+            p.validate(),
+            Err(ProjectCoreError::InvalidMessage(_))
+        ));
+    }
+    #[test]
+    fn message_text_capped() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let oversized = "x".repeat(MAX_MESSAGE_TEXT_CHARS + 1);
+        assert!(matches!(
+            s.append_user_message(&pid(), &oversized, &[]),
+            Err(ProjectCoreError::InvalidMessage(_))
+        ));
+    }
+    #[test]
+    fn message_ids_are_uuid_v7() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let msg = s.append_user_message(&pid(), "hello", &[]).unwrap();
+        assert!(MessageId::parse(msg.id.as_str()).is_ok());
+    }
+    #[test]
+    fn v2_project_migrates_to_v3_with_empty_messages() {
+        let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        p.schema_version = SCHEMA_V2;
+        let raw = serde_json::to_string(&p).unwrap();
+        let loaded = Project::from_json(&raw).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_V2);
+        assert!(loaded.messages.is_empty());
+        let mut migrated = loaded;
+        migrated.migrate_to_v3().unwrap();
+        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(migrated.messages.is_empty());
+    }
+    #[test]
+    fn v1_project_migrates_to_v3() {
+        let mut p = Project::from_json(&v1_json_with_creation("x", "web", "index.html")).unwrap();
+        assert_eq!(p.schema_version, LEGACY_PROJECT_SCHEMA_VERSION);
+        assert!(p.messages.is_empty());
+        p.migrate_to_v3().unwrap();
+        assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
+        assert_eq!(p.creations[0].visibility, CreationVisibility::Private);
+        assert!(p.publication_route.is_none());
+        assert!(p.messages.is_empty());
+    }
+    #[test]
+    fn deleting_material_clears_message_reference() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let m = s.add_material(&pid(), material()).unwrap();
+        s.append_user_message(&pid(), "look at this", std::slice::from_ref(&m.id))
+            .unwrap();
+        s.remove_material(&pid(), &m.id).unwrap();
+        let msgs = s.messages(&pid()).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].material_ids.is_empty());
     }
 }
 
