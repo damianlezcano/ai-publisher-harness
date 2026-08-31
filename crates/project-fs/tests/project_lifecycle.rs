@@ -134,6 +134,17 @@ fn material_request() -> project_core::AddMaterial {
     }
 }
 
+fn other_material_request() -> project_core::AddMaterial {
+    project_core::AddMaterial {
+        display_name: "Guia v2".into(),
+        original_file_name: "guia-v2.pdf".into(),
+        content_type: Some(ContentType::parse("application/pdf").unwrap()),
+        source: MaterialContent {
+            bytes: b"other material bytes".to_vec(),
+        },
+    }
+}
+
 fn creation_request() -> project_core::CreateCreation {
     project_core::CreateCreation {
         display_name: "Actividad interactiva".into(),
@@ -303,6 +314,137 @@ fn material_survives_restart() {
         let bytes = svc.read_material(&p.id, &m.id).unwrap();
         assert_eq!(bytes, b"PDF content bytes for testing");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 3b. remove_material (M8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_material_deletes_inputs_id_and_metadata() {
+    let base = tmp_dir("remove-material");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+    let inputs_dir = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("inputs")
+        .join(m.id.as_str());
+    assert!(inputs_dir.is_dir());
+
+    svc.remove_material(&p.id, &m.id).unwrap();
+
+    let stored = svc.open_project(&p.id).unwrap();
+    assert!(stored.materials.is_empty());
+    assert!(!inputs_dir.exists(), "inputs/<id> must be removed");
+    // Reading the removed material is a typed error.
+    assert!(matches!(
+        svc.read_material(&p.id, &m.id),
+        Err(ProjectCoreError::MissingMaterial(_))
+    ));
+}
+
+#[test]
+fn remove_material_never_touches_source_or_siblings() {
+    let base = tmp_dir("remove-material-source");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    // Add two materials; removing one must leave the other and the project
+    // structure intact.
+    let a = svc.add_material(&p.id, material_request()).unwrap();
+    let b = svc.add_material(&p.id, other_material_request()).unwrap();
+
+    svc.remove_material(&p.id, &a.id).unwrap();
+
+    let stored = svc.open_project(&p.id).unwrap();
+    assert_eq!(stored.materials.len(), 1);
+    assert_eq!(stored.materials[0].id, b.id);
+    assert_eq!(
+        svc.read_material(&p.id, &b.id).unwrap(),
+        other_material_request().source.bytes
+    );
+    let inputs = base.join("projects").join(p.id.as_str()).join("inputs");
+    let remaining: Vec<_> = fs::read_dir(&inputs)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(remaining.len(), 1);
+}
+
+#[test]
+fn remove_material_missing_id_is_a_typed_error() {
+    let base = tmp_dir("remove-material-missing");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    svc.add_material(&p.id, material_request()).unwrap();
+    let unknown = project_core::MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db15").unwrap();
+    assert!(matches!(
+        svc.remove_material(&p.id, &unknown),
+        Err(ProjectCoreError::MissingMaterial(_))
+    ));
+    // Nothing was removed.
+    assert_eq!(svc.open_project(&p.id).unwrap().materials.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_material_rejects_symlinked_id_directory() {
+    use std::os::unix::fs::symlink;
+    let base = tmp_dir("remove-material-symlink");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+
+    // Replace the inputs/<id> directory with a symlink pointing outside.
+    let inputs_dir = base.join("projects").join(p.id.as_str()).join("inputs");
+    let target = inputs_dir.join(m.id.as_str());
+    fs::remove_dir_all(&target).unwrap();
+    let outside = base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("probe.txt"), b"x").unwrap();
+    symlink(&outside, &target).unwrap();
+
+    assert!(matches!(
+        svc.remove_material(&p.id, &m.id),
+        Err(ProjectCoreError::SymlinkRejected)
+    ));
+    // The symlink itself is left in place; nothing outside was touched.
+    assert!(outside.join("probe.txt").is_file());
+    assert!(target.is_symlink());
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_material_removal_failure_preserves_metadata_consistency() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = tmp_dir("remove-material-perms");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+    let inputs_dir = base
+        .join("projects")
+        .join(p.id.as_str())
+        .join("inputs")
+        .join(m.id.as_str());
+    // Make the inputs/<id> dir read-only so remove_dir_all fails (as non-root).
+    fs::set_permissions(&inputs_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let result = svc.remove_material(&p.id, &m.id);
+    // Metadata was already replaced under optimistic concurrency before content
+    // removal, so a content failure can only leave a benign orphan dir; it must
+    // never leave a dangling metadata reference. (Under a root runner the
+    // removal may still succeed; the invariant we assert is metadata
+    // consistency either way.)
+    assert!(svc.open_project(&p.id).unwrap().materials.is_empty());
+    if result.is_err() {
+        assert!(
+            inputs_dir.exists(),
+            "failed content removal leaves an orphan dir"
+        );
+    }
+    let _ = fs::set_permissions(&inputs_dir, fs::Permissions::from_mode(0o700));
+    let _ = fs::remove_dir_all(&inputs_dir);
 }
 
 // ---------------------------------------------------------------------------
