@@ -23,6 +23,11 @@ use crate::secret::{SecretString, redact_credentials};
 const DEFAULT_FEATURED: [&str; 5] = ["openai", "google", "deepseek", "anthropic", "opencode"];
 const DEFAULT_TASK_TIMEOUT: Duration = Duration::from_secs(60);
 const TEST_PROMPT: &str = "Respondé: ok";
+/// How long `list_models` keeps re-querying while the sidecar catalog is still
+/// loading (a cold packaged start exposes an empty catalog for ~200 ms after
+/// the health endpoint comes up).
+const CATALOG_READY_TIMEOUT: Duration = Duration::from_secs(3);
+const CATALOG_READY_RETRY: Duration = Duration::from_millis(200);
 
 pub struct OpenCodeProviderConnector {
     backend: Arc<OpenCodeBackend>,
@@ -257,11 +262,32 @@ impl ProviderConnector for OpenCodeProviderConnector {
     }
 
     fn list_models(&self) -> ProviderResult<Vec<ModelSummary>> {
+        // On a cold packaged start the pinned sidecar's health endpoint comes
+        // up a few hundred ms before its model catalog finishes loading, so the
+        // first catalog query can observe an empty `{"data": []}`. Retry
+        // briefly so a one-shot empty catalog cannot permanently disable
+        // automatic free-model selection. The retry window is measured from the
+        // first catalog response (after any lazy spawn), so a slow cold spawn
+        // does not exhaust it before the first retry.
         let (status, body) = self.get("/api/model")?;
         if !(200..300).contains(&status) {
             return Err(ProviderError::ProviderUnavailable);
         }
-        let models = parse_json_array(&body)?;
+        let mut models = parse_json_array(&body)?;
+        if models.is_empty() {
+            let deadline = Instant::now() + CATALOG_READY_TIMEOUT;
+            while Instant::now() < deadline {
+                thread::sleep(CATALOG_READY_RETRY);
+                let (status, body) = self.get("/api/model")?;
+                if !(200..300).contains(&status) {
+                    return Err(ProviderError::ProviderUnavailable);
+                }
+                models = parse_json_array(&body)?;
+                if !models.is_empty() {
+                    break;
+                }
+            }
+        }
         let defaults = self.fetch_provider_defaults();
         let mut first_enabled: HashMap<String, String> = HashMap::new();
         let mut summaries = Vec::new();
@@ -500,6 +526,14 @@ fn parse_json_array(body: &str) -> ProviderResult<Vec<Value>> {
         serde_json::from_str(body).map_err(|_| ProviderError::Internal("malformed JSON".into()))?;
     match value {
         Value::Array(items) => Ok(items),
+        // The pinned OpenCode backend (1.18.25) wraps list endpoints in a
+        // `{"data": [...], "location": {...}}` envelope; unwrap it for the
+        // callers (`list_models`, `fetch_integrations`) that expect a bare
+        // array. A top-level bare array (older catalog shape) is still accepted.
+        Value::Object(map) => match map.get("data") {
+            Some(Value::Array(items)) => Ok(items.clone()),
+            _ => Err(ProviderError::Internal("malformed JSON".into())),
+        },
         _ => Err(ProviderError::Internal("malformed JSON".into())),
     }
 }
@@ -679,7 +713,35 @@ fn cost_is_zero(cost: Option<&Value>) -> bool {
     match cost {
         Some(Value::Number(n)) => n.as_f64() == Some(0.0) || n.as_i64() == Some(0),
         Some(Value::String(s)) => s == "0" || s.parse::<f64>() == Ok(0.0),
+        // The live OpenCode catalog (pinned sidecar 1.18.25) reports `cost` as
+        // an array of per-tier objects, e.g. `[{"input":0,"output":0,
+        // "cache":{"read":0,"write":0}}]`. A model is free only when it has at
+        // least one tier and every tier is priced at zero.
+        Some(Value::Array(entries)) => {
+            !entries.is_empty() && entries.iter().all(cost_entry_is_zero)
+        }
         _ => false,
+    }
+}
+
+fn cost_entry_is_zero(entry: &Value) -> bool {
+    let input = entry
+        .get("input")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::NAN);
+    let output = entry
+        .get("output")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::NAN);
+    if input != 0.0 || output != 0.0 {
+        return false;
+    }
+    match entry.get("cache") {
+        Some(Value::Object(_)) => {
+            entry.pointer("/cache/read").and_then(Value::as_f64) == Some(0.0)
+                && entry.pointer("/cache/write").and_then(Value::as_f64) == Some(0.0)
+        }
+        _ => true,
     }
 }
 
@@ -792,5 +854,67 @@ fn map_session_failure(value: &Value, raw_body: &str) -> ConnectionTest {
     ConnectionTest {
         outcome,
         message: test_message(outcome).into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cost_is_zero, parse_json_array};
+    use serde_json::json;
+
+    #[test]
+    fn parse_json_array_accepts_bare_and_data_envelope_shapes() {
+        let bare = parse_json_array(r#"[{"id":"a"},{"id":"b"}]"#).expect("bare array");
+        assert_eq!(bare.len(), 2);
+
+        // The pinned opencode 1.18.25 backend wraps list endpoints:
+        // {"location": {...}, "data": [...]}.
+        let envelope = parse_json_array(
+            r#"{"location":{"directory":"/tmp/x"},"data":[{"id":"a"},{"id":"b"}]}"#,
+        )
+        .expect("data envelope");
+        assert_eq!(envelope.len(), 2);
+        assert_eq!(envelope[0].get("id").and_then(|v| v.as_str()), Some("a"));
+
+        // Not a list: object without a data array.
+        assert!(parse_json_array(r#"{"location":{}}"#).is_err());
+        // Not a list: scalar.
+        assert!(parse_json_array(r#""nope""#).is_err());
+        // Not valid JSON.
+        assert!(parse_json_array(r#"{"unterminated"#).is_err());
+    }
+
+    #[test]
+    fn cost_zero_handles_number_string_and_array_shapes() {
+        assert!(cost_is_zero(Some(&json!(0))));
+        assert!(cost_is_zero(Some(&json!("0"))));
+        assert!(!cost_is_zero(Some(&json!(1))));
+        assert!(!cost_is_zero(Some(&json!("1"))));
+        assert!(!cost_is_zero(None));
+    }
+
+    #[test]
+    fn cost_zero_array_form_matches_pinned_opencode_catalog() {
+        // Free: single all-zero tier.
+        assert!(cost_is_zero(Some(
+            &json!([{ "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } }])
+        )));
+        // Free: multiple all-zero tiers.
+        assert!(cost_is_zero(Some(&json!([
+            { "input": 0, "output": 0 },
+            { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } }
+        ]))));
+        // Paid: nonzero input.
+        assert!(!cost_is_zero(Some(&json!([{ "input": 1, "output": 0 }]))));
+        // Paid: nonzero output.
+        assert!(!cost_is_zero(Some(&json!([{ "input": 0, "output": 3 }]))));
+        // Paid: nonzero cache.
+        assert!(!cost_is_zero(Some(
+            &json!([{ "input": 0, "output": 0, "cache": { "read": 1, "write": 0 } }])
+        )));
+        // Not free: empty array carries no zero-price evidence.
+        assert!(!cost_is_zero(Some(&json!([]))));
+        // Not free: entry missing input/output fields.
+        assert!(!cost_is_zero(Some(&json!([{}]))));
     }
 }

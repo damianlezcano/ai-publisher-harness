@@ -42,6 +42,7 @@ pub struct Script {
     pub integrations_raw: Option<String>,
     pub models: Vec<Value>,
     pub models_raw: Option<String>,
+    pub models_empty_requests: usize,
     pub providers_config: Value,
     pub connect_key_status: u16,
     pub last_connect: Option<CapturedConnect>,
@@ -174,6 +175,24 @@ fn default_models() -> Vec<Value> {
             "status": "enabled",
             "enabled": true
         }),
+        // Mirrors the pinned opencode 1.18.25 catalog shape: `cost` is an array
+        // of per-tier objects (see project-provider `cost_is_zero`).
+        json!({
+            "id": "array-free",
+            "providerID": "opencode",
+            "name": "Array Free",
+            "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}],
+            "status": "enabled",
+            "enabled": true
+        }),
+        json!({
+            "id": "array-paid",
+            "providerID": "opencode",
+            "name": "Array Paid",
+            "cost": [{"input": 2, "output": 2, "cache": {"read": 1, "write": 1}}],
+            "status": "enabled",
+            "enabled": true
+        }),
     ]
 }
 
@@ -201,6 +220,7 @@ impl Default for Script {
             integrations_raw: None,
             models: default_models(),
             models_raw: None,
+            models_empty_requests: 0,
             providers_config: json!({
                 "providers": [],
                 "default": {"opencode": "big-pickle"}
@@ -323,6 +343,12 @@ impl FakeServer {
         self.script().models = models;
     }
 
+    /// Make the first `n` `/api/model` responses an empty `{"data": []}` to
+    /// simulate the pinned sidecar's cold-start catalog-loading window.
+    pub fn set_models_empty_first(&self, n: usize) {
+        self.script().models_empty_requests = n;
+    }
+
     pub fn set_malformed_models(&self) {
         self.script().models_raw = Some("not-json".into());
     }
@@ -369,6 +395,17 @@ impl Drop for FakeServer {
     }
 }
 
+fn enveloped(array_bytes: &[u8]) -> Vec<u8> {
+    // Mirror the pinned opencode 1.18.25 list-endpoint shape: `{"location":
+    // {...}, "data": [...]}` around a bare array.
+    let items: Value = serde_json::from_slice(array_bytes).unwrap_or(Value::Array(Vec::new()));
+    serde_json::to_vec(&json!({
+        "location": { "directory": "/tmp/fake-opencode-server" },
+        "data": items,
+    }))
+    .unwrap_or_else(|_| b"[]".to_vec())
+}
+
 fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     let Some((method, path, body)) = read_request(&mut stream) else {
         return;
@@ -396,6 +433,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             return;
         }
         let body = serde_json::to_vec(&state.integrations).unwrap_or_else(|_| b"[]".to_vec());
+        let body = enveloped(&body);
         drop(state);
         write_response(&mut stream, 200, &body);
         return;
@@ -407,7 +445,17 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             write_response(&mut stream, 200, raw.as_bytes());
             return;
         }
-        let body = serde_json::to_vec(&state.models).unwrap_or_else(|_| b"[]".to_vec());
+        // Simulate the pinned sidecar's cold-start window: the health endpoint
+        // is up before the model catalog finishes loading, so the first N
+        // `/api/model` responses are an empty `{"data": []}`.
+        let body = if state.models_empty_requests > 0 {
+            state.models_empty_requests -= 1;
+            let body = serde_json::to_vec(&Vec::<Value>::new()).unwrap_or_else(|_| b"[]".to_vec());
+            enveloped(&body)
+        } else {
+            let body = serde_json::to_vec(&state.models).unwrap_or_else(|_| b"[]".to_vec());
+            enveloped(&body)
+        };
         drop(state);
         write_response(&mut stream, 200, &body);
         return;

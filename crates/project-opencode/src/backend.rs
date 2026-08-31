@@ -29,6 +29,9 @@ pub struct OpenCodeBackend {
     shutdown_timeout: Duration,
     client: reqwest::blocking::Client,
     inner: Mutex<Inner>,
+    /// Serializes `ensure_ready` so concurrent callers cannot probe the
+    /// freshly-spawned (slow-booting) child and force-kill it via `fail()`.
+    startup_lock: Mutex<()>,
 }
 
 struct Inner {
@@ -63,6 +66,7 @@ impl OpenCodeBackend {
                 status: BackendStatus::Stopped,
                 version: None,
             }),
+            startup_lock: Mutex::new(()),
         }
     }
 
@@ -148,6 +152,18 @@ impl OpenCodeBackend {
     }
 
     pub fn ensure_ready(&self) -> BackendResult<String> {
+        // Hold the startup lock for the whole readiness handshake: the first
+        // caller spawns the child and awaits health, and every concurrent
+        // caller blocks here and then reuses the ready backend. Without this,
+        // a concurrent caller that reads a set-but-not-yet-healthy `base_url`
+        // probes the booting child, gets a transient connection refused, and
+        // `fail()` force-kills the freshly spawned child. The packaged app
+        // (AppImage FUSE) boots the ~180 MB bundled `opencode` slowly enough
+        // that this race breaks automatic free-model selection on first launch.
+        let _startup = self
+            .startup_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let existing = {
             let inner = lock(&self.inner);
             inner.base_url.clone()

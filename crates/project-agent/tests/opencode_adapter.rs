@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -252,6 +253,51 @@ fn shutdown_is_idempotent() {
     engine.shutdown().expect("first");
     engine.shutdown().expect("second");
     assert_eq!(engine.status(), AgentStatus::Stopped);
+}
+
+/// Regression (M10 packaging): concurrent `ensure_ready` callers at app startup
+/// must serialize on the backend so a caller that probes the booting child
+/// cannot force-kill it. `fake-process` in `serve_http` mode boots with a
+/// 600 ms delay (simulating the slow AppImage-FUSE sidecar start); all callers
+/// must still converge on a single healthy backend.
+#[test]
+fn concurrent_ensure_ready_serializes_spawn_and_all_callers_succeed() {
+    let port = free_port();
+    let engine = Arc::new(
+        OpenCodeAgentEngine::new(fake_process_bin(), unique_config_dir(), port)
+            .with_timeouts(Duration::from_secs(15), Duration::from_secs(2))
+            .with_env("FAKE_PROCESS_MODE".into(), "serve_http".into())
+            .with_env("FAKE_PROCESS_DELAY_MS".into(), "600".into()),
+    );
+
+    const THREADS: usize = 8;
+    let barrier = Arc::new(std::sync::Barrier::new(THREADS));
+    let mut handles = Vec::with_capacity(THREADS);
+    for _ in 0..THREADS {
+        let engine = Arc::clone(&engine);
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            engine.ensure_ready().map(|info| info.version)
+        }));
+    }
+    for handle in handles {
+        let result = handle.join().expect("ensure_ready thread");
+        assert_eq!(
+            result.as_deref(),
+            Ok("1.18.25"),
+            "concurrent ensure_ready caller must succeed, got {result:?}"
+        );
+    }
+    assert_eq!(engine.status(), AgentStatus::Ready);
+    engine.shutdown().expect("shutdown");
+    assert_eq!(engine.status(), AgentStatus::Stopped);
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr().map(|addr| addr.port()))
+        .expect("free loopback port")
 }
 
 #[test]

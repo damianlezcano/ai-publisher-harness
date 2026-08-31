@@ -250,6 +250,42 @@ fn list_models_maps_free_recommended_deprecated() {
         .expect("free2");
     assert!(free2.free);
     assert!(!free2.recommended);
+
+    // Array-form `cost` (the pinned opencode 1.18.25 catalog shape) must be
+    // decoded: all-zero tiers are free, any nonzero tier is paid.
+    let array_free = models
+        .iter()
+        .find(|m| m.model_id == "array-free")
+        .expect("array-free");
+    assert!(array_free.free);
+    let array_paid = models
+        .iter()
+        .find(|m| m.model_id == "array-paid")
+        .expect("array-paid");
+    assert!(!array_paid.free);
+}
+
+/// Regression (M10 packaging): on a cold packaged start the sidecar's health
+/// endpoint comes up before its model catalog loads, so the first `/api/model`
+/// responses are an empty `{"data": []}`. `list_models` must retry briefly
+/// instead of returning an empty catalog (which would lock the UI into
+/// "requires choice" and break automatic free-model selection).
+#[test]
+fn list_models_retries_while_catalog_is_still_loading() {
+    let server = FakeServer::start();
+    server.set_models_empty_first(3);
+    let models = connector(&server)
+        .list_models()
+        .expect("models after retry");
+    assert!(
+        !models.is_empty(),
+        "list_models returned empty despite retry"
+    );
+    assert!(models.iter().any(|m| m.free), "no free model after retry");
+    assert!(
+        models.iter().any(|m| m.model_id == "big-pickle"),
+        "expected the pinned catalog after the empty window"
+    );
 }
 
 #[test]
