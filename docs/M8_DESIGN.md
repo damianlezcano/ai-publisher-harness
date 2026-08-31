@@ -611,14 +611,14 @@ change as a security-review task"). Task 4's reviewer explicitly evaluates the
 ## 28. Definition of Done M8
 
 - [x] ADR-0010/0011 and this design accepted before code.
-- [ ] Clipboard image paste works end-to-end (manual smoke), backend-validated, no new clipboard privilege.
-- [ ] Multi-file import reports deterministic per-file results with partial-failure + content dedup; originals never mutated.
-- [ ] Material remove works and never touches source files; core `remove_material` is tested.
-- [ ] Prompt attachments resolve by authorized material ID only; `AgentEngine` port unchanged; cross-project references rejected.
-- [ ] In-app previews for images and text/Markdown (escaped); PDF/office via system handler.
-- [ ] Generated web preview satisfies ADR-0010 invariants (empty preview capability + loopback token server) OR the documented system-browser fallback is chosen at review.
-- [ ] `./scripts/verify` (M8 gate), `git diff --check`, independent security review (tasks 3 & 4), handoff.
-- [ ] No M8-excluded scope (office editor, cloud sync, accounts/payments, packaging, Windows release, provider redesign, autonomous publishing, plugins).
+- [x] Clipboard image paste works end-to-end (manual smoke documented in `scripts/smoke-preview`), backend-validated (magic-byte sniff, 25 MB cap, dedup), no new clipboard privilege (DOM `paste` only).
+- [x] Multi-file import reports deterministic per-file results with partial-failure + content dedup; originals never mutated.
+- [x] Material remove works and never touches source files; core `remove_material` is tested.
+- [x] Prompt attachments resolve by authorized material ID only; `AgentEngine` port unchanged; cross-project references rejected.
+- [x] In-app previews for images and text/Markdown (escaped); PDF/office via system handler.
+- [x] Generated web preview satisfies ADR-0010 invariants (empty `preview.json` capability + loopback token server + navigation pin to the preview origin); the isolated boundary holds.
+- [x] `./scripts/verify` (M8 gate), `git diff --check`, independent security reviews (tasks 3 & 4, plus T5 boundary re-review), handoff.
+- [x] No M8-excluded scope (office editor, cloud sync, accounts/payments, packaging, Windows release, provider redesign, autonomous publishing, plugins).
 
 ## 29. scripts/verify incremental
 

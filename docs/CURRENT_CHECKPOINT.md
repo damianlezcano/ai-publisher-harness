@@ -6,76 +6,85 @@
 
 ## Estado actual
 
-- Current milestone: M8 — Attachments / Advanced Resource UX — **DESIGN_APPROVED / IMPLEMENTATION_PENDING**
-- Current phase: DESIGN_APPROVED_IMPLEMENTATION_PENDING (no hay implementación)
-- Current main commit: ver `git log -1` (commit de cierre de diseño M8)
+- Current milestone: M8 — Attachments / Advanced Resource UX — **IMPLEMENTATION_COMPLETE**
+- Current phase: COMPLETE (implementación integrada, verificada y cerrada)
+- Current main commit: ver `git log -1` (commit de cierre M8)
 - M1-M7: completados y cerrados
-- ADR-0010: Accepted (untrusted generated-content preview isolation)
-- ADR-0011: Accepted (prompt attachment contract)
-- verify: PASS — "M7 contract passed" (baseline previo a M8)
+- M8: completado — ADR-0010 y ADR-0011 implementados
+- verify: PASS — "M8 contract passed"
 - git diff --check: limpio
-- Worktrees: solo `main`
-- Siguiente acción: implementación de M8 por sesión fresca `opencode-go/deepseek-v4-flash`
+- Siguiente acción: M9 (polish de UX educativo; contenido a diseñar luego). NO comenzar M9.
 
-## Alcance M8 aprobado
+## Alcance M8 implementado
 
-- **Clipboard image paste**: evento DOM `paste` (sin privilegio de clipboard global);
-  backend revalida contenido (magic-byte), cap 25 MB, dedup SHA-256, creación
-  atómica de material. Original nunca se modifica.
-- **Multi-file import**: un batch command (`materials_add_from_paths`), resultado
-  determinista por archivo (`added` / `duplicate` / `unsupported` / `failed`),
-  fallo parcial permitido, originales nunca modificados, dedup por SHA-256.
-- **Prompt attachments**: frontend envía `MaterialId` (nunca paths); backend valida
-  que cada material pertenece al proyecto y provisiona copias/referencias
-  autorizadas para `AgentEngine` antes de `open_session`. `AgentEngine` y
-  `AgentPrompt` estables salvo el cambio mínimo (`AgentRequest.attachments`).
-- **Preview tiers**: imágenes/texto/Markdown se previsualizan in-app de forma
-  segura; PDF/office se delegan al system handler; generated web content es
-  **UNTRUSTED**.
-- **Generated-web security boundary** (ADR-0010): webview `preview` sin
-  capacidades (nunca hereda Tauri privileges ni IPC privilegiado), servidor
-  loopback con token aislado (crate `project-preview`), CSP, fallback explícito a
-  system browser si el aislamiento seguro no puede probarse. NUNCA debilitar
-  seguridad para embeder el preview.
-- **Core**: único cambio aditivo `remove_material` (project-core + project-fs);
-  no se reabren invariantes M1-M7.
+- **remove_material**: `ProjectService::remove_material` + `ProjectContentStore::remove_material`
+  (metadata bajo concurrencia optimista, luego `inputs/<id>` con containment/symlink);
+  el original nunca se toca. Tests core + fs.
+- **Clipboard image paste**: comando `material_add_image` vía DOM `paste` (sin
+  privilegio de clipboard); backend revalida (magic-byte PNG/JPEG/GIF/WEBP/BMP/
+  SVG-root), cap 25 MB, dedup SHA-256 (duplicate=true), nombre sintético
+  `captura-<ts>.<ext>`, creación atómica.
+- **Multi-file import**: `materials_add_from_paths` -> `MaterialsImportReport` con
+  resultado determinista por archivo (`added`/`duplicate`/`unsupported`/`failed`),
+  fallo parcial permitido, dedup en proyecto y en batch, rechazo pre-lectura por
+  tamaño (metadata) y symlink/directorio, originales nunca modificados.
+- **Prompt attachments**: `AgentRequest.attachments` (nuevo, aditivo); frontend
+  envía solo `MaterialId`; backend autoriza contra el proyecto actual (cross-project
+  -> `AttachmentInvalid`), provisiona `workspace/materials/<n>-<safe>` ANTES de
+  `open_session`, aumenta el prompt con nombres sanitzados, excluye `materials/`
+  de artifacts. `AgentEngine` y `AgentPrompt` intactos.
+- **Preview tiers**: `preview_data` (imagen/text-Markdown escapado, cap 2 MB,
+  base64+contentType, nunca un path); PDF/office via system handler; web -> vista
+  aislada.
+- **Generated-web boundary (ADR-0010)**: crate `project-preview` (servidor
+  loopback 127.0.0.1, token 128-bit de un solo uso, GET/HEAD, containment
+  canónico + symlink reject, sin directory listing, MIME controlado + nosniff,
+  teardown on close/Drop); ventana `preview` con capability `preview.json`
+  VACÍA (cero permisos); URL y capabilities creadas backend-side; `on_navigation`
+  fija el webview al origin del token; fallback a system browser disponible detrás
+  de la misma interfaz `preview_open_web`. Los 8 invariantes de ADR-0010 están
+  como tests (`preview_security`).
+- **Tauri**: comandos nuevos + `agent_send(attachmentIds)`; main window sin
+  permisos nuevos.
+- **Frontend**: paste handler, chips de attachments, cards de materiales con
+  Abrir/Quitar + confirmación, reporte de import por archivo, preview modal
+  a11y (focus trap, Escape, focus return), acciones por tipo de creación, 47 tests.
+- **Smoke**: `scripts/smoke-preview` (manual, Fedora, SKIP sin entorno gráfico).
 
-## Task graph (M8_DESIGN §22-26)
+## Task graph M8 (estado)
 
-| # | Task | Level | Depends | Ownership |
+| # | Task | Estado | Autor | Reviewer |
 | --- | --- | --- | --- | --- |
-| 0 | Design + ADR approval | HIGH_ARCHITECTURE | — | DONE (V4 Pro + Human) |
-| 1 | `remove_material` core+fs (+ tests) | MEDIUM | 0 | project-core, project-fs |
-| 2 | `project-app` import/preview/attachment facade + DTOs + errors | MEDIUM_HIGH | 1 | crates/project-app/** |
-| 3 | `AgentRequest.attachments` + AgentService provisioning + prompt augmentation | HIGH_CODING | 0 | project-agent/** |
-| 4 | `project-preview` crate (loopback token server + containment + teardown) + security suite | HIGH_CODING — **HIGH_RISK / SECURITY REVIEW** | 0 | project-preview/** |
-| 5 | Tauri commands + capabilities (`preview.json` empty) + preview window | MEDIUM | 2,3,4 | app/src-tauri/** |
-| 6 | Frontend paste/chips/cards/preview UI + a11y + component tests | MEDIUM | 5 | app/src |
-| 7 | Named suites + verify gate + smoke script + docs/VERIFY | MEDIUM/HIGH | 5,6 | tests, scripts, docs/VERIFY |
-| 8 | Gate/docs/ADR + verify + checkpoint | HIGH_ARCHITECTURE | 7 | docs, verify |
+| 0 | Design + ADR approval | DONE | V4 Pro + Human | — |
+| 1 | `remove_material` core+fs (+ tests) | INTEGRADO | DeepSeek V4 Flash | Grok 4.6 medium |
+| 2 | `project-app` import/preview/attachment facade + DTOs + errors | INTEGRADO | DeepSeek V4 Flash | Grok 4.6 medium (re-review OK) |
+| 3 | `AgentRequest.attachments` + provisioning | INTEGRADO | Cursor Grok 4.6 medium | DeepSeek V4 Flash |
+| 4 | `project-preview` crate + security suite | INTEGRADO | Cursor Grok 4.6 medium | DeepSeek V4 Flash (security) |
+| 5 | Tauri commands + `preview.json` + preview window | INTEGRADO | DeepSeek V4 Flash | Grok 4.6 medium (re-review OK: nav pin) |
+| 6 | Frontend paste/chips/cards/preview UI + a11y + tests | INTEGRADO | Cursor Composer 2.5 | DeepSeek V4 Flash |
+| 7 | Named suites + verify gate + smoke + docs/VERIFY | INTEGRADO | DeepSeek V4 Flash | Grok 4.6 medium |
+| 8 | Gate/docs + verify + checkpoint | DONE | DeepSeek V4 Flash (lead) | — |
 
-- **Task 4 (web preview) = HIGH_RISK / SECURITY REVIEW**, reviewer independiente
-  (OpenCode Go DeepSeek V4 Flash); evalúa el fallback §11 y reporta
-  approve / fallback / request-changes.
-- Tasks 1, 3 y 4 son independientes una vez aceptados los ADR.
-- **Recommended first task**: Task 1 (`remove_material` core+fs) — desbloquea la
-  task 2; tasks 3 y 4 pueden arrancar en paralelo.
+## Gates M8
 
-## Model policy (implementación)
+- `cargo fmt --all -- --check` PASS
+- `cargo clippy --locked --workspace --all-targets -- -D warnings` PASS
+- `cargo test --locked --workspace --all-targets` PASS (505)
+  - project-app materials 21 / attachments 6 / preview 9
+  - project-agent agent_attachment 6
+  - project-preview preview_security 10 / preview_lifecycle 4
+- frontend: format, lint, typecheck, test (47) PASS
+- `cargo check --manifest-path app/src-tauri/Cargo.toml` PASS
+- `./scripts/verify` -> "M8 contract passed"
+- `git diff --check` limpio
+- Smoke: `scripts/smoke-preview` NO corrido (requiere sesión gráfica manual); la
+  verificación de clipboard/drag real y de la ventana preview sin IPC queda para
+  el smoke manual opcional.
 
-- IMPLEMENTATION_ORCHESTRATOR: `opencode-go/deepseek-v4-flash`.
-- LOW: Cursor Composer 2.5 → fallback `opencode-go/mimo-v2.5`.
-- MEDIUM: `opencode-go/deepseek-v4-flash` → Composer 2.5 → `opencode-go/qwen3.8-max`.
-- MEDIUM_HIGH: Cursor Grok 4.6 medium → DeepSeek V4 Flash → `opencode-go/kimi-k2.7-code`.
-- HIGH_CODING: Cursor Grok 4.6 medium → `opencode-go/kimi-k2.7-code`.
-- HIGH_ARCHITECTURE: fresh `opencode-go/deepseek-v4-pro` only.
-
-## Documents required by fresh implementation session
+## Documentos para la próxima sesión fresca
 
 - CODEX_HANDOFF.md, docs/AGENT_POLICY.md, docs/ARCHITECTURE.md, docs/SECURITY.md
-- docs/M8_DESIGN.md (diseño aprobado, 30 secciones) — PRIMARIO
-- docs/decisions/0010-*, 0011-* (Accepted)
-- docs/M6_DESIGN.md, docs/M7_DESIGN.md (boundaries, commands, provider)
-- docs/VERIFY.md (§M7 actual; §M8 se añade en la tarea 7), docs/WORKTREES.md,
-  docs/MULTI_AGENT_WORKFLOW.md, docs/TESTING.md
+- docs/M8_DESIGN.md (completo, DoD marcado)
+- docs/decisions/0010-*, 0011-* (implementados)
+- docs/VERIFY.md (§M8), docs/WORKTREES.md, docs/MULTI_AGENT_WORKFLOW.md, docs/TESTING.md
 - docs/CURRENT_CHECKPOINT.md (este documento)
