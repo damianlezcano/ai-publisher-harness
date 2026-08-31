@@ -2,6 +2,7 @@
 .idea/
 .vscode/
 target/
+sidecars/
 node_modules/
 dist/
 build/

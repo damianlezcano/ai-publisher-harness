@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Fetch, verify, and install the pinned sidecar binaries from config/components.json.
+#
+# Default mode (network): for each component, download from its official pinned
+# source, verify the pinned SHA-256 (fail closed: partial artifacts deleted,
+# never install an unverified binary), and install to sidecars/<bundleName>.
+#
+# --check mode (offline, deterministic): validate the manifest shape,
+# schemaVersion, per-component fields, format, and sha256 format. No network.
+#
+# Exit codes: 0 = PASS, 1 = FAIL, 2 = usage.
+
+set -euo pipefail
+
+SCRIPT="$(basename "$0")"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+manifest="$repo_root/config/components.json"
+workdir="$(mktemp -d)"
+
+trap 'rm -rf "$workdir"' EXIT
+
+fail() {
+  echo "$SCRIPT: FAIL: $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
+}
+
+require_cmd python3
+
+# Shared manifest validator. $1 = mode: check | tsv. In "check" mode prints a
+# summary and exits 0 on success; on any violation prints the problem to stderr
+# and exits 1. In "tsv" mode dumps one tab-separated line per component
+# (name, version, source, sha256, format, bundleName) after validating.
+run_manifest_py() {
+  python3 - "$manifest" "$1" "$SCRIPT" <<'PY'
+import json, re, sys
+
+manifest_path, mode, script_name = sys.argv[1], sys.argv[2], sys.argv[3]
+
+try:
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    print(f"{script_name}: FAIL: cannot parse {manifest_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+problems = []
+if data.get("schemaVersion") != 1:
+    problems.append("schemaVersion must be 1")
+
+components = data.get("components")
+if not isinstance(components, list):
+    problems.append("components must be a list")
+else:
+    for idx, comp in enumerate(components):
+        label = f"components[{idx}]"
+        if not isinstance(comp, dict):
+            problems.append(f"{label}: must be an object")
+            continue
+        for field in ("name", "platform", "version", "source", "sha256", "bundleName"):
+            value = comp.get(field)
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"{label}.{field}: missing or empty")
+        if comp.get("format") not in ("binary", "tar.gz"):
+            problems.append(f"{label}.format: must be one of binary|tar.gz")
+        sha = comp.get("sha256")
+        if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+            problems.append(f"{label}.sha256: must be exactly 64 lowercase hex characters")
+
+if problems:
+    for problem in problems:
+        print(f"{script_name}: FAIL: {problem}", file=sys.stderr)
+    sys.exit(1)
+
+if mode == "check":
+    names = ", ".join(str(c.get("name")) for c in components if isinstance(c, dict))
+    print(f"{script_name}: --check: valid manifest (schemaVersion 1, "
+          f"{len(components)} components: {names})")
+elif mode == "tsv":
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        print("\t".join((comp["name"], comp["version"], comp["source"],
+                         comp["sha256"], comp["format"], comp["bundleName"])))
+PY
+}
+
+check_mode() {
+  run_manifest_py check
+  exit 0
+}
+
+fetch_one() {
+  local name="$1" version="$2" source="$3" expected="$4" format="$5" bundle_name="$6"
+  local dest_dir="$sidecars_dir" dest="$sidecars_dir/$bundle_name"
+  local artifact="$workdir/artifact-$bundle_name" actual candidate tmpdir count
+
+  printf '%s: fetching %s %s (%s)\n' "$SCRIPT" "$name" "$version" "$source"
+
+  curl -fsSL -o "$artifact" "$source" || {
+    rm -f "$artifact"
+    fail "download failed for $name from $source"
+  }
+
+  actual="$(sha256sum "$artifact")"
+  actual="${actual%% *}"
+
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$artifact"
+    fail "checksum mismatch for $name: expected $expected, got $actual; partial artifact deleted, nothing installed"
+  fi
+  printf '%s: verified %s (sha256 %s)\n' "$SCRIPT" "$name" "$actual"
+
+  if [[ "$format" == "binary" ]]; then
+    cp "$artifact" "$dest"
+    chmod +x "$dest"
+    printf '%s: installed %s %s to %s\n' "$SCRIPT" "$name" "$version" "$dest"
+  elif [[ "$format" == "tar.gz" ]]; then
+    tmpdir="$(mktemp -d "$dest_dir/.tmp.XXXXXX")"
+    if ! tar -xzf "$artifact" -C "$tmpdir"; then
+      rm -rf "$tmpdir"
+      fail "extraction failed for $name from $source"
+    fi
+    count="$(find "$tmpdir" -type f -name "$name" | wc -l)"
+    if (( count != 1 )); then
+      rm -rf "$tmpdir"
+      fail "expected exactly one file named '$name' inside tar.gz for $name, found $count"
+    fi
+    candidate="$(find "$tmpdir" -type f -name "$name" | head -n 1)"
+    cp "$candidate" "$dest.tmp.$$"
+    chmod +x "$dest.tmp.$$"
+    mv -f "$dest.tmp.$$" "$dest"
+    rm -rf "$tmpdir"
+    printf '%s: installed %s %s to %s (extracted from tar.gz)\n' "$SCRIPT" "$name" "$version" "$dest"
+  fi
+}
+
+fetch_mode() {
+  require_cmd curl
+  require_cmd sha256sum
+  require_cmd tar
+
+  run_manifest_py tsv > "$workdir/components.tsv"
+
+  sidecars_dir="$repo_root/sidecars"
+  mkdir -p "$sidecars_dir"
+
+  while IFS=$'\t' read -r name version source expected format bundle_name; do
+    [[ -n "$name" ]] || continue
+    fetch_one "$name" "$version" "$source" "$expected" "$format" "$bundle_name"
+  done < "$workdir/components.tsv"
+}
+
+mode="${1:-fetch}"
+case "$mode" in
+  --check) check_mode ;;
+  fetch) fetch_mode ;;
+  *)
+    echo "$SCRIPT: usage: $0 [--check]" >&2
+    exit 2
+    ;;
+esac
