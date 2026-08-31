@@ -109,6 +109,33 @@ fi
   exit 5
 }
 
+# Orchestrator context-budget gate: fail closed before launching any new
+# worker/reviewer when the orchestrator session must rotate. This never kills
+# an active worker; it only prevents starting a new one.
+budget_output="$( "$repo_root/scripts/check-session-budget" 2>/dev/null )" || budget_exit=$?
+budget_exit=${budget_exit:-0}
+case "$budget_exit" in
+  0) ;;
+  1)
+    echo "agent-launch: WARNING: orchestrator session budget: ${budget_output#SESSION_BUDGET: }" >&2
+    ;;
+  2)
+    echo "agent-launch: FAIL CLOSED: ROTATE_SESSION_REQUIRED — no new bounded task may be launched" >&2
+    echo "agent-launch:   finish the active task/review, capture the handoff, integrate safely," >&2
+    echo "agent-launch:   close the worker/reviewer panes, update CURRENT_CHECKPOINT.md, then STOP." >&2
+    exit 10
+    ;;
+  3)
+    echo "agent-launch: FAIL CLOSED: ROTATE_SESSION_REQUIRED_HARD — no new milestone work may begin" >&2
+    echo "agent-launch:   rotate the orchestrator at the next safe checkpoint." >&2
+    exit 11
+    ;;
+  *)
+    echo "agent-launch: FAIL CLOSED: orchestrator session budget unknown (check-session-budget exit $budget_exit)" >&2
+    exit 12
+    ;;
+esac
+
 # The native CLI receives --model at process creation. Herdr only manages the
 # pane lifecycle; it never chooses a provider default for this harness.
 herdr agent start "$name" --kind "$provider" --pane "$pane" -- --model "$model"

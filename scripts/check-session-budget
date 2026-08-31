@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/check-session-budget [--session SESSION_ID]
+
+Deterministic orchestrator context-budget gate for OpenCode sessions.
+Reads the live session export (opencode export SESSION_ID) and inspects the
+latest message part tokens.total, which is the current running context size.
+
+Exit codes (fail-closed):
+  0  CONTINUE                    < 80K
+  1  CHECKPOINT_WARNING          80K-99,999  (prepare checkpoint)
+  2  ROTATE_SESSION_REQUIRED     100K-129,999 (no new bounded task)
+  3  ROTATE_SESSION_REQUIRED_HARD >=130K      (no new milestone work)
+  4  FAIL CLOSED                 budget unknown (no CLI, no session,
+                                 malformed/missing export)
+
+Options:
+  --session SESSION_ID  Explicit OpenCode session id (default: newest session).
+  -h, --help            Show this help.
+EOF
+}
+
+session_id=""
+while (($#)); do
+  case "$1" in
+    --session) session_id=${2:?}; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "check-session-budget: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+warn_at=80000
+rotate_at=100000
+hard_at=130000
+
+fail_closed() {
+  echo "check-session-budget: FAIL CLOSED: $1" >&2
+  exit 4
+}
+
+command -v opencode >/dev/null 2>&1 || fail_closed "opencode CLI unavailable"
+
+if [[ -z $session_id ]]; then
+  session_id="$(opencode session list 2>/dev/null | awk '$1 ~ /^ses_/ { print $1; exit }' || true)"
+  [[ -n $session_id ]] || fail_closed "cannot resolve the current OpenCode session"
+fi
+
+export_json="$(opencode export "$session_id" 2>/dev/null || true)"
+[[ -n $export_json ]] || fail_closed "opencode export returned nothing for $session_id"
+
+budget="$(printf '%s\n' "$export_json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    msgs = data.get("messages") or []
+    total = None
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        for part in m.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            t = part.get("tokens")
+            if isinstance(t, dict) and isinstance(t.get("total"), (int, float)):
+                total = int(t["total"])
+    if total is None:
+        sys.exit(3)
+    print(total)
+except Exception:
+    sys.exit(2)
+' 2>/dev/null || true)"
+[[ -n $budget ]] || fail_closed "export for $session_id has no measurable tokens.total"
+
+if (( budget < warn_at )); then
+  echo "SESSION_BUDGET: CONTINUE (${budget} tokens, < 80K)"
+  exit 0
+elif (( budget < rotate_at )); then
+  echo "SESSION_BUDGET: CHECKPOINT_WARNING (${budget} tokens, 80K-99,999)"
+  exit 1
+elif (( budget < hard_at )); then
+  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED (${budget} tokens, 100K-129,999)"
+  exit 2
+else
+  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED_HARD (${budget} tokens, >=130K)"
+  exit 3
+fi

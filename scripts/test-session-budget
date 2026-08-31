@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/exports"
+
+# Deterministic fixture exports (shaped like `opencode export` output).
+cat > "$tmp/exports/ses_under.json" <<'EOF'
+{"info":{"id":"ses_under"},"messages":[{"info":{},"parts":[{"tokens":{"total":65536,"input":65536,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}]}
+EOF
+cat > "$tmp/exports/ses_warn.json" <<'EOF'
+{"info":{"id":"ses_warn"},"messages":[{"info":{},"parts":[{"tokens":{"total":90000,"input":90000,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}]}
+EOF
+cat > "$tmp/exports/ses_rotate.json" <<'EOF'
+{"info":{"id":"ses_rotate"},"messages":[{"info":{},"parts":[{"tokens":{"total":120000,"input":120000,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}]}
+EOF
+cat > "$tmp/exports/ses_hard.json" <<'EOF'
+{"info":{"id":"ses_hard"},"messages":[{"info":{},"parts":[{"tokens":{"total":150000,"input":150000,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}]}]}
+EOF
+cat > "$tmp/exports/ses_malformed.json" <<'EOF'
+{"info":{"id":"ses_malformed"},"messages":[{"info":{},"parts":[{not valid json
+EOF
+cat > "$tmp/exports/ses_missing_tokens.json" <<'EOF'
+{"info":{"id":"ses_missing_tokens"},"messages":[{"info":{},"parts":[{"text":"hi"}]}]}
+EOF
+
+cat > "$tmp/bin/opencode" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  session)
+    sub="${1:-}"
+    if [[ $sub == list ]]; then
+      if [[ -n "${FAKE_SESSION_LIST:-}" ]]; then
+        printf '%s\n' 'Session ID                      Title'
+        printf '%s\n' '────────────────────────────────'
+        printf '%s\n' "$FAKE_SESSION_LIST"
+      fi
+    fi
+    ;;
+  export)
+    sid="${1:-}"
+    if [[ -f "${FAKE_EXPORT_DIR:-}/$sid.json" ]]; then
+      cat "${FAKE_EXPORT_DIR}/$sid.json"
+    else
+      echo "opencode: session not found: $sid" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "opencode: unknown command: $cmd" >&2
+    exit 1
+    ;;
+esac
+EOF
+chmod +x "$tmp/bin/opencode"
+
+run() {
+  PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" \
+    "$repo_root/scripts/check-session-budget" "$@"
+}
+
+expect() {
+  local expected=$1
+  shift
+  local output code
+  set +e
+  output="$(run "$@" 2>&1)"
+  code=$?
+  set -e
+  if [[ $code -eq $expected ]]; then
+    echo "PASS: exit $code for $*"
+  else
+    echo "FAIL: expected exit $expected, got $code for $*" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+}
+
+expect_grep() {
+  local expected=$1
+  local pattern=$2
+  shift 2
+  local output code
+  set +e
+  output="$(run "$@" 2>&1)"
+  code=$?
+  set -e
+  if [[ $code -eq $expected ]] && grep -q "$pattern" <<<"$output"; then
+    echo "PASS: exit $code with '$pattern' for $*"
+  else
+    echo "FAIL: expected exit $expected and '$pattern' for $*" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+}
+
+# Below threshold -> CONTINUE.
+expect_grep 0 'SESSION_BUDGET: CONTINUE' --session ses_under
+
+# Warning band -> CHECKPOINT_WARNING.
+expect_grep 1 'SESSION_BUDGET: CHECKPOINT_WARNING' --session ses_warn
+
+# Rotation band -> ROTATE_SESSION_REQUIRED.
+expect_grep 2 'SESSION_BUDGET: ROTATE_SESSION_REQUIRED (' --session ses_rotate
+
+# Hard band -> ROTATE_SESSION_REQUIRED_HARD.
+expect_grep 3 'SESSION_BUDGET: ROTATE_SESSION_REQUIRED_HARD' --session ses_hard
+
+# Default resolver: newest session from `opencode session list`.
+PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="ses_under  x" \
+  "$repo_root/scripts/check-session-budget" >/dev/null || {
+  echo "FAIL: default newest-session resolution" >&2
+  exit 1
+}
+echo "PASS: default session resolution uses newest session"
+
+# Malformed export -> FAIL CLOSED.
+expect 4 --session ses_malformed
+
+# Export without any tokens.total -> FAIL CLOSED.
+expect 4 --session ses_missing_tokens
+
+# Explicit missing session -> FAIL CLOSED.
+expect 4 --session ses_does_not_exist
+
+# No resolvable session -> FAIL CLOSED.
+PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="" \
+  "$repo_root/scripts/check-session-budget" >/dev/null 2>&1 && {
+  echo "FAIL: empty session list must fail closed" >&2
+  exit 1
+}
+echo "PASS: empty session list fails closed"
+
+# No opencode CLI -> FAIL CLOSED.
+PATH="$tmp/bin/empty" FAKE_EXPORT_DIR="$tmp/exports" \
+  "$repo_root/scripts/check-session-budget" --session ses_under >/dev/null 2>&1 && {
+  echo "FAIL: missing opencode CLI must fail closed" >&2
+  exit 1
+}
+echo "PASS: missing opencode CLI fails closed"
+
+echo "session-budget harness: all checks passed"

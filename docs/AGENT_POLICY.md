@@ -70,13 +70,27 @@ session into another task.
 
 ## Orchestrator context budget
 
-- Around ~80K: avoid unnecessary repository exploration; summarize active state
-  into `CURRENT_CHECKPOINT.md`.
-- Around ~100K: launch no new tasks; finish active bounded work; complete
-  reviews; integrate; close all completed panes; update `CURRENT_CHECKPOINT.md`;
-  rotate the orchestrator.
-- At >= 130K: ROTATE_SESSION as soon as the active task reaches a safe
+`scripts/check-session-budget` is the executable, deterministic gate. It reads
+the live session (`opencode export <session-id>`, latest message part
+`tokens.total`) and fails closed:
+
+- `< 80K` → **CONTINUE** (exit 0).
+- `80K-99,999` → **CHECKPOINT_WARNING** (exit 1): avoid unnecessary repository
+  exploration; summarize active state into `CURRENT_CHECKPOINT.md`.
+- `100K-129,999` → **ROTATE_SESSION_REQUIRED** (exit 2): launch no new tasks;
+  finish active bounded work; complete reviews; integrate; close all completed
+  panes; update `CURRENT_CHECKPOINT.md`; stop and rotate the orchestrator.
+  `scripts/agent-launch --launch` refuses to start a new worker/reviewer in
+  this band.
+- `>= 130K` → **ROTATE_SESSION_REQUIRED_HARD** (exit 3): hard prohibition on any
+  new milestone work. Rotate as soon as the active task reaches a safe
   checkpoint. Never let an orchestration session reach 200K-400K.
+
+The gate never kills an active worker: an active bounded task must finish,
+capture its handoff, integrate safely, close its worker/reviewer panes, update
+`CURRENT_CHECKPOINT.md`, and only then stop. These thresholds are the single
+source of truth; the earlier contradictory "100K-150K / rotate above ~150K"
+prose is removed.
 
 ## Executable model enforcement
 
@@ -165,7 +179,11 @@ COMMIT:
 - Implementation/maintenance orchestration runs on OpenCode Go DeepSeek V4 Flash (`opencode-go/deepseek-v4-flash`).
 - A genuine HIGH_ARCHITECTURE decision is escalated to a fresh DeepSeek V4 Pro session; the Pro session is closed after the architecture decision/design is persisted to the repository.
 - Do not keep historical milestone chats or prior sessions alive for the next milestone; start from repository state.
-- Rotate orchestration sessions around 100K-150K context: prepare checkpoint/rotation above ~100K, rotate above ~150K.
+- Rotate orchestration sessions by the executable budget gate in
+  `scripts/check-session-budget`: prepare a checkpoint around ~80K, no new tasks
+  at ~100K (rotate at the next safe checkpoint), hard prohibition on new
+  milestone work at >=130K. Never rely on the model's self-estimate of context
+  when `scripts/check-session-budget` can measure it.
 - Workers receive task-local context only (see "Task contracts and worker behavior"); the orchestration lead retains global project context.
 
 ## Platform

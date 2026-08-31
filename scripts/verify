@@ -32,7 +32,7 @@ for file in \
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch; do
+for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -45,6 +45,9 @@ require_heading docs/HARNESS_REVIEW.md '## Resolved gaps'
 
 printf 'verify: scripts/test-agent-launch\n'
 ./scripts/test-agent-launch
+
+printf 'verify: scripts/test-session-budget\n'
+./scripts/test-session-budget
 
 if rg -n -i 'place[h]older|to[d]o|tb[d]' scripts/verify skills/*/SKILL.md; then
   fail 'M0 verification and skills must not contain unresolved markers'
