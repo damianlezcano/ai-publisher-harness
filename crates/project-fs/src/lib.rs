@@ -654,6 +654,30 @@ impl ProjectContentStore for FilesystemProjectContentStore {
         fs::read(&resolved).map_err(|_| ProjectCoreError::NotFound(p.clone()))
     }
 
+    fn remove_material(&mut self, p: &ProjectId, m: &MaterialId) -> CoreResult<()> {
+        // The material's content lives only under the fixed `inputs/<id>` root;
+        // nothing else is ever touched. Reject any symlink component from the
+        // configured base down to the target, then require canonical containment
+        // in the project's `inputs/` root before removing.
+        let dir = self.project_dir(p).join("inputs").join(m.as_str());
+        reject_symlink_path(&dir, &self.base)?;
+
+        let canon_project = canon_project_dir(&self.base, p)?;
+        let canon_inputs = fs::canonicalize(self.project_dir(p).join("inputs"))
+            .map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        if !canon_inputs.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        if !dir.exists() {
+            return Ok(());
+        }
+        let canon_dir = fs::canonicalize(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+        if !canon_dir.starts_with(&canon_inputs) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        fs::remove_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)
+    }
+
     fn remove_project_tree(&mut self, p: &ProjectId) -> CoreResult<()> {
         let dir = self.project_dir(p);
         if dir.exists() {

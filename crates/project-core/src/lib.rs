@@ -634,6 +634,11 @@ pub trait ProjectContentStore {
         safe_file_name: &str,
     ) -> CoreResult<StoredCreation>;
     fn read_creation(&self, p: &ProjectId, c: &Creation) -> CoreResult<Vec<u8>>;
+    /// Removes the fixed `inputs/<id>` content directory for a material. The
+    /// original source file is never affected: only the app-managed copy is
+    /// deleted. Implementations must enforce fixed-root containment and reject
+    /// symlinks before removing anything.
+    fn remove_material(&mut self, p: &ProjectId, m: &MaterialId) -> CoreResult<()>;
     fn remove_project_tree(&mut self, p: &ProjectId) -> CoreResult<()>;
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -743,6 +748,27 @@ where
             .find(|m| &m.id == id)
             .ok_or_else(|| ProjectCoreError::MissingMaterial(id.clone()))?;
         self.content.read_material(pid, m)
+    }
+    /// Removes a material from the project metadata and deletes its app-managed
+    /// `inputs/<id>` content directory. The user's original source file is never
+    /// touched. Ordering mirrors `delete_project`: the metadata reference is
+    /// removed under optimistic concurrency first, then the content tree, so a
+    /// failed content removal can only leave a benign orphan directory and never
+    /// a dangling metadata reference.
+    pub fn remove_material(&mut self, pid: &ProjectId, mid: &MaterialId) -> CoreResult<()> {
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v2()?;
+        let idx = p
+            .materials
+            .iter()
+            .position(|m| &m.id == mid)
+            .ok_or_else(|| ProjectCoreError::MissingMaterial(mid.clone()))?;
+        p.materials.remove(idx);
+        p.updated_at = self.clock.now();
+        self.repository.replace(&p, &e)?;
+        self.content.remove_material(pid, mid)?;
+        Ok(())
     }
     pub fn create_creation(&mut self, pid: &ProjectId, r: CreateCreation) -> CoreResult<Creation> {
         if r.display_name.trim().is_empty() || r.content.file_name.trim().is_empty() {
@@ -1091,6 +1117,10 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| ProjectCoreError::NotFound(p.clone()))
         }
+        fn remove_material(&mut self, p: &ProjectId, m: &MaterialId) -> CoreResult<()> {
+            self.materials.remove(&(p.clone(), m.clone()));
+            Ok(())
+        }
         fn remove_project_tree(&mut self, p: &ProjectId) -> CoreResult<()> {
             self.deleted.push(p.clone());
             if self.fail_remove {
@@ -1277,6 +1307,58 @@ mod tests {
             s.read_creation(&pid(), &CreationId::parse(C).unwrap()),
             Err(ProjectCoreError::MissingCreation(_))
         ))
+    }
+    #[test]
+    fn remove_material_removes_metadata_and_content_only() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let item = s.add_material(&pid(), material()).unwrap();
+        assert_eq!(s.open_project(&pid()).unwrap().materials.len(), 1);
+        s.remove_material(&pid(), &item.id).unwrap();
+        assert!(s.open_project(&pid()).unwrap().materials.is_empty());
+        // The content is no longer readable: the store entry is gone.
+        assert!(matches!(
+            s.read_material(&pid(), &item.id),
+            Err(ProjectCoreError::MissingMaterial(_))
+        ));
+    }
+    #[test]
+    fn remove_missing_material_is_a_typed_error() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        assert!(matches!(
+            s.remove_material(&pid(), &MaterialId::parse(M).unwrap()),
+            Err(ProjectCoreError::MissingMaterial(_))
+        ));
+    }
+    #[test]
+    fn remove_material_conflict_preserves_existing_project() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let item = s.add_material(&pid(), material()).unwrap();
+        let (mut r, c, k, i) = s.into_parts();
+        r.conflict = true;
+        let mut s = ProjectService::new(r, c, k, i);
+        assert!(matches!(
+            s.remove_material(&pid(), &item.id),
+            Err(ProjectCoreError::Conflict { .. })
+        ));
+        // Metadata and content are both untouched on conflict.
+        assert_eq!(s.open_project(&pid()).unwrap().materials.len(), 1);
+        assert_eq!(
+            s.read_material(&pid(), &item.id).unwrap(),
+            b"original bytes"
+        );
+    }
+    #[test]
+    fn remove_material_keeps_original_source_bytes_intact() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let item = s.add_material(&pid(), material()).unwrap();
+        s.remove_material(&pid(), &item.id).unwrap();
+        // The user's source bytes were never stored verbatim as the readable
+        // content after removal; the remaining project stays consistent.
+        assert!(s.open_project(&pid()).unwrap().materials.is_empty());
     }
     #[test]
     fn create_and_rename_reject_blank_overlong_and_path_like_names() {

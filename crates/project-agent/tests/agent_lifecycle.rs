@@ -38,6 +38,7 @@ fn request(project_id: &str) -> AgentRequest {
     AgentRequest {
         project_id: project_id.into(),
         prompt: prompt(),
+        attachments: Vec::new(),
     }
 }
 
