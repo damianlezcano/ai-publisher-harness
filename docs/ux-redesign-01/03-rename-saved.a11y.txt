@@ -1,0 +1,22 @@
+[RootWebArea] EducAI
+[navigation] Conversaciones
+[region] Asistente
+[region] Asistente
+[button] Configuración
+[heading] Conversaciones
+[button] Nueva conversación
+[heading] Fracciones
+[DisclosureTriangle] Materiales
+[button] Agregar archivo
+[textbox] Pedido a la IA
+[combobox] Modelo
+[button] Adjuntar material
+[button] Enviar
+[button] Fracciones 31/8/26, 7:00 p. m.
+[button] Renombrar
+[button] El sistema solar 31/8/26, 7:00 p. m.
+[button] Renombrar
+[button] Fotosíntesis Compartido 31/8/26, 5:00 p. m.
+[button] Renombrar
+[button] Compartir
+[option] big-pickle (Gratis)

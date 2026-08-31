@@ -1,0 +1,34 @@
+[RootWebArea] EducAI
+[navigation] Conversaciones
+[button] Configuración
+[heading] Conversaciones
+[button] Nueva conversación
+[region] Asistente
+[heading] Fotosíntesis
+[region] Asistente
+[DisclosureTriangle] Materiales
+[button] Agregar archivo
+[button] Fotosíntesis 31/8/26, 7:01 p. m.
+[button] Renombrar
+[button] Sistema solar 31/8/26, 6:01 p. m.
+[button] Renombrar
+[button] Fracciones 31/8/26, 5:01 p. m.
+[button] Renombrar
+[textbox] Pedido a la IA
+[combobox] Modelo
+[button] Adjuntar material
+[button] Enviar
+[list] Archivos adjuntos
+[button] Vista previa
+[button] Abrir en navegador
+[button] Abrir
+[button] Quitar
+[button] Compartido
+[menu] Compartir
+[option] big-pickle (Gratis)
+[menuitem] Copiar enlace
+[menuitem] Abrir enlace
+[menuitem] Mostrar QR
+[menuitem] Dejar de compartir
+[button] Abrir manual.pdf
+[button] Abrir esquema-fotosíntesis.png

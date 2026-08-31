@@ -1,0 +1,18 @@
+[RootWebArea] EducAI
+[navigation] Conversaciones
+[region] Asistente
+[region] Asistente
+[button] Configuración
+[heading] Conversaciones
+[button] Nueva conversación
+[heading] Nueva conversación
+[DisclosureTriangle] Materiales
+[button] Agregar archivo
+[textbox] Pedido a la IA
+[combobox] Modelo
+[button] Adjuntar material
+[button] Enviar
+[button] Nueva conversación 31/8/26, 7:00 p. m.
+[button] Renombrar
+[button] Compartir
+[option] big-pickle (Gratis)
