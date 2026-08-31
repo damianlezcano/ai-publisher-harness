@@ -15,6 +15,17 @@ describe("PreviewModal", () => {
     trigger.focus();
   });
 
+  it("renders a dialog labelled by the creation title", () => {
+    render(
+      <PreviewModal
+        title="Notas"
+        preview={{ contentType: "text/plain", dataBase64: btoa("hola") }}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("dialog", { name: "Notas" })).toBeInTheDocument();
+  });
+
   it("moves focus into the modal and closes on Escape", () => {
     const { unmount } = render(
       <PreviewModal

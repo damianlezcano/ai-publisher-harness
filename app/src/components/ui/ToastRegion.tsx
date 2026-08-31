@@ -7,7 +7,7 @@ interface ToastRegionProps {
 
 export default function ToastRegion({ toasts }: ToastRegionProps) {
   return (
-    <div role="status" aria-live="polite">
+    <div role="status" aria-live="polite" aria-atomic="true">
       <div className="toast-container">
         {toasts.map((toast) => (
           <Toast key={toast.id} id={toast.id}>

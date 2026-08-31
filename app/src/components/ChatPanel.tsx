@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { guidanceFromError } from "../guidance";
 import type { GuidanceActionKind } from "../guidance";
 import type { AgentPhase, MaterialView } from "../types";
 import { messages } from "../messages";
@@ -14,6 +15,7 @@ interface ChatPanelProps {
   onRefresh: () => void | Promise<void>;
   aiUsable?: boolean;
   onOpenProvider?: () => void;
+  onProviderError?: () => void;
 }
 
 interface Turn {
@@ -46,6 +48,7 @@ export default function ChatPanel({
   onRefresh,
   aiUsable = true,
   onOpenProvider,
+  onProviderError,
 }: ChatPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -128,6 +131,9 @@ export default function ChatPanel({
       await api.agentSend(projectId, text, ids);
     } catch (err) {
       setError(err);
+      if (guidanceFromError(err).actions.includes("connect-ai")) {
+        onProviderError?.();
+      }
     }
   }
 
@@ -138,6 +144,9 @@ export default function ChatPanel({
       await api.agentSend(projectId, lastAttempt.text, lastAttempt.attachmentIds);
     } catch (err) {
       setError(err);
+      if (guidanceFromError(err).actions.includes("connect-ai")) {
+        onProviderError?.();
+      }
     }
   }
 

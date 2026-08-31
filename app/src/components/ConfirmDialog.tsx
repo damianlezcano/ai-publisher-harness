@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { RefObject } from "react";
 import { messages } from "../messages";
+import Dialog from "./ui/Dialog";
 
 interface ConfirmDialogProps {
   title: string;
@@ -20,30 +22,28 @@ export default function ConfirmDialog({
 }: ConfirmDialogProps) {
   const [value, setValue] = useState("");
   const ready = value === confirmText;
+  const inputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="dialog-backdrop" role="presentation">
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <h2 id="confirm-title">{title}</h2>
-        <p>{message}</p>
-        <label className="sr-only" htmlFor="confirm-input">
-          {messages.common.confirmNameLabel}
-        </label>
-        <input
-          id="confirm-input"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          autoFocus
-        />
-        <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onCancel}>
-            {messages.common.cancel}
-          </button>
-          <button type="button" className="danger" disabled={!ready || busy} onClick={onConfirm}>
-            {messages.common.delete}
-          </button>
-        </div>
+    <Dialog title={title} onClose={onCancel} initialFocusRef={inputRef as RefObject<HTMLElement>}>
+      <p>{message}</p>
+      <label className="sr-only" htmlFor="confirm-input">
+        {messages.common.confirmNameLabel}
+      </label>
+      <input
+        ref={inputRef}
+        id="confirm-input"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <div className="dialog-actions">
+        <button type="button" className="secondary" onClick={onCancel}>
+          {messages.common.cancel}
+        </button>
+        <button type="button" className="danger" disabled={!ready || busy} onClick={onConfirm}>
+          {messages.common.delete}
+        </button>
       </div>
-    </div>
+    </Dialog>
   );
 }

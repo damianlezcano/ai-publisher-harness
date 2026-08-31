@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ProviderSummary } from "../../types";
 import ProviderCard from "./ProviderCard";
+import Dialog from "../ui/Dialog";
 import { messages } from "../../messages";
 
 interface ProviderPanelProps {
@@ -55,69 +56,61 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   };
 
   return (
-    <div className="dialog-backdrop" role="presentation">
-      <div
-        className="dialog provider-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={messages.provider.panelLabel}
-      >
-        <header className="provider-panel-header">
-          <h2>{messages.provider.heading}</h2>
-          <button type="button" className="secondary" onClick={onClose}>
-            {messages.common.close}
-          </button>
-        </header>
-        <p className="muted">{messages.provider.privacyNote}</p>
+    <Dialog title={messages.provider.heading} onClose={onClose} className="provider-dialog">
+      <header className="provider-panel-header">
+        <button type="button" className="secondary" onClick={onClose}>
+          {messages.common.close}
+        </button>
+      </header>
+      <p className="muted">{messages.provider.privacyNote}</p>
 
-        {loadingError && (
-          <p className="error" role="alert">
-            {loadingError}
-          </p>
-        )}
+      {loadingError && (
+        <p className="error" role="alert">
+          {loadingError}
+        </p>
+      )}
 
-        {providers === null && !loadingError && <p className="muted">{messages.app.loading}</p>}
+      {providers === null && !loadingError && <p className="muted">{messages.app.loading}</p>}
 
-        {providers && (
-          <div className="provider-list">
-            <section className="provider-section">
-              <h3>{messages.provider.featuredHeading}</h3>
-              {featured.length === 0 && <p className="muted">{messages.provider.noFeatured}</p>}
-              {featured.map((provider) => (
-                <ProviderCard key={provider.id} provider={provider} onChanged={changed} />
-              ))}
-            </section>
+      {providers && (
+        <div className="provider-list">
+          <section className="provider-section">
+            <h3>{messages.provider.featuredHeading}</h3>
+            {featured.length === 0 && <p className="muted">{messages.provider.noFeatured}</p>}
+            {featured.map((provider) => (
+              <ProviderCard key={provider.id} provider={provider} onChanged={changed} />
+            ))}
+          </section>
 
-            <section className="provider-section">
-              <button
-                type="button"
-                className="secondary"
-                aria-expanded={othersOpen}
-                onClick={() => setOthersOpen((v) => !v)}
-              >
-                {messages.provider.othersButton(others.length)}
-              </button>
-              {othersOpen && (
-                <div className="provider-others">
-                  <input
-                    type="search"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={messages.provider.searchPlaceholder}
-                    aria-label={messages.provider.searchAriaLabel}
-                  />
-                  {filteredOthers.length === 0 && (
-                    <p className="muted">{messages.provider.noSearchResults}</p>
-                  )}
-                  {filteredOthers.map((provider) => (
-                    <ProviderCard key={provider.id} provider={provider} onChanged={changed} />
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
-      </div>
-    </div>
+          <section className="provider-section">
+            <button
+              type="button"
+              className="secondary"
+              aria-expanded={othersOpen}
+              onClick={() => setOthersOpen((v) => !v)}
+            >
+              {messages.provider.othersButton(others.length)}
+            </button>
+            {othersOpen && (
+              <div className="provider-others">
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={messages.provider.searchPlaceholder}
+                  aria-label={messages.provider.searchAriaLabel}
+                />
+                {filteredOthers.length === 0 && (
+                  <p className="muted">{messages.provider.noSearchResults}</p>
+                )}
+                {filteredOthers.map((provider) => (
+                  <ProviderCard key={provider.id} provider={provider} onChanged={changed} />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </Dialog>
   );
 }
