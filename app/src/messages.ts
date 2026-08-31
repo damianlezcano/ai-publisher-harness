@@ -107,6 +107,7 @@ export const messages = {
     promptLabel: "Pedido a la IA",
     placeholder: "Ej.: Creá una actividad interactiva sobre la fotosíntesis",
     attachmentsAriaLabel: "Archivos adjuntos",
+    attachMaterial: "Adjuntar material",
     attachmentFallback: "Archivo adjunto",
     removeAttachment(name: string): string {
       return `Quitar ${name}`;
