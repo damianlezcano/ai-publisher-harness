@@ -408,7 +408,7 @@ where
         let mut repository = self.repository.lock().unwrap_or_else(|e| e.into_inner());
         let mut project = repository.get(project_id).map_err(from_core)?;
         let expected = project.updated_at.clone();
-        project.migrate_to_v2().map_err(from_core)?;
+        project.migrate_to_v3().map_err(from_core)?;
         let already_published = self
             .published
             .lock()

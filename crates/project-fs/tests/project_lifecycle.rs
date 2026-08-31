@@ -11,8 +11,8 @@ use std::thread;
 
 use project_core::{
     ContentType, CreationContent, CreationKind, CreationVisibility, IdGenerator, MaterialContent,
-    ProjectContentStore, ProjectCoreError, ProjectId, ProjectName, ProjectRepository,
-    ProjectService, Sha256Digest, Timestamp,
+    PROJECT_SCHEMA_VERSION, ProjectContentStore, ProjectCoreError, ProjectId, ProjectName,
+    ProjectRepository, ProjectService, Sha256Digest, Timestamp,
 };
 
 use project_fs::{FilesystemProjectContentStore, FilesystemProjectRepository};
@@ -82,6 +82,9 @@ impl project_core::IdGenerator for FakeIds {
         self.creation_seq.set(seq.wrapping_add(1));
         let id = format!("0198e4a6-86d6-7c16-b4c4-{:012x}", seq & 0xffffffffffff);
         project_core::CreationId::parse(id).unwrap()
+    }
+    fn message_id(&self) -> project_core::MessageId {
+        project_core::MessageId::parse("0198e4a6-90ab-7c01-8c0e-8b6fd26f1f22").unwrap()
     }
 }
 
@@ -200,7 +203,7 @@ fn create_and_reopen_preserves_all_metadata() {
         let mut svc = make_service(&base);
         let p = svc.create_project("Fotosintesis").unwrap();
         assert_eq!(p.name.as_str(), "Fotosintesis");
-        assert_eq!(p.schema_version, 2);
+        assert_eq!(p.schema_version, PROJECT_SCHEMA_VERSION);
         assert_eq!(p.id.as_str(), "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22");
 
         // Four roots exist
@@ -1409,7 +1412,7 @@ fn metadata_preserves_all_fields_after_material_add() {
     let m = svc.add_material(&p.id, material_request()).unwrap();
 
     let reloaded = svc.open_project(&p.id).unwrap();
-    assert_eq!(reloaded.schema_version, 2);
+    assert_eq!(reloaded.schema_version, PROJECT_SCHEMA_VERSION);
     assert_eq!(reloaded.name.as_str(), "Test");
     assert_eq!(reloaded.state, project_core::ProjectState::Local);
     assert_eq!(reloaded.materials.len(), 1);

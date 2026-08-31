@@ -60,6 +60,9 @@ impl IdGenerator for SeqIds {
         let n = self.next_creation.fetch_add(1, Ordering::SeqCst);
         project_core::CreationId::parse(format!("0198e4a6-86d6-7c16-b4c4-3197b355{n:04x}")).unwrap()
     }
+    fn message_id(&self) -> project_core::MessageId {
+        project_core::MessageId::parse("0198e4a6-90ab-7c01-8c0e-8b6fd26f1f22").unwrap()
+    }
 }
 
 pub fn service(

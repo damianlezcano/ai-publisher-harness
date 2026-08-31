@@ -6,7 +6,7 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 
-use project_core::{ProjectRepository, ProjectService};
+use project_core::{PROJECT_SCHEMA_VERSION, ProjectRepository, ProjectService};
 use project_fs::FilesystemProjectRepository;
 use project_publication::{
     FakePublisher, PublicationError, PublicationManager, PublisherCall, UnpublishOutcome, slugify,
@@ -296,7 +296,7 @@ fn v1_first_publish_migrates_privately_and_failed_metadata_leaves_v1() {
     let stored = FilesystemProjectRepository::new(h.temp.path())
         .get(&project.id)
         .unwrap();
-    assert_eq!(stored.schema_version, 2);
+    assert_eq!(stored.schema_version, PROJECT_SCHEMA_VERSION);
     assert_eq!(
         stored.publication_route.as_ref().map(|r| r.as_str()),
         Some(published.route.as_str())
