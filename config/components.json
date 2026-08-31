@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "opencode",
+      "platform": "linux-x86_64",
+      "version": "1.18.25",
+      "source": "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-linux-x64.tar.gz",
+      "sha256": "58a3729a6f3432dd6d2917fcc4a949788891a035818646ad480e12c947f56e78",
+      "format": "tar.gz",
+      "bundleName": "opencode"
+    },
+    {
+      "name": "cloudflared",
+      "platform": "linux-x86_64",
+      "version": "2026.8.3",
+      "source": "https://github.com/cloudflare/cloudflared/releases/download/2026.8.3/cloudflared-linux-amd64",
+      "sha256": "f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e",
+      "format": "binary",
+      "bundleName": "cloudflared"
+    }
+  ]
+}
