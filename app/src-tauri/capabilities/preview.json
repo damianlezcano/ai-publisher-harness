@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview",
+  "description": "Zero-capability boundary for the isolated web preview window (ADR-0010). Generated content in this window can invoke no Tauri command, event, dialog, filesystem, or shell operation.",
+  "windows": ["preview"],
+  "permissions": []
+}
