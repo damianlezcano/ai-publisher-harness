@@ -351,12 +351,11 @@
       }
       case "project_rename": {
         const p = find(args.projectId);
-        if (p) {
-          p.name = args.name;
-          p.updatedAt = iso(0);
-          persist();
-        }
-        return { id: args.projectId, name: args.name, createdAt: p?.createdAt, updatedAt: p?.updatedAt, shared: makeSummary(p).shared };
+        if (!p) return Promise.reject({ code: "internal", message: "Proyecto no encontrado" });
+        p.name = args.name;
+        p.updatedAt = iso(0);
+        persist();
+        return makeSummary(p);
       }
       case "project_delete":
         projects = projects.filter((x) => x.id !== args.projectId);
@@ -553,7 +552,6 @@
       case "model_list":
         return modelList;
       case "model_select": {
-        const [providerId, modelId] = args.modelId ? [args.providerId, args.modelId] : [null, null];
         const m = modelList.find((x) => x.providerId === args.providerId && x.modelId === args.modelId);
         selectedModel = { model: m || FREE_MODEL, notice: null, requiresChoice: false };
         persist();
@@ -591,6 +589,10 @@
     unregisterCallback,
     convertFileSrc: (p) => p,
     metadata: { currentWebview: { label: "main" }, currentWindow: { label: "main" } },
+  };
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener: () => {},
+    registerListener: () => {},
   };
   window.__MOCK__ = {
     seed,

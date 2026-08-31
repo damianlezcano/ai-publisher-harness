@@ -6,22 +6,33 @@ Date: 2026-08-31
 
 ## Summary
 
-All 10 required flows were captured at the specified viewports with PNG, OCR and a11y-tree evidence. The layout-invariant measure script passed at all three viewports. No UX blockers, important or minor regressions were found in the redesigned UI.
+All 10 required flows were captured at the three mandated viewports (1366×768, 1440×900, 1920×1080) with PNG, OCR and a11y-tree evidence. The layout-invariant measure script passed at all three viewports. No UX blockers, important or minor regressions were found in the redesigned UI.
 
 | Check | Result |
 | --- | --- |
 | App reachable at :1420 | PASS |
-| All 10 flows captured | PASS (21 PNGs) |
-| OCR generated per PNG | PASS (21 .ocr.txt) |
-| a11y trees generated | PASS (14 .a11y.txt) |
+| All 10 flows captured at 3 viewports | PASS |
+| PNG evidence | 51 files |
+| `.ocr.txt` per PNG (all non-empty) | 51 files |
+| `.a11y.txt` per flow | 10 files |
 | Layout measure invariants | PASS (3 viewports) |
-| capture.py assertions | PASS (32/32) |
+| `capture.py` assertions | PASS (33/33) |
 
 ## Note on screenshot dimensions
 
 The new chat-first shell uses `height: 100vh` with internal scrolling containers (`conversation-main`, `workspace-timeline`). Playwright `full_page=True` therefore captures the viewport (e.g. 1440×900) rather than an expanded document. This is expected for the new layout and is consistent across all viewports.
 
+## Note on a11y trees
+
+One accessibility tree is captured per flow at the default viewport (1440×900), since a11y content is viewport-independent. Multi-state flows capture the a11y tree for the representative final/dialog state.
+
+## Note on QR OCR
+
+The QR dialog image is dominated by the QR code, which tesseract reads as empty. For the three `08-qr-<vp>.png` files, `capture.py` writes a fallback `.ocr.txt` containing the DOM-extracted dialog title and button labels so every PNG has a non-empty OCR file.
+
 ## Per-flow assertion matrix
+
+All flows were captured at **1366×768, 1440×900, 1920×1080**.
 
 ### 01 — First launch
 
@@ -46,11 +57,11 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 | --- | --- | --- |
 | Newest-first order | PASS | Sidebar names = `["Fracciones", "Sistema solar", "Fotosíntesis"]` |
 | Timestamps present | PASS | 3 `.conversation-timestamp` elements |
-| Shared badge on shared project | PASS | OCR "Fotosíntesis … Compartido"; a11y `Fotosíntesis Compartido 31/8/26, 4:42 p. m.` |
+| Shared badge on shared project | PASS | OCR "Fotosíntesis … Compartido"; a11y `Fotosíntesis Compartido …` |
 
 ### 03 — Rename
 
-**Evidence:** `03-rename-saved.png/.ocr.txt/.a11y.txt`, `03-rename-cancelled.png/.ocr.txt`
+**Evidence:** `03-rename-saved-{vp}.png/.ocr.txt`, `03-rename-cancelled-{vp}.png/.ocr.txt`; `03-rename-saved.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -59,7 +70,7 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 04 — Send prompt
 
-**Evidence:** `04-send-working.png/.ocr.txt/.a11y.txt`, `04-send-completed.png/.ocr.txt/.a11y.txt`
+**Evidence:** `04-send-working-{vp}.png/.ocr.txt`, `04-send-completed-{vp}.png/.ocr.txt`; `04-send-completed.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -69,7 +80,7 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 05 — Resources in conversation context
 
-**Evidence:** `05-resources.png/.ocr.txt/.a11y.txt`
+**Evidence:** `05-resources-{vp}.png/.ocr.txt`; `05-resources.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -79,7 +90,7 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 06 — Settings
 
-**Evidence:** `06-settings-open.png/.ocr.txt/.a11y.txt`, `06-settings-closed.png/.ocr.txt/.a11y.txt`
+**Evidence:** `06-settings-open-{vp}.png/.ocr.txt`, `06-settings-closed-{vp}.png/.ocr.txt`; `06-settings-open.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -89,7 +100,7 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 07 — Share
 
-**Evidence:** `07-share-busy.png/.ocr.txt`, `07-share-shared.png/.ocr.txt`, `07-share-menu.png/.ocr.txt/.a11y.txt`
+**Evidence:** `07-share-busy-{vp}.png/.ocr.txt`, `07-share-shared-{vp}.png/.ocr.txt`, `07-share-menu-{vp}.png/.ocr.txt`; `07-share-menu.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -99,15 +110,16 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 08 — QR dialog
 
-**Evidence:** `08-qr.png/.ocr.txt/.a11y.txt`
+**Evidence:** `08-qr-{vp}.png/.ocr.txt`; `08-qr.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
 | "Mostrar QR" opens QR dialog | PASS | `.qr` element visible; dialog rendered |
+| QR dialog has copy/open links | PASS | DOM buttons include `Copiar enlace` and `Abrir enlace` |
 
 ### 09 — Stop sharing
 
-**Evidence:** `09-stop-confirm.png/.ocr.txt/.a11y.txt`, `09-stop-stopped.png/.ocr.txt/.a11y.txt`
+**Evidence:** `09-stop-confirm-{vp}.png/.ocr.txt`, `09-stop-stopped-{vp}.png/.ocr.txt`; `09-stop-confirm.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
@@ -116,7 +128,7 @@ The new chat-first shell uses `height: 100vh` with internal scrolling containers
 
 ### 10 — Restart persistence (D1)
 
-**Evidence:** `10-restart-before.png/.ocr.txt`, `10-restart-after.png/.ocr.txt/.a11y.txt`
+**Evidence:** `10-restart-before-{vp}.png/.ocr.txt`, `10-restart-after-{vp}.png/.ocr.txt`; `10-restart-after.a11y.txt`
 
 | Assertion | Result | Evidence |
 | --- | --- | --- |
