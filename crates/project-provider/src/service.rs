@@ -253,20 +253,42 @@ fn find_model<'a>(
         .find(|m| m.provider_id == provider_id && m.model_id == model_id)
 }
 
+fn rank_free_model(model: &ModelSummary) -> u8 {
+    match (model.provider_id.as_str() == "opencode", model.recommended) {
+        (true, true) => 3,
+        (true, false) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+
 fn pick_free<'a>(models: &[&'a ModelSummary]) -> Option<&'a ModelSummary> {
-    models
+    let mut candidates: Vec<&'a ModelSummary> = models
         .iter()
         .copied()
-        .find(|m| m.free && m.recommended)
-        .or_else(|| models.iter().copied().find(|m| m.free))
+        .filter(|m| !m.deprecated && m.free)
+        .collect();
+    candidates.sort_by_key(|m| {
+        (
+            std::cmp::Reverse(rank_free_model(m)),
+            &m.provider_id,
+            &m.model_id,
+        )
+    });
+    candidates.into_iter().next()
 }
 
 fn default_free_model(models: &[ModelSummary]) -> Option<&ModelSummary> {
-    models
-        .iter()
-        .find(|m| m.provider_id == "opencode" && m.free && m.recommended)
-        .or_else(|| models.iter().find(|m| m.free && m.recommended))
-        .or_else(|| models.iter().find(|m| m.free))
+    let mut candidates: Vec<&ModelSummary> =
+        models.iter().filter(|m| !m.deprecated && m.free).collect();
+    candidates.sort_by_key(|m| {
+        (
+            std::cmp::Reverse(rank_free_model(m)),
+            &m.provider_id,
+            &m.model_id,
+        )
+    });
+    candidates.into_iter().next()
 }
 
 fn ghost_model(sel: &ModelSelection) -> ModelSummary {
