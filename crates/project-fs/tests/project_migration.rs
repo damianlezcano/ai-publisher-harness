@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use project_core::{
     ContentType, CreationContent, CreationKind, CreationVisibility, IdGenerator,
     LEGACY_PROJECT_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION, Project, ProjectCoreError, ProjectId,
-    ProjectRepository, ProjectService, Timestamp,
+    ProjectRepository, ProjectService, SCHEMA_V2, Timestamp,
 };
 use project_fs::{FilesystemProjectContentStore, FilesystemProjectRepository};
 
@@ -398,4 +398,114 @@ fn from_json_v1_fixture_never_infers_public_from_name_kind_or_filename() {
     let parsed = Project::from_json(&json).unwrap();
     assert_eq!(parsed.schema_version, LEGACY_PROJECT_SCHEMA_VERSION);
     assert_eq!(parsed.creations[0].visibility, CreationVisibility::Private);
+}
+
+fn v1_json() -> String {
+    format!(
+        r#"{{
+  "schemaVersion": 1,
+  "projectId": "{P}",
+  "name": "Fotosintesis",
+  "createdAt": "2026-08-28T15:00:00Z",
+  "updatedAt": "2026-08-28T15:00:00Z",
+  "state": "local",
+  "materials": [],
+  "creations": [
+    {{
+      "creationId": "{C}",
+      "displayName": "Lesson",
+      "kind": "web",
+      "relativePath": "outputs/{C}/index.html",
+      "byteSize": 4,
+      "revision": 1,
+      "createdAt": "2026-08-28T15:00:00Z"
+    }}
+  ]
+}}"#
+    )
+}
+
+fn v2_json() -> String {
+    format!(
+        r#"{{
+  "schemaVersion": 2,
+  "projectId": "{P}",
+  "name": "Fotosintesis",
+  "createdAt": "2026-08-28T15:00:00Z",
+  "updatedAt": "2026-08-28T15:00:00Z",
+  "state": "local",
+  "publicationRoute": "fotosintesis-a7k2m9",
+  "materials": [],
+  "creations": [
+    {{
+      "creationId": "{C}",
+      "displayName": "Lesson",
+      "kind": "web",
+      "visibility": "public",
+      "relativePath": "outputs/{C}/index.html",
+      "byteSize": 4,
+      "revision": 1,
+      "createdAt": "2026-08-28T15:00:00Z"
+    }}
+  ]
+}}"#
+    )
+}
+
+fn write_synthetic_project(base: &Path, id: &str, json: &str) {
+    let projects = base.join("projects");
+    fs::create_dir_all(&projects).unwrap();
+    let proj_dir = projects.join(id);
+    fs::create_dir_all(&proj_dir).unwrap();
+    for root in ["inputs", "workspace", "outputs", "publish"] {
+        fs::create_dir_all(proj_dir.join(root)).unwrap();
+    }
+    fs::write(proj_dir.join("project.json"), json).unwrap();
+}
+
+#[test]
+fn v2_project_migrates_to_v3_with_empty_messages() {
+    let base = tmp_dir("v2-to-v3");
+    write_synthetic_project(&base, P, &v2_json());
+
+    let mut svc = make_service(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let loaded = svc.open_project(&pid).unwrap();
+    assert_eq!(loaded.schema_version, SCHEMA_V2);
+    assert!(loaded.messages.is_empty());
+
+    let renamed = svc.rename_project(&pid, "Sistema solar").unwrap();
+    assert_eq!(renamed.schema_version, PROJECT_SCHEMA_VERSION);
+    assert!(renamed.messages.is_empty());
+    assert_eq!(renamed.creations[0].visibility, CreationVisibility::Public);
+    assert_eq!(
+        renamed.publication_route.as_ref().map(|r| r.as_str()),
+        Some("fotosintesis-a7k2m9")
+    );
+
+    let path = project_json_path(&base, P);
+    assert_eq!(disk_schema_version(&path), 3);
+    let raw = fs::read_to_string(&path).unwrap();
+    assert!(raw.contains("\"messages\": []"));
+}
+
+#[test]
+fn v1_project_migrates_to_v3() {
+    let base = tmp_dir("v1-to-v3");
+    write_synthetic_project(&base, P, &v1_json());
+
+    let mut svc = make_service(&base);
+    let pid = ProjectId::parse(P).unwrap();
+    let loaded = svc.open_project(&pid).unwrap();
+    assert_eq!(loaded.schema_version, LEGACY_PROJECT_SCHEMA_VERSION);
+    assert!(loaded.messages.is_empty());
+
+    let renamed = svc.rename_project(&pid, "Sistema solar").unwrap();
+    assert_eq!(renamed.schema_version, PROJECT_SCHEMA_VERSION);
+    assert!(renamed.messages.is_empty());
+    assert_eq!(renamed.creations[0].visibility, CreationVisibility::Private);
+    assert!(renamed.publication_route.is_none());
+
+    let path = project_json_path(&base, P);
+    assert_eq!(disk_schema_version(&path), 3);
 }

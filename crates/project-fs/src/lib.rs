@@ -17,6 +17,7 @@ pub mod publish_root;
 pub use publication_snapshot::{PublicationSnapshot, PublicationSnapshotStore, SnapshotFault};
 pub use publish_root::ProjectPublishRootProvider;
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -126,6 +127,54 @@ fn validate_rehydrated_fields(p: &mut Project) -> CoreResult<()> {
         match c.visibility {
             project_core::CreationVisibility::Public
             | project_core::CreationVisibility::Private => {}
+        }
+    }
+    let material_ids: HashSet<_> = p.materials.iter().map(|m| &m.id).collect();
+    let creation_ids: HashSet<_> = p.creations.iter().map(|c| &c.id).collect();
+    for msg in &p.messages {
+        project_core::MessageId::parse(msg.id.as_str())?;
+        Timestamp::parse(msg.created_at.as_str())?;
+        match msg.role {
+            project_core::MessageRole::User | project_core::MessageRole::Assistant => {}
+        }
+        match msg.status {
+            project_core::MessageStatus::Ok
+            | project_core::MessageStatus::Failed
+            | project_core::MessageStatus::Cancelled => {}
+        }
+        if msg.text.chars().count() > project_core::MAX_MESSAGE_TEXT_CHARS {
+            return Err(ProjectCoreError::InvalidMessage(format!(
+                "message text exceeds {} characters",
+                project_core::MAX_MESSAGE_TEXT_CHARS
+            )));
+        }
+        for mid in &msg.material_ids {
+            project_core::MaterialId::parse(mid.as_str())?;
+            if !material_ids.contains(mid) {
+                return Err(ProjectCoreError::MissingMaterial(mid.clone()));
+            }
+        }
+        for cid in &msg.creation_ids {
+            project_core::CreationId::parse(cid.as_str())?;
+            if !creation_ids.contains(cid) {
+                return Err(ProjectCoreError::MissingCreation(cid.clone()));
+            }
+        }
+        match msg.role {
+            project_core::MessageRole::User => {
+                if !msg.creation_ids.is_empty() {
+                    return Err(ProjectCoreError::InvalidMessage(
+                        "user message cannot reference creations".into(),
+                    ));
+                }
+            }
+            project_core::MessageRole::Assistant => {
+                if !msg.material_ids.is_empty() {
+                    return Err(ProjectCoreError::InvalidMessage(
+                        "assistant message cannot reference materials".into(),
+                    ));
+                }
+            }
         }
     }
     Ok(())
