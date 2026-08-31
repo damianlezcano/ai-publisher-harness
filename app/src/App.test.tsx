@@ -74,7 +74,7 @@ function mockBackend(options: MockOptions = {}) {
     agentSendError,
   } = options;
 
-  const allProjects = [...projects];
+  const allProjects = projects.map((project) => ({ ...project }));
 
   invokeMock.mockImplementation((cmd: string, args?: unknown) => {
     switch (cmd) {
