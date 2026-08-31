@@ -35,6 +35,10 @@ if ! cargo tauri --version >/dev/null 2>&1; then
   skip "cargo tauri CLI not available (no 'cargo tauri')"
 fi
 
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  skip "rpmbuild not available (install rpm-build)"
+fi
+
 if ! curl -fsSL --connect-timeout 5 --max-time 10 -o /dev/null https://github.com 2>/dev/null; then
   skip "network unreachable (cannot download sidecars)"
 fi
