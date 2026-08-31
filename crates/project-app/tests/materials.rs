@@ -179,6 +179,34 @@ fn paste_gif_webp_bmp_svg_are_accepted() {
     assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 4);
 }
 
+#[test]
+fn paste_svg_with_xml_prolog_is_accepted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(tmp.path());
+    let p = app.create_project("P").unwrap();
+    let with_prolog =
+        b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
+    let result = app
+        .add_material_image(&p.id, "x.svg", "image/svg+xml", with_prolog.to_vec())
+        .unwrap();
+    assert!(!result.duplicate);
+    assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 1);
+}
+
+#[test]
+fn paste_xml_without_svg_root_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(tmp.path());
+    let p = app.create_project("P").unwrap();
+    // XML prolog + a non-svg root: the sniff must still find an <svg root.
+    let not_svg = b"<?xml version=\"1.0\"?><root><html/></root>";
+    let err = app
+        .add_material_image(&p.id, "x.svg", "image/svg+xml", not_svg.to_vec())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::MaterialImageInvalid);
+    assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 0);
+}
+
 // -- Multi-file batch import --------------------------------------------------
 
 #[test]
@@ -288,7 +316,7 @@ fn batch_import_rejects_symlinks_and_directories() {
                 ],
             )
             .unwrap();
-        assert_eq!(report.items[0].status, "failed");
+        assert_eq!(report.items[0].status, "unsupported");
         assert_eq!(report.items[1].status, "unsupported");
         assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 0);
     }
@@ -305,6 +333,28 @@ fn batch_import_oversize_is_unsupported() {
         .import_materials(&p.id, vec![big.to_str().unwrap().to_owned()])
         .unwrap();
     assert_eq!(report.items[0].status, "unsupported");
+    assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 0);
+}
+
+#[test]
+fn batch_import_oversize_is_rejected_before_reading_bytes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(tmp.path());
+    let p = app.create_project("P").unwrap();
+    // A sparse file larger than the cap: if the backend read the bytes it would
+    // consume >100 MB; rejection must come from the pre-read metadata length.
+    let big = tmp.path().join("sparse.bin");
+    let f = fs::File::create(&big).unwrap();
+    f.set_len(100 * 1024 * 1024 + 1024).unwrap();
+    drop(f);
+    let report = app
+        .import_materials(&p.id, vec![big.to_str().unwrap().to_owned()])
+        .unwrap();
+    assert_eq!(report.items[0].status, "unsupported");
+    assert_eq!(
+        report.items[0].reason.as_deref(),
+        Some("Ese archivo es demasiado grande.")
+    );
     assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 0);
 }
 

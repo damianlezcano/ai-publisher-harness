@@ -381,6 +381,38 @@ where
         } else {
             source_name
         };
+        // Reject oversize and non-regular sources BEFORE reading any bytes so
+        // the backend never buffers an unbounded frontend-supplied path.
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_file() && meta.len() <= MAX_IMPORT_FILE_BYTES => {}
+            Ok(meta) if meta.file_type().is_file() => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "unsupported".to_owned(),
+                    material_id: None,
+                    reason: Some("Ese archivo es demasiado grande.".to_owned()),
+                    material: None,
+                });
+            }
+            Ok(_) => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "unsupported".to_owned(),
+                    material_id: None,
+                    reason: Some("Ese archivo no es válido.".to_owned()),
+                    material: None,
+                });
+            }
+            Err(_) => {
+                return Ok(MaterialImportResult {
+                    source_name,
+                    status: "failed".to_owned(),
+                    material_id: None,
+                    reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                    material: None,
+                });
+            }
+        }
         match read_source_file(Path::new(path)) {
             Err(AppError {
                 code: ErrorCode::MaterialFailed,
@@ -400,24 +432,29 @@ where
                 material: None,
             }),
             Ok((file_name, bytes, content_type)) => {
-                if bytes.len() as u64 > MAX_IMPORT_FILE_BYTES {
-                    return Ok(MaterialImportResult {
-                        source_name,
-                        status: "unsupported".to_owned(),
-                        material_id: None,
-                        reason: Some("Ese archivo es demasiado grande.".to_owned()),
-                        material: None,
-                    });
-                }
                 let sha = sha256_hex(&bytes);
-                if let Some(existing) = self.find_material_by_sha(pid, &sha)? {
-                    return Ok(MaterialImportResult {
-                        source_name,
-                        status: "duplicate".to_owned(),
-                        material_id: Some(existing.id.as_str().to_owned()),
-                        reason: Some("Ese archivo ya está en el proyecto.".to_owned()),
-                        material: Some(material_view(&existing)),
-                    });
+                match self.find_material_by_sha(pid, &sha) {
+                    Ok(Some(existing)) => {
+                        return Ok(MaterialImportResult {
+                            source_name,
+                            status: "duplicate".to_owned(),
+                            material_id: Some(existing.id.as_str().to_owned()),
+                            reason: Some("Ese archivo ya está en el proyecto.".to_owned()),
+                            material: Some(material_view(&existing)),
+                        });
+                    }
+                    // A read error on the project metadata marks this item
+                    // failed rather than aborting the whole batch.
+                    Err(_) => {
+                        return Ok(MaterialImportResult {
+                            source_name,
+                            status: "failed".to_owned(),
+                            material_id: None,
+                            reason: Some("No pudimos agregar ese archivo.".to_owned()),
+                            material: None,
+                        });
+                    }
+                    Ok(None) => {}
                 }
                 let request = AddMaterial {
                     display_name: file_name.clone(),
@@ -730,7 +767,9 @@ where
                 )
             })?;
             attachments.push(AgentAttachment {
-                display_name: material.original_file_name.clone(),
+                // Sanitized name only (never a path); the agent re-sanitizes
+                // defensively for the prompt (ADR-0011).
+                display_name: project_core::safe_file_name(&material.original_file_name),
                 kind: material_kind(&material.original_file_name).to_owned(),
                 bytes,
             });
@@ -1274,16 +1313,27 @@ fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// SVG is validated for the `svg` root element only: the bytes are text and
-/// must contain an `<svg` opening tag within a small leading window. The
-/// renderer never executes it (rendered via `<img>` only).
+/// SVG is validated for the `svg` root element only: the bytes are text and must
+/// contain an `<svg` opening tag within a small leading window (after an optional
+/// XML prolog, BOM, and whitespace). The renderer never executes it (rendered via
+/// `<img>` only). An XML prolog without an actual `<svg` root is rejected.
 fn is_svg_root(bytes: &[u8]) -> bool {
     let window = &bytes[..bytes.len().min(1024)];
     let Ok(text) = std::str::from_utf8(window) else {
         return false;
     };
-    let trimmed = text.trim_start().trim_start_matches('\u{feff}');
-    trimmed.starts_with("<svg") || trimmed.starts_with("<?xml")
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    let text = match text.strip_prefix("<?xml") {
+        Some(rest) => {
+            // Skip the prolog up to its closing '?>' (bounded window).
+            match rest.find("?>") {
+                Some(end) => rest[end + 2..].trim_start(),
+                None => return false,
+            }
+        }
+        None => text,
+    };
+    text.starts_with("<svg") || text.starts_with("<svg:")
 }
 
 fn sha256_hex(data: &[u8]) -> String {

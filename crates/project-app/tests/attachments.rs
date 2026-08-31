@@ -214,20 +214,41 @@ fn attachments_augment_the_prompt_deterministically() {
 #[test]
 fn hostile_material_names_are_sanitized_never_injected_raw() {
     let tmp = tempfile::tempdir().unwrap();
-    let (app, engine) = app(tmp.path());
-    let p = app.create_project("P").unwrap();
-    engine.set_artifacts(vec![artifact("workspace/x.html", ArtifactKind::Web)]);
-    write_artifact(tmp.path(), &p.id, "x.html", b"<h1>");
-
-    // A hostile name containing traversal and script markup.
-    let hostile = std::env::temp_dir().join("m8-hostile-<script>..png");
+    // Seed the hostile-named material through a plain state on the same base.
+    let (seed, _) = app(tmp.path());
+    let p = seed.create_project("P").unwrap();
+    let hostile = tmp.path().join("m8-<script>alert(1)..png");
     fs::write(&hostile, b"png-bytes").unwrap();
-    let material = app
+    let material = seed
         .add_material_from_path(&p.id, hostile.to_str().unwrap())
         .unwrap();
     let _ = fs::remove_file(&hostile);
+    drop(seed);
 
-    app.run_agent(&p.id, "usalo", &[material.id]).unwrap();
-    // The agent still completes (sanitized provisioning); the creation exists.
-    assert_eq!(app.open_project(&p.id).unwrap().creations.len(), 1);
+    let engine = FakeAgentEngine::new();
+    engine.set_artifacts(vec![artifact("workspace/x.html", ArtifactKind::Web)]);
+    write_artifact(tmp.path(), &p.id, "x.html", b"<h1>");
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recording = RecordingEngine(engine, std::sync::Arc::clone(&recorded));
+    let state = AppState::with_components(
+        tmp.path().to_path_buf(),
+        recording,
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    state.run_agent(&p.id, "usalo", &[material.id]).unwrap();
+    let prompts = recorded.lock().unwrap();
+    assert_eq!(prompts.len(), 1);
+    // The raw hostile markers never enter the prompt; only a sanitized name is
+    // injected. Sanitization replaces '<'/'>' with '-' and cannot yield a
+    // path-separator or an empty/dot-only path component.
+    assert!(!prompts[0].contains("<script>"));
+    assert!(!prompts[0].contains("alert(1)"));
+    assert!(!prompts[0].contains('\u{3c}') && !prompts[0].contains('\u{3e}'));
+    assert!(!prompts[0].contains('/') && !prompts[0].contains('\\'));
+    assert!(!prompts[0].contains("..\n") && !prompts[0].contains("\n.."));
+    assert!(prompts[0].contains("m8--script-alert-1-..png"));
+    // The agent still completed; the creation exists.
+    assert_eq!(state.open_project(&p.id).unwrap().creations.len(), 1);
 }
