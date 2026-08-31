@@ -63,10 +63,10 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument(),
     );
-    expect(screen.getByText("Conversación")).toBeInTheDocument();
-    expect(screen.getByText("Materiales")).toBeInTheDocument();
-    expect(screen.getByText("Creaciones")).toBeInTheDocument();
-    expect(screen.getByText("Publicación")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Asistente" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Materiales" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Creaciones" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Compartir" })).toBeInTheDocument();
   });
 
   it("shows the projects view as the landing screen", async () => {
@@ -92,7 +92,7 @@ describe("App", () => {
     });
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Tus proyectos" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Mis proyectos" })).toBeInTheDocument(),
     );
   });
 

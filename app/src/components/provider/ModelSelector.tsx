@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ModelSummary, ProviderSummary, SelectedModelView } from "../../types";
+import { messages } from "../../messages";
 
 interface ModelSelectorProps {
   /** Bumped by the parent after provider/model mutations so the list reloads. */
@@ -72,7 +73,11 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
           }),
       }))
       .filter((g) => g.options.length > 0);
-    return [...add("Recomendado", recommended), ...add("Gratis", free), ...connectedGroups];
+    return [
+      ...add(messages.model.groupRecommended, recommended),
+      ...add(messages.model.groupFree, free),
+      ...connectedGroups,
+    ];
   })();
 
   const currentValue = selected?.model
@@ -97,11 +102,11 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
   return (
     <div className="model-selector">
       <label className="model-label" htmlFor="model-select">
-        Modelo
+        {messages.model.label}
       </label>
       {selected?.requiresChoice && (
         <p className="notice" role="alert">
-          {selected.notice ?? "Este modelo ya no está disponible. Elegí otro."}
+          {selected.notice ?? messages.model.unavailableChoice}
         </p>
       )}
       <select
@@ -110,11 +115,11 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
         onChange={(e) => void change(e.target.value)}
         disabled={loading}
       >
-        {loading && <option value="">Cargando…</option>}
-        {!loading && groups.length === 0 && <option value="">Sin modelos</option>}
+        {loading && <option value="">{messages.model.loading}</option>}
+        {!loading && groups.length === 0 && <option value="">{messages.model.none}</option>}
         {!loading && groups.length > 0 && !valueInGroups && (
           <option value="" disabled>
-            Elegí un modelo
+            {messages.model.choose}
           </option>
         )}
         {groups.map((group) => (
@@ -122,7 +127,7 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
             {group.options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.model.name}
-                {option.model.free ? " (Gratis)" : " (De pago)"}
+                {option.model.free ? messages.model.freeSuffix : messages.model.paidSuffix}
               </option>
             ))}
           </optgroup>
@@ -130,12 +135,10 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
       </select>
       {selected?.model && !selected.requiresChoice && (
         <span className={`model-badge ${selected.model.free ? "free" : "paid"}`}>
-          {selected.model.free ? "Gratis" : "De pago"}
+          {selected.model.free ? messages.model.free : messages.model.paid}
         </span>
       )}
-      {models.some((m) => m.free) && (
-        <p className="notice">Los modelos gratis pueden cambiar con el tiempo.</p>
-      )}
+      {models.some((m) => m.free) && <p className="notice">{messages.model.freeModelsNotice}</p>}
       {selected?.notice && !selected.requiresChoice && <p className="notice">{selected.notice}</p>}
       {error && (
         <p className="error" role="alert">

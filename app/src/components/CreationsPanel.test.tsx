@@ -30,7 +30,7 @@ describe("CreationsPanel", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     expect(screen.getByText("actividad")).toBeInTheDocument();
     expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
-    expect(screen.getByText(/Privado/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Privado" })).toBeInTheDocument();
   });
 
   it("opens a creation through the safe command", async () => {
@@ -46,7 +46,7 @@ describe("CreationsPanel", () => {
   it("toggles visibility to share a creation", async () => {
     invokeMock.mockResolvedValueOnce({ ...creations[0], visibility: "public" });
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "Se compartirá" }));
+    await userEvent.click(screen.getByRole("button", { name: "Privado" }));
     expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
       projectId,
       creationId: creations[0].id,

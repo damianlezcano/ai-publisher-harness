@@ -26,7 +26,7 @@ describe("PublishPanel", () => {
         onRefresh={onRefresh}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Publicar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Compartir" }));
     expect(invokeMock).toHaveBeenCalledWith("publish", { projectId });
     await waitFor(() => expect(onRefresh).toHaveBeenCalled());
   });
@@ -39,7 +39,7 @@ describe("PublishPanel", () => {
         onRefresh={() => {}}
       />,
     );
-    expect(screen.getByLabelText("Enlace público")).toHaveTextContent(url);
+    expect(screen.getByLabelText("Enlace para compartir")).toHaveTextContent(url);
     expect(screen.getByRole("button", { name: "Copiar enlace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mostrar QR" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Dejar de compartir" })).toBeInTheDocument();
@@ -57,7 +57,7 @@ describe("PublishPanel", () => {
         onRefresh={() => {}}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Publicar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Compartir" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("No se pudo publicar en Internet."),
     );

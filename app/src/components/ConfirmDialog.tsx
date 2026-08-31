@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { messages } from "../messages";
 
 interface ConfirmDialogProps {
   title: string;
@@ -26,7 +27,7 @@ export default function ConfirmDialog({
         <h2 id="confirm-title">{title}</h2>
         <p>{message}</p>
         <label className="sr-only" htmlFor="confirm-input">
-          Nombre para confirmar
+          {messages.common.confirmNameLabel}
         </label>
         <input
           id="confirm-input"
@@ -36,10 +37,10 @@ export default function ConfirmDialog({
         />
         <div className="dialog-actions">
           <button type="button" className="secondary" onClick={onCancel}>
-            Cancelar
+            {messages.common.cancel}
           </button>
           <button type="button" className="danger" disabled={!ready || busy} onClick={onConfirm}>
-            Eliminar
+            {messages.common.delete}
           </button>
         </div>
       </div>

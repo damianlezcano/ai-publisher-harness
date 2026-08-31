@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { PreviewData } from "../types";
+import { messages } from "../messages";
 
 interface PreviewModalProps {
   title: string;
@@ -64,7 +65,7 @@ export default function PreviewModal({ title, preview, onClose }: PreviewModalPr
         className="preview-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={`Vista previa: ${title}`}
+        aria-label={messages.creation.previewAriaLabel(title)}
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="preview-title">{title}</h2>
@@ -79,7 +80,7 @@ export default function PreviewModal({ title, preview, onClose }: PreviewModalPr
         )}
         <div className="preview-actions">
           <button ref={closeRef} type="button" className="secondary" onClick={onClose}>
-            Cerrar
+            {messages.common.close}
           </button>
         </div>
       </div>

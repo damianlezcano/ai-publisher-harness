@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { OAuthAttempt, OAuthStatusKind, ProviderDetail, ProviderSummary } from "../../types";
+import { messages } from "../../messages";
 
 interface ProviderCardProps {
   provider: ProviderSummary;
@@ -63,7 +64,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
             onChanged();
           } else if (status.status === "failed" || status.status === "expired") {
             setOauth((prev) => (prev ? { ...prev, status: status.status } : prev));
-            setError("No pudimos completar la conexión. Intentalo de nuevo.");
+            setError(messages.provider.oauthFailed);
           }
         } catch {
           // Keep polling; transient failures are expected.
@@ -85,7 +86,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
     try {
       await api.providerConnectKey(provider.id, key);
       setKeyInput("");
-      setNotice("Conectado.");
+      setNotice(messages.provider.connectedNotice);
       await refreshDetail();
       onChanged();
     } catch (err) {
@@ -118,7 +119,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
         oauth.attempt.mode === "code" ? oauth.codeInput : null,
       );
       setOauth(null);
-      setNotice("Cuenta conectada.");
+      setNotice(messages.provider.accountConnected);
       await refreshDetail();
       onChanged();
     } catch (err) {
@@ -147,7 +148,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
     setError(null);
     try {
       await api.providerDisconnect(connection.id);
-      setNotice("Desconectado.");
+      setNotice(messages.provider.disconnected);
       await refreshDetail();
       onChanged();
     } catch (err) {
@@ -179,7 +180,9 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
         <div className="provider-name">
           <strong>{provider.name}</strong>
           {provider.connected && (
-            <span className="provider-state ok">{connection?.label ?? "Conectado"}</span>
+            <span className="provider-state ok">
+              {connection?.label ?? messages.provider.connected}
+            </span>
           )}
         </div>
         <button
@@ -188,7 +191,11 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >
-          {expanded ? "Ocultar" : provider.connected ? "Conectar de nuevo" : "Conectar"}
+          {expanded
+            ? messages.provider.hide
+            : provider.connected
+              ? messages.provider.reconnect
+              : messages.provider.connect}
         </button>
       </div>
 
@@ -217,7 +224,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                   disabled={busy}
                 />
                 <button type="submit" className="primary" disabled={busy || keyInput.trim() === ""}>
-                  Conectar
+                  {messages.provider.connect}
                 </button>
               </form>
             ) : (
@@ -235,7 +242,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                 {oauth && (
                   <div className="oauth-box">
                     <p className="muted">
-                      {oauth.attempt.instructions ?? "Abrí el enlace y aprobá el acceso."}
+                      {oauth.attempt.instructions ?? messages.provider.oauthInstructions}
                     </p>
                     {oauth.status === "pending" && (
                       <>
@@ -249,19 +256,19 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                               .catch((err) => setError(errorMessage(err)))
                           }
                         >
-                          Abrir en el navegador
+                          {messages.provider.oauthOpenBrowser}
                         </button>
                         {oauth.attempt.mode === "code" && (
                           <input
                             type="text"
                             value={oauth.codeInput}
-                            aria-label="Código de verificación"
+                            aria-label={messages.provider.verificationCodeLabel}
                             onChange={(e) =>
                               setOauth((prev) =>
                                 prev ? { ...prev, codeInput: e.target.value } : prev,
                               )
                             }
-                            placeholder="Código de verificación"
+                            placeholder={messages.provider.verificationCodePlaceholder}
                           />
                         )}
                         <div className="row-actions">
@@ -270,19 +277,21 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                             className="primary"
                             onClick={() => void completeOauth()}
                           >
-                            Completar
+                            {messages.provider.complete}
                           </button>
                           <button
                             type="button"
                             className="secondary"
                             onClick={() => void cancelOauth()}
                           >
-                            Cancelar
+                            {messages.common.cancel}
                           </button>
                         </div>
                       </>
                     )}
-                    {oauth.status === "complete" && <p className="status published">Conectado.</p>}
+                    {oauth.status === "complete" && (
+                      <p className="status published">{messages.provider.connectedNotice}</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -296,7 +305,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
               disabled={testing || busy}
               onClick={() => void testConnection()}
             >
-              {testing ? "Probando…" : "Probar conexión"}
+              {testing ? messages.provider.testing : messages.provider.testConnection}
             </button>
             {connection && (
               <button
@@ -305,7 +314,7 @@ export default function ProviderCard({ provider, onChanged }: ProviderCardProps)
                 disabled={busy}
                 onClick={() => void disconnect()}
               >
-                Desconectar
+                {messages.provider.disconnect}
               </button>
             )}
           </div>

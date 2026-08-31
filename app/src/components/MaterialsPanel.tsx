@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, errorMessage } from "../api";
 import { humanDate, humanSize, kindLabel } from "../labels";
 import type { MaterialView } from "../types";
+import { messages } from "../messages";
 
 interface MaterialsPanelProps {
   projectId: string;
@@ -32,10 +33,10 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
           (item) => item.status === "unsupported" || item.status === "failed",
         );
         if (duplicates.length > 0) {
-          setDuplicateNote("Ese archivo ya está en el proyecto.");
+          setDuplicateNote(messages.material.duplicateSingle);
         }
         if (failures.length > 0) {
-          setError("No pudimos agregar algunos archivos.");
+          setError(messages.material.importPartialFailure);
         }
         await onRefresh();
       } catch (err) {
@@ -115,10 +116,14 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
   }
 
   return (
-    <section className="panel" aria-label="Materiales" data-dragging={dragging || undefined}>
-      <h2>Materiales</h2>
+    <section
+      className="panel"
+      aria-label={messages.material.panelLabel}
+      data-dragging={dragging || undefined}
+    >
+      <h2>{messages.material.heading}</h2>
       <button type="button" className="secondary" onClick={() => void pick()} disabled={busy}>
-        Agregar archivo
+        {messages.material.addFile}
       </button>
       {duplicateNote && <p className="notice">{duplicateNote}</p>}
       {error && (
@@ -127,7 +132,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
         </p>
       )}
       {materials.length === 0 ? (
-        <p className="muted">Arrastrá archivos acá o usá “Agregar archivo”.</p>
+        <p className="muted">{messages.material.empty.title}</p>
       ) : (
         <ul className="material-list">
           {materials.map((material) => (
@@ -140,10 +145,12 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
                 </span>
               </div>
               {confirmingId === material.id ? (
-                <div className="remove-confirm" role="group" aria-label="Confirmar eliminación">
-                  <p>
-                    ¿Quitar <strong>{material.displayName}</strong>?
-                  </p>
+                <div
+                  className="remove-confirm"
+                  role="group"
+                  aria-label={messages.material.removeConfirmAriaLabel}
+                >
+                  <p>{messages.material.removeConfirm(material.displayName)}</p>
                   <div className="row-actions wrap">
                     <button
                       type="button"
@@ -151,7 +158,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
                       disabled={busy}
                       onClick={() => setConfirmingId(null)}
                     >
-                      Cancelar
+                      {messages.common.cancel}
                     </button>
                     <button
                       type="button"
@@ -159,7 +166,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
                       disabled={busy}
                       onClick={() => void removeMaterial(material)}
                     >
-                      Quitar
+                      {messages.common.remove}
                     </button>
                   </div>
                 </div>
@@ -171,7 +178,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
                     disabled={busy}
                     onClick={() => void openMaterial(material.id)}
                   >
-                    Abrir
+                    {messages.common.open}
                   </button>
                   <button
                     type="button"
@@ -179,7 +186,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
                     disabled={busy}
                     onClick={() => setConfirmingId(material.id)}
                   >
-                    Quitar
+                    {messages.common.remove}
                   </button>
                 </div>
               )}
