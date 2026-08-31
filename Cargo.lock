@@ -662,12 +662,15 @@ dependencies = [
  "project-core",
  "project-fs",
  "project-opencode",
+ "project-preview",
  "project-provider",
  "project-publication",
  "project-publisher",
  "project-tunnel",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

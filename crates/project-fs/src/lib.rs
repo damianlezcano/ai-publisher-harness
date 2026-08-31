@@ -577,6 +577,30 @@ impl FilesystemProjectContentStore {
     pub fn creation_path(&self, p: &ProjectId, c: &Creation) -> CoreResult<PathBuf> {
         self.validate_read_path(p, &c.relative_path, "outputs", c.id.as_str())
     }
+
+    /// Resolve the validated, canonical `outputs/<id>` directory for a creation.
+    ///
+    /// Used by the preview snapshot step to copy a creation's whole tree (not
+    /// just its entry file). Applies the same symlink/containment discipline as
+    /// `creation_path`; the returned directory is guaranteed to live inside the
+    /// project's canonical `outputs/` root.
+    pub fn creation_dir(&self, p: &ProjectId, c: &Creation) -> CoreResult<PathBuf> {
+        enforce_path_containment(&c.relative_path, "outputs", c.id.as_str())?;
+        let dir = self.project_dir(p).join("outputs").join(c.id.as_str());
+        reject_symlink_path(&dir, &self.base)?;
+        let canon_project = canon_project_dir(&self.base, p)?;
+        let canon_outputs = fs::canonicalize(self.project_dir(p).join("outputs"))
+            .map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        if !canon_outputs.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        let canon_dir =
+            fs::canonicalize(&dir).map_err(|_| ProjectCoreError::NotFound(p.clone()))?;
+        if !canon_dir.starts_with(&canon_outputs) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        Ok(canon_dir)
+    }
 }
 
 impl ProjectContentStore for FilesystemProjectContentStore {

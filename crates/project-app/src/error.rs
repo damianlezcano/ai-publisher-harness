@@ -21,6 +21,12 @@ pub enum ErrorCode {
     AiTaskFailed,
     PublishFailed,
     MaterialFailed,
+    MaterialUnsupported,
+    MaterialTooLarge,
+    MaterialImageInvalid,
+    PreviewUnavailable,
+    PreviewTooLarge,
+    AttachmentInvalid,
     OpenFailed,
     StorageUnavailable,
     ProviderNotFound,
@@ -44,6 +50,12 @@ impl ErrorCode {
             ErrorCode::AiTaskFailed => "ai_task_failed",
             ErrorCode::PublishFailed => "publish_failed",
             ErrorCode::MaterialFailed => "material_failed",
+            ErrorCode::MaterialUnsupported => "material_unsupported",
+            ErrorCode::MaterialTooLarge => "material_too_large",
+            ErrorCode::MaterialImageInvalid => "material_image_invalid",
+            ErrorCode::PreviewUnavailable => "preview_unavailable",
+            ErrorCode::PreviewTooLarge => "preview_too_large",
+            ErrorCode::AttachmentInvalid => "attachment_invalid",
             ErrorCode::OpenFailed => "open_failed",
             ErrorCode::StorageUnavailable => "storage_unavailable",
             ErrorCode::ProviderNotFound => "provider_not_found",
@@ -128,6 +140,9 @@ impl AppError {
             | ProjectCoreError::InvalidId { .. }
             | ProjectCoreError::InvalidPath(_) => {
                 Self::new(ErrorCode::InvalidInput, "Ese archivo no es válido.")
+            }
+            ProjectCoreError::MissingMaterial(_) => {
+                Self::new(ErrorCode::NotFound, "No se encontró ese material.")
             }
             _ => Self::new(ErrorCode::MaterialFailed, "No pudimos agregar ese archivo."),
         }

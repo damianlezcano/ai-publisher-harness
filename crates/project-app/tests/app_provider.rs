@@ -321,7 +321,7 @@ fn run_agent_uses_the_selected_model() {
         .join("index.html");
     std::fs::create_dir_all(file.parent().expect("parent")).expect("dirs");
     std::fs::write(&file, b"<h1>").expect("artifact");
-    state.run_agent(&p.id, "crea algo").expect("run");
+    state.run_agent(&p.id, "crea algo", &[]).expect("run");
     assert_eq!(
         *last.lock().unwrap_or_else(|e| e.into_inner()),
         Some(("opencode".into(), "big-pickle".into()))
@@ -336,7 +336,7 @@ fn run_agent_without_free_model_asks_for_choice() {
         .with_model(model("openai", "gpt-4o", false, true));
     let state = app(tmp.path(), connector, FakeRestarter::new());
     let p = state.create_project("P").expect("create");
-    let err = state.run_agent(&p.id, "hola").expect_err("no model");
+    let err = state.run_agent(&p.id, "hola", &[]).expect_err("no model");
     assert_eq!(err.code, ErrorCode::ModelUnavailable);
 }
 

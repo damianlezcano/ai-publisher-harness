@@ -25,6 +25,7 @@ pub struct MaterialView {
     /// `spreadsheet`, `presentation`, `text`, or `other`.
     pub kind: String,
     pub byte_size: u64,
+    pub created_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +38,60 @@ pub struct CreationView {
     /// `public` ("Se compartirá") or `private` ("Privado").
     pub visibility: String,
     pub byte_size: u64,
+    pub created_at: String,
+    pub revision: u32,
+}
+
+/// Deterministic per-file result for a multi-file import batch (M8 §5).
+///
+/// One entry per input, in input order; partial failure is explicit and a bad
+/// file never aborts the rest of the batch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialImportResult {
+    /// Sanitized base name only; never a full path.
+    pub source_name: String,
+    /// `added`, `duplicate`, `unsupported`, or `failed`.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_id: Option<String>,
+    /// Human message for `unsupported`/`failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialsImportReport {
+    pub items: Vec<MaterialImportResult>,
+}
+
+/// Result of a clipboard image paste. `duplicate` is true when the same bytes
+/// were already a project material (M8 §4): the existing material is returned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialAddImageView {
+    pub material: MaterialView,
+    pub duplicate: bool,
+}
+
+/// In-app preview bytes for images and text/Markdown (M8 §10). Never a path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewData {
+    pub content_type: String,
+    pub data_base64: String,
+}
+
+/// Endpoint for the isolated web preview (M8 §11). `url` is a loopback-only,
+/// token-guarded URL created backend-side; `token` allows teardown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebPreview {
+    pub url: String,
+    pub token: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
