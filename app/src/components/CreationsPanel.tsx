@@ -11,7 +11,7 @@ interface CreationsPanelProps {
 }
 
 function supportsInAppPreview(kind: string): boolean {
-  return kind === "image" || kind === "text";
+  return kind === "image" || kind === "file";
 }
 
 function isWebKind(kind: string): boolean {
@@ -64,7 +64,7 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
     if (!supportsInAppPreview(creation.kind)) return;
     setBusyId(creation.id);
     try {
-      const data = await api.previewData(projectId, creation.kind, creation.id);
+      const data = await api.previewData(projectId, "creation", creation.id);
       setPreview({ creation, data });
     } catch (err) {
       setError(errorMessage(err));

@@ -64,6 +64,32 @@ describe("CreationsPanel", () => {
     });
   });
 
+  it("shows Vista previa for file-kind text creations and calls preview_data with creation", async () => {
+    const fileCreation = {
+      id: "0198e4a6-86d6-7c16-b4c4-3197b355cf11",
+      displayName: "notas.md",
+      kind: "file",
+      visibility: "private" as const,
+      byteSize: 256,
+      createdAt: "2026-08-28T15:00:00Z",
+      revision: 1,
+    };
+    invokeMock.mockResolvedValueOnce({
+      contentType: "text/markdown",
+      dataBase64: btoa("# Hola"),
+    });
+    render(
+      <CreationsPanel projectId={projectId} creations={[fileCreation]} onRefresh={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "Vista previa" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Vista previa" }));
+    expect(invokeMock).toHaveBeenCalledWith("preview_data", {
+      projectId,
+      resourceKind: "creation",
+      resourceId: fileCreation.id,
+    });
+  });
+
   it("shows a human error when open fails", async () => {
     invokeMock.mockRejectedValueOnce({
       code: "open_failed",
