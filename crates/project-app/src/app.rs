@@ -365,6 +365,7 @@ where
                     text: prompt.to_owned(),
                     model,
                 },
+                attachments: Vec::new(),
             })
             .or_else(|error| match error {
                 project_agent::AgentError::Cancelled => Ok(AgentRunResult {
