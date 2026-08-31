@@ -241,6 +241,32 @@ if [[ -d app ]]; then
   fi
 fi
 
+# --- M10: offline sidecar manifest + version alignment -----------------------
+
+if [[ -x scripts/fetch-sidecars ]]; then
+  printf 'verify: ./scripts/fetch-sidecars --check\n'
+  ./scripts/fetch-sidecars --check
+fi
+
+m10_version='0.1.0'
+
+if [[ -f app/src-tauri/tauri.conf.json ]]; then
+  rg -Fq "\"version\": \"${m10_version}\"" app/src-tauri/tauri.conf.json \
+    || fail "tauri.conf.json version must be ${m10_version}"
+fi
+
+if [[ -f crates/project-app/Cargo.toml ]]; then
+  rg -Fq "version = \"${m10_version}\"" crates/project-app/Cargo.toml \
+    || fail "crates/project-app/Cargo.toml version must be ${m10_version}"
+fi
+
+if [[ -f app/src-tauri/Cargo.toml ]]; then
+  rg -Fq "version = \"${m10_version}\"" app/src-tauri/Cargo.toml \
+    || fail "app/src-tauri/Cargo.toml version must be ${m10_version}"
+fi
+
+printf 'verify: M10 version alignment: %s\n' "$m10_version"
+
 # --- M6: Tauri shell check ---------------------------------------------------
 
 if [[ -f app/src-tauri/Cargo.toml ]]; then
@@ -249,15 +275,18 @@ if [[ -f app/src-tauri/Cargo.toml ]]; then
     printf '  install with: sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel\n' >&2
     exit 1
   else
+    # Real externalBin packaging is exercised by scripts/smoke-package, not verify.
     printf 'verify: cargo check --manifest-path app/src-tauri/Cargo.toml\n'
-    cargo check --manifest-path app/src-tauri/Cargo.toml
+    TAURI_CONFIG='{"bundle":{"externalBin":null}}' cargo check --manifest-path app/src-tauri/Cargo.toml
   fi
 fi
 
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f app/src/messages.ts && -f app/src/guidance.ts ]]; then
+if [[ -f config/components.json ]]; then
+  printf 'verify: M10 contract passed\n'
+elif [[ -f app/src/messages.ts && -f app/src/guidance.ts ]]; then
   printf 'verify: M9 contract passed\n'
 elif [[ -f crates/project-preview/tests/preview_security.rs ]]; then
   printf 'verify: M8 contract passed\n'
