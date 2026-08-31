@@ -8,54 +8,53 @@
 
 - Current milestone: M9 — Education UX Polish
 - Current phase: **IMPLEMENTATION_IN_PROGRESS**
-- Current main commit: `f5217f7` (merge T1 + T2)
+- Current main commit: `75f0747` (merge T8)
 - M1-M8: cerrados. M9 design approved. ADR-0012: Accepted.
-- Terminología canónica: **`Compartir`** (`Publicar` NO es acción de UI; IDs
-  internos `Publication*`/`publish`/`unpublish` NO se renombran).
-- M9 boundary: **frontend-only** (`app/src` + docs + tests). Cero cambios de
-  project-core/fs, AgentEngine, PublicationManager; cero Tauri commands/
-  capabilities nuevos. Si la implementación requiere alguno →
-  `ARCHITECTURE_ESCALATION_REQUIRED`.
+- Terminología canónica: **`Compartir`**. IDs internos sin renombrar.
+- M9 boundary: frontend-only. Cero cambios backend/Tauri/capabilities.
 - verify (baseline M8): PASS. Gate M9 se agrega en T10.
 - M10: **no iniciado**
 
 ## Implementación M9 — estado por tarea
 
-| # | Task | Estado | Commit(s) | Autor | Revisor |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Message catalog + terminology refactor | **INTEGRADO** | `9384e1d` → merge `54b8e77` | Composer 2.5 | DeepSeek V4 Flash |
-| 2 | Visual system + responsive tokens | **INTEGRADO** | `09bf097` → merge `f5217f7` | Composer 2.5 | DeepSeek V4 Flash |
-| 3 | Shared UI primitives + a11y + guidance | EN CURSO | — | DeepSeek V4 Flash | Qwen3.8 Max |
-| 4-8 | Projects/Chat/Materials/Creations/Sharing UX | PENDIENTE (depende de 3) | — | per design | per design |
-| 9 | Cross-cutting a11y + keyboard + errors | PENDIENTE | — | DeepSeek V4 Flash | Qwen3.8 Max |
-| 10 | Gate + docs + verify + checkpoint | PENDIENTE | — | lead | Qwen3.8 Max |
+| # | Task | Estado | Autor | Revisor |
+| --- | --- | --- | --- | --- |
+| 1 | Message catalog + terminology | **INTEGRADO** `9384e1d` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
+| 2 | Visual system + responsive | **INTEGRADO** `09bf097` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
+| 3 | Shared primitives + guidance | **INTEGRADO** `fbcd8a7`+`da4842a` | DeepSeek V4 Flash | Qwen3.8 Max (APPROVE tras fix IMPORTANT×2) |
+| 4 | Projects UX | **INTEGRADO** `2b4c5f5` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
+| 5 | Chat/composer UX | **INTEGRADO** `79a7afc` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
+| 6 | Materials UX | **INTEGRADO** `477f0e4` | DeepSeek V4 Flash | Composer 2.5 (APPROVE) |
+| 7 | Creations UX | **INTEGRADO** `b58bf16` | Composer 2.5 | DeepSeek V4 Flash (PASS) |
+| 8 | Sharing UX + QR | **INTEGRADO** `e663891` | DeepSeek V4 Flash | Composer 2.5 (APPROVE; +1 key common.confirm) |
+| 9 | Cross-cutting a11y + keyboard + errors | EN CURSO | DeepSeek V4 Flash | Qwen3.8 Max |
+| 10 | Gate + docs + verify + checkpoint | PENDIENTE | lead | Qwen3.8 Max |
 
-Detalles:
+Frontend tras T1-T8: **134 tests / 19 files, todos verdes** en main.
 
-- **T1** (`9384e1d`): `app/src/messages.ts` (catálogo único, helpers tipados,
-  copy de first-run/empty-states/sharing/QR/provider/progress/error para M9),
-  `messages.test.ts` (terminología canónica + términos prohibidos + helpers),
-  `labels.ts` re-export desde el catálogo, todos los componentes consumen
-  `messages.*`. Test 55/55. No toca styles.css.
-- **T2** (`09bf097`): `styles.css` con tokens de color/spacing 4-32/radius/font,
-  jerarquía tipográfica, botones primary/secondary/danger/ghost, cards, badges
-  (.badge.ok/.neutral/.warning/.danger), dialogs, grid responsive (<960 1col
-  chat→materials→creations→sharing; ≥960 2col chat+materials izq /
-  creations+sharing der; ≥1280 max-width 1200px), min-width 800px. Bloque
-  final `/* -- M9: shared primitives -- */` con classes para T3: `.empty-state`,
-  `.toast-container`/`.toast`, `.error-notice`, `.provider-status-banner`,
-  `.spinner`, `.first-run-guide`.
+## T9 pendiente (trabajo EN CURSO en ../ai-publisher-m9-a11y-pass, branch m9/a11y-pass)
 
-## Decisiones de orquestación
+- Migrar ConfirmDialog y ProviderPanel al Dialog compartido (T8 ya migró QrDialog + stop-confirm).
+- Live region única (ToastRegion + useToast) en App; toast "Tu recurso está listo" (agent.ready) al completar.
+- ProviderStatusBanner en App: query modelGetSelected + providerList; free / requires-choice / needs-reconnect; Conectar IA abre ProviderPanel.
+- ChatPanel: pasar aiUsable + onOpenProvider + onProviderError (needs-reconnect).
+- CreationsPanel: pasar shared={project.publication.state === "published"} desde WorkspaceView.
+- Errores de apertura/carga con guidance (ErrorNotice) sin raw.
+- Tests App/ProviderPanel/ConfirmDialog actualizados.
 
-- Ownership: T1/T2 integrados; `messages.ts` y `styles.css` congelados para
-  T3-T8 (read-only). Necesidad de key/class nueva → reportar al lead.
-  Excepción acordada: T3 puede añadir CSS sólo en un bloque final marcado.
-- Workers vía `scripts/agent-launch` (Herdr) con MODEL_REQUESTED == MODEL_ACTUAL
-  verificado. T1/T2: `composer-2.5` confirmado. T3+: `opencode-go/deepseek-v4-flash`
-  y reviewer `opencode-go/qwen3.8-max`.
-- Panes: T1 `wZ:pE` (m9t1-messages), T2 `wZ:pF` (m9t2-visual) — terminados.
-- Worktrees vivos: `../ai-publisher-m9-messages` (m9/messages), `../ai-publisher-m9-visual-system` (m9/visual-system) — ramas ya fusionadas, pendientes de limpieza en cierre.
+## Modelos usados (MODEL_REQUESTED == MODEL_ACTUAL, verificado)
+
+- T1/T2/T4/T5/T7 + T6rev/T8rev: `composer-2.5` (confirmado por launcher).
+- T3, T6, T8, T9 (autor): `opencode-go/deepseek-v4-flash`.
+- T3rev: `opencode-go/qwen3.8-max`.
+- Nota: en 3 lanzamientos la verificación de UI del launcher timeouteó por wraplínea del estado; se confirmó el modelo por inspección directa del panel. T6 autor falló una vez (illegal instruction opencode) y se relanzó secuencialmente OK.
+
+## Worktrees vivos (limpiar en cierre)
+
+- ../ai-publisher-m9-messages, -visual-system (fusionadas)
+- ../ai-publisher-m9-shared-primitives (+ review) (fusionadas)
+- ../ai-publisher-m9-projects-ux, -chat-ux, -materials-ux (+review), -creations-ux, -sharing-ux (+review) (fusionadas)
+- ../ai-publisher-m9-a11y-pass (EN CURSO)
 
 ## Documentos para la próxima sesión fresca
 
@@ -65,5 +64,4 @@ Detalles:
 
 ## Presupuesto de sesión
 
-- Budget Flash: rotar a ~100K, nunca dejar crecer a 300K+. Próximo hit de
-  checkpoint: tras T3 y tras T4-T8.
+- Rotar a ~100K, nunca a 300K+. Próximo hit: tras T9 y tras T10.
