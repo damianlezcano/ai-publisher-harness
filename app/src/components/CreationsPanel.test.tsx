@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import CreationsPanel from "./CreationsPanel";
+import { messages } from "../messages";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -26,11 +27,78 @@ beforeEach(() => {
 });
 
 describe("CreationsPanel", () => {
-  it("shows human-readable kind and visibility", () => {
+  it("shows human-readable kind and a private visibility badge with switch off", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     expect(screen.getByText("actividad")).toBeInTheDocument();
     expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Privado" })).toBeInTheDocument();
+    const badge = screen
+      .getAllByText(messages.creation.visibilityPrivate)
+      .find((element) => element.classList.contains("badge"));
+    expect(badge).toHaveClass("badge", "neutral");
+    const toggle = screen.getByRole("switch", { name: messages.creation.visibilityPrivate });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("shows a public badge and switch with aria-checked=true", async () => {
+    const publicCreation = { ...creations[0], visibility: "public" as const };
+    invokeMock.mockResolvedValueOnce({ ...publicCreation, visibility: "private" });
+    render(
+      <CreationsPanel projectId={projectId} creations={[publicCreation]} onRefresh={() => {}} />,
+    );
+    const badge = screen
+      .getAllByText(messages.creation.visibilityPublic)
+      .find((element) => element.classList.contains("badge"));
+    expect(badge).toHaveClass("badge", "ok");
+    const toggle = screen.getByRole("switch", { name: messages.creation.visibilityPublic });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(toggle);
+    expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
+      projectId,
+      creationId: publicCreation.id,
+      public: false,
+    });
+  });
+
+  it("toggles visibility to share a private creation", async () => {
+    invokeMock.mockResolvedValueOnce({ ...creations[0], visibility: "public" });
+    render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
+    await userEvent.click(
+      screen.getByRole("switch", { name: messages.creation.visibilityPrivate }),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
+      projectId,
+      creationId: creations[0].id,
+      public: true,
+    });
+  });
+
+  it("shows the shared clarifier when shared is true", () => {
+    render(
+      <CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} shared />,
+    );
+    expect(screen.getByText(messages.creation.sharedClarifier)).toBeInTheDocument();
+  });
+
+  it("hides the shared clarifier when shared is false or omitted", () => {
+    const { rerender } = render(
+      <CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />,
+    );
+    expect(screen.queryByText(messages.creation.sharedClarifier)).not.toBeInTheDocument();
+    rerender(
+      <CreationsPanel
+        projectId={projectId}
+        creations={creations}
+        onRefresh={() => {}}
+        shared={false}
+      />,
+    );
+    expect(screen.queryByText(messages.creation.sharedClarifier)).not.toBeInTheDocument();
+  });
+
+  it("renders the empty state with title and hint", () => {
+    render(<CreationsPanel projectId={projectId} creations={[]} onRefresh={() => {}} />);
+    expect(screen.getByText(messages.creation.empty.title)).toHaveClass("empty-state-title");
+    expect(screen.getByText(messages.creation.empty.hint)).toHaveClass("empty-state-body");
   });
 
   it("opens a creation through the safe command", async () => {
@@ -40,17 +108,6 @@ describe("CreationsPanel", () => {
     expect(invokeMock).toHaveBeenCalledWith("creation_open", {
       projectId,
       creationId: creations[0].id,
-    });
-  });
-
-  it("toggles visibility to share a creation", async () => {
-    invokeMock.mockResolvedValueOnce({ ...creations[0], visibility: "public" });
-    render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "Privado" }));
-    expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
-      projectId,
-      creationId: creations[0].id,
-      public: true,
     });
   });
 
@@ -90,7 +147,7 @@ describe("CreationsPanel", () => {
     });
   });
 
-  it("shows a human error when open fails", async () => {
+  it("shows guided error notice when open fails", async () => {
     invokeMock.mockRejectedValueOnce({
       code: "open_failed",
       message: "No pudimos abrir ese recurso.",
@@ -98,7 +155,7 @@ describe("CreationsPanel", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Abrir en navegador" }));
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("No pudimos abrir ese recurso."),
+      expect(screen.getByRole("alert")).toHaveTextContent(messages.error.openFailed.title),
     );
   });
 });
