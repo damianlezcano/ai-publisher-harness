@@ -88,6 +88,48 @@ describe("ChatPanel", () => {
     });
   });
 
+  it("sends on Ctrl+Enter but not on Enter alone", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    render(<ChatPanel {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Primera línea");
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+    expect(invokeMock).not.toHaveBeenCalled();
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+        projectId,
+        prompt: "Primera línea",
+        attachmentIds: [],
+      }),
+    );
+  });
+
+  it("toggles the material picker, selects a material, and removes it via chip", async () => {
+    render(<ChatPanel {...base} />);
+    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
+    const materialButton = screen.getByRole("button", { name: "diagrama.png" });
+    expect(materialButton).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(materialButton);
+    expect(materialButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
+    expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
+    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
+  });
+
+  it("shows the no-AI empty state, disables the composer, and opens the provider panel", async () => {
+    const onOpenProvider = vi.fn();
+    render(<ChatPanel {...base} aiUsable={false} onOpenProvider={onOpenProvider} />);
+    expect(screen.getByText("No hay una IA conectada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Conectar IA" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Conectar IA" }));
+    expect(onOpenProvider).toHaveBeenCalledOnce();
+  });
+
   it("imports an image on paste and attaches the material", async () => {
     invokeMock.mockResolvedValueOnce({
       material: materials[0],
@@ -122,9 +164,10 @@ describe("ChatPanel", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it("shows a working state with a cancel button", () => {
+  it("shows a working state with progress text, spinner, and cancel button", () => {
     render(<ChatPanel {...base} agentPhase="working" />);
     expect(screen.getByText("Creando tu recurso…")).toBeInTheDocument();
+    expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
   });
 
@@ -140,5 +183,19 @@ describe("ChatPanel", () => {
       <ChatPanel {...base} agentPhase="failed" agentMessage="No se pudo completar la creación." />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("No se pudo completar la creación.");
+  });
+
+  it("renders guided error feedback instead of raw backend messages", async () => {
+    invokeMock.mockRejectedValueOnce({ code: "ai_task_failed", message: "raw backend detail" });
+    render(<ChatPanel {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Creá algo");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("No se pudo completar la creación.");
+      expect(alert).not.toHaveTextContent("raw backend detail");
+      expect(alert).not.toHaveTextContent("ai_task_failed");
+    });
   });
 });

@@ -1,7 +1,10 @@
-import { useState } from "react";
-import { api, errorMessage } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../api";
+import type { GuidanceActionKind } from "../guidance";
 import type { AgentPhase, MaterialView } from "../types";
 import { messages } from "../messages";
+import EmptyState from "./ui/EmptyState";
+import ErrorNotice from "./ui/ErrorNotice";
 
 interface ChatPanelProps {
   projectId: string;
@@ -9,12 +12,21 @@ interface ChatPanelProps {
   agentPhase: AgentPhase;
   agentMessage: string | null;
   onRefresh: () => void | Promise<void>;
+  aiUsable?: boolean;
+  onOpenProvider?: () => void;
 }
 
 interface Turn {
   role: "user";
   text: string;
 }
+
+interface SendAttempt {
+  text: string;
+  attachmentIds: string[];
+}
+
+const TEXTAREA_MAX_HEIGHT_PX = 150;
 
 function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null {
   for (let i = 0; i < items.length; i++) {
@@ -32,19 +44,44 @@ export default function ChatPanel({
   agentPhase,
   agentMessage,
   onRefresh,
+  aiUsable = true,
+  onOpenProvider,
 }: ChatPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [pasteBusy, setPasteBusy] = useState(false);
+  const [showMaterialPicker, setShowMaterialPicker] = useState(false);
+  const [lastAttempt, setLastAttempt] = useState<SendAttempt | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const working = agentPhase === "working";
+  const composerDisabled = working || pasteBusy || !aiUsable;
 
   const materialById = new Map(materials.map((m) => [m.id, m]));
 
+  function resizeTextarea() {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT_PX);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT_PX ? "auto" : "hidden";
+  }
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [prompt]);
+
   function removeAttachment(materialId: string) {
     setAttachmentIds((prev) => prev.filter((id) => id !== materialId));
+  }
+
+  function toggleMaterial(materialId: string) {
+    setAttachmentIds((prev) =>
+      prev.includes(materialId) ? prev.filter((id) => id !== materialId) : [...prev, materialId],
+    );
   }
 
   async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -71,7 +108,7 @@ export default function ChatPanel({
         prev.includes(result.material.id) ? prev : [...prev, result.material.id],
       );
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
     } finally {
       setPasteBusy(false);
     }
@@ -79,16 +116,36 @@ export default function ChatPanel({
 
   async function send() {
     const text = prompt.trim();
-    if (text === "") return;
+    if (text === "" || composerDisabled) return;
     setError(null);
     const ids = attachmentIds;
+    setLastAttempt({ text, attachmentIds: ids });
     setPrompt("");
     setAttachmentIds([]);
+    setShowMaterialPicker(false);
     setTurns((prev) => [...prev, { role: "user", text }]);
     try {
       await api.agentSend(projectId, text, ids);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
+    }
+  }
+
+  async function retrySend() {
+    if (!lastAttempt) return;
+    setError(null);
+    try {
+      await api.agentSend(projectId, lastAttempt.text, lastAttempt.attachmentIds);
+    } catch (err) {
+      setError(err);
+    }
+  }
+
+  function handleErrorAction(kind: GuidanceActionKind) {
+    if (kind === "retry") {
+      void retrySend();
+    } else if (kind === "connect-ai") {
+      onOpenProvider?.();
     }
   }
 
@@ -98,7 +155,14 @@ export default function ChatPanel({
       await api.agentCancel(projectId);
       onRefresh();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(err);
+    }
+  }
+
+  function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      void send();
     }
   }
 
@@ -115,7 +179,12 @@ export default function ChatPanel({
             {turn.text}
           </p>
         ))}
-        {working && <p className="chat-status">{messages.agent.creating}</p>}
+        {working && (
+          <p className="chat-status">
+            <span className="spinner" aria-hidden="true" />
+            {messages.agent.creating}
+          </p>
+        )}
         {agentPhase === "completed" && agentMessage && (
           <p className="chat-status ok">{agentMessage}</p>
         )}
@@ -126,10 +195,14 @@ export default function ChatPanel({
         )}
       </div>
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
+      {error !== null && <ErrorNotice error={error} onAction={handleErrorAction} />}
+
+      {!aiUsable && (
+        <EmptyState
+          title={messages.assistant.noAi.title}
+          actionLabel={messages.assistant.noAi.action}
+          onAction={onOpenProvider}
+        />
       )}
 
       {attachmentIds.length > 0 && (
@@ -144,7 +217,7 @@ export default function ChatPanel({
                   type="button"
                   className="chip-remove"
                   aria-label={messages.assistant.removeAttachment(name)}
-                  disabled={working || pasteBusy}
+                  disabled={composerDisabled}
                   onClick={() => removeAttachment(id)}
                 >
                   ×
@@ -166,23 +239,62 @@ export default function ChatPanel({
           {messages.assistant.promptLabel}
         </label>
         <textarea
+          ref={textareaRef}
           id="prompt-input"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={handlePromptKeyDown}
           onPaste={(e) => void handlePaste(e)}
           placeholder={messages.assistant.placeholder}
-          rows={3}
-          disabled={working || pasteBusy}
+          rows={1}
+          disabled={composerDisabled}
         />
+        {showMaterialPicker && aiUsable && (
+          <ul className="chip-list">
+            {materials.map((material) => {
+              const selected = attachmentIds.includes(material.id);
+              return (
+                <li key={material.id}>
+                  <button
+                    type="button"
+                    className="chip"
+                    aria-pressed={selected}
+                    disabled={composerDisabled}
+                    onClick={() => toggleMaterial(material.id)}
+                  >
+                    {material.displayName}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
         <div className="chat-actions">
           {working ? (
             <button type="button" className="danger" onClick={() => void cancel()}>
               {messages.common.cancel}
             </button>
           ) : (
-            <button type="submit" className="primary" disabled={prompt.trim() === "" || pasteBusy}>
-              {messages.common.send}
-            </button>
+            <>
+              {aiUsable && (
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-expanded={showMaterialPicker}
+                  disabled={composerDisabled}
+                  onClick={() => setShowMaterialPicker((open) => !open)}
+                >
+                  {messages.assistant.attachMaterial}
+                </button>
+              )}
+              <button
+                type="submit"
+                className="primary"
+                disabled={prompt.trim() === "" || composerDisabled}
+              >
+                {messages.common.send}
+              </button>
+            </>
           )}
         </div>
       </form>
