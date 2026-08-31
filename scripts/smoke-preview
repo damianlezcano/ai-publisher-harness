@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Manual, optional Fedora smoke test for M8 preview/attachment UX.
+#
+# NOT part of `scripts/verify`. Requires a graphical desktop with WebKitGTK 4.1,
+# the dev app buildable, and a usable model in the isolated catalog. It validates
+# the build and prints the manual M8 demo steps (clipboard paste, mixed batch
+# drop, prompt attachments, image/text preview, isolated web preview with no IPC).
+#
+# Exit codes: 0 = PASS, 3 = SKIP (no graphical/webkit environment), 1 = FAIL.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+  echo "smoke-preview: SKIP: webkit2gtk4.1-devel not installed" >&2
+  echo "  sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel" >&2
+  exit 3
+fi
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  echo "smoke-preview: SKIP: no graphical session (DISPLAY/WAYLAND_DISPLAY unset)" >&2
+  exit 3
+fi
+
+echo "smoke-preview: pnpm --dir app run build"
+pnpm --dir app run build
+
+echo "smoke-preview: cargo build --manifest-path app/src-tauri/Cargo.toml"
+cargo build --manifest-path app/src-tauri/Cargo.toml
+
+cat <<'EOF'
+smoke-preview: build OK. Manual M8 demo (Fedora, graphical session):
+  1. Launch:  cd app && pnpm run dev   (Vite dev server on :1420)
+              # in another terminal:
+              cargo tauri dev --manifest-path app/src-tauri/Cargo.toml
+  2. Create "Fotosíntesis"
+  3. Clipboard image paste: copy a screenshot, focus the prompt box, Ctrl+V.
+     A "Captura" material card appears; paste again -> "ya está en el proyecto".
+  4. Mixed batch drop: drop a PDF + a PNG + a directory/folder onto the project.
+     The first two become materials; the folder is reported "No pudimos agregar
+     ese archivo."; nothing else is affected; originals untouched.
+  5. Attach materials to a prompt (chips), send, and confirm the AI context.
+  6. Preview tiers:
+     - image creation  -> "Vista previa" (in-app) + "Abrir" (system).
+     - text/Markdown   -> "Vista previa" (in-app, escaped).
+     - web creation    -> "Vista previa" opens the isolated window; the preview
+       window has NO working IPC: open its devtools/console and attempt an
+       `invoke`/`window.__TAURI__` call — it must fail. Close it; the main app
+       announces "Abriendo vista previa…".
+     - PDF/DOCX        -> "Abrir" opens the system handler.
+  7. Remove a material (confirm with its name); the source file on disk stays.
+  8. Nothing previewed or attached is ever published unless you explicitly
+     publish (M3/M4 publication semantics unchanged).
+EOF
+
+echo "smoke-preview: PASS (build validation; manual GUI demo steps above)"
