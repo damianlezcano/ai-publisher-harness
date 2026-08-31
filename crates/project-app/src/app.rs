@@ -40,6 +40,7 @@ use sha2::{Digest, Sha256};
 
 use crate::dtos::*;
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::sidecar::SidecarLocation;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -51,6 +52,26 @@ pub struct AppConfig {
     pub opencode_config_dir: PathBuf,
     pub opencode_port: u16,
     pub cloudflared_binary: Option<PathBuf>,
+}
+
+/// Maps resolved sidecar locations onto the [`AppConfig`] binary fields (M10
+/// T2). `Bundled(p)` yields the absolute bundled path; `OnPath(name)` yields a
+/// bare name for `opencode` (the dev/`PATH` fallback) and `None` for
+/// `cloudflared` (preserving the existing lazy `BinaryNotFound` failure at
+/// first use). Pure; the Tauri shell supplies the resolutions.
+pub fn apply_sidecar_locations(
+    opencode: SidecarLocation,
+    cloudflared: SidecarLocation,
+) -> (PathBuf, Option<PathBuf>) {
+    let opencode_binary = match opencode {
+        SidecarLocation::Bundled(path) => path,
+        SidecarLocation::OnPath(name) => PathBuf::from(name),
+    };
+    let cloudflared_binary = match cloudflared {
+        SidecarLocation::Bundled(path) => Some(path),
+        SidecarLocation::OnPath(_) => None,
+    };
+    (opencode_binary, cloudflared_binary)
 }
 
 /// Shuts down the shared `opencode serve` backend after a credential mutation.

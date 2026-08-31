@@ -1,5 +1,6 @@
 mod commands;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use project_app::{AppConfig, AppState};
@@ -61,12 +62,21 @@ pub fn run() {
 fn build_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
+    let install_dir = std::env::current_exe()?
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    let (opencode_binary, cloudflared_binary) = project_app::app::apply_sidecar_locations(
+        project_app::sidecar::resolve_sidecar_from_env("opencode", &install_dir, &path_env),
+        project_app::sidecar::resolve_sidecar_from_env("cloudflared", &install_dir, &path_env),
+    );
     let config = AppConfig {
         data_dir,
-        opencode_binary: std::path::PathBuf::from("opencode"),
+        opencode_binary,
         opencode_config_dir: app.path().app_data_dir()?.join("opencode"),
         opencode_port: ephemeral_port(),
-        cloudflared_binary: None,
+        cloudflared_binary,
     };
     Ok(AppState::new(config)?)
 }
