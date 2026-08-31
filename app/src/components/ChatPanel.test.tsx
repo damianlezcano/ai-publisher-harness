@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel from "./ChatPanel";
@@ -8,28 +8,118 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const invokeMock = vi.mocked(invoke);
 
+const projectId = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
+
+const materials = [
+  {
+    id: "m1",
+    displayName: "diagrama.png",
+    originalFileName: "diagrama.png",
+    kind: "image",
+    byteSize: 1024,
+    createdAt: "2026-08-28T15:00:00Z",
+  },
+];
+
 const base = {
-  projectId: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22",
+  projectId,
+  materials,
   agentPhase: "idle" as const,
   agentMessage: null as string | null,
-  onRefresh: () => {},
+  onRefresh: vi.fn(),
 };
+
+function pasteImage(textarea: HTMLTextAreaElement) {
+  const file = new File([new Uint8Array([1, 2, 3])], "foto.png", { type: "image/png" });
+  fireEvent.paste(textarea, {
+    clipboardData: {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => file,
+        },
+      ],
+    },
+  });
+}
 
 beforeEach(() => {
   invokeMock.mockReset();
+  base.onRefresh.mockReset();
 });
 
 describe("ChatPanel", () => {
-  it("sends a prompt and clears the input", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
+  it("sends a prompt with attachment ids and clears the input", async () => {
+    invokeMock
+      .mockResolvedValueOnce({ material: materials[0], duplicate: false })
+      .mockResolvedValueOnce(undefined);
     render(<ChatPanel {...base} />);
-    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Creá una actividad");
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    pasteImage(textarea);
+    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
+    await userEvent.type(textarea, "Creá una actividad");
     await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
-    expect(invokeMock).toHaveBeenCalledWith("agent_send", {
-      projectId: base.projectId,
+    expect(invokeMock).toHaveBeenLastCalledWith("agent_send", {
+      projectId,
       prompt: "Creá una actividad",
+      attachmentIds: ["m1"],
     });
     expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
+    expect(screen.queryByText("diagrama.png")).not.toBeInTheDocument();
+  });
+
+  it("renders attachment chips, removes one, and clears on send", async () => {
+    invokeMock
+      .mockResolvedValueOnce({ material: materials[0], duplicate: false })
+      .mockResolvedValueOnce(undefined);
+    render(<ChatPanel {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    pasteImage(textarea);
+    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
+    expect(screen.queryByText("diagrama.png")).not.toBeInTheDocument();
+    await userEvent.type(textarea, "Hola");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(invokeMock).toHaveBeenLastCalledWith("agent_send", {
+      projectId,
+      prompt: "Hola",
+      attachmentIds: [],
+    });
+  });
+
+  it("imports an image on paste and attaches the material", async () => {
+    invokeMock.mockResolvedValueOnce({
+      material: materials[0],
+      duplicate: false,
+    });
+    render(<ChatPanel {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    pasteImage(textarea);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "material_add_image",
+        expect.objectContaining({
+          projectId,
+          fileName: "foto.png",
+          contentType: "image/png",
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("diagrama.png")).toBeInTheDocument());
+    expect(base.onRefresh).toHaveBeenCalled();
+  });
+
+  it("allows text-only paste without importing an image", async () => {
+    render(<ChatPanel {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
+        getData: () => "texto plano",
+      },
+    });
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("shows a working state with a cancel button", () => {
@@ -42,7 +132,7 @@ describe("ChatPanel", () => {
     invokeMock.mockResolvedValueOnce(undefined);
     render(<ChatPanel {...base} agentPhase="working" />);
     await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
-    expect(invokeMock).toHaveBeenCalledWith("agent_cancel", { projectId: base.projectId });
+    expect(invokeMock).toHaveBeenCalledWith("agent_cancel", { projectId });
   });
 
   it("shows a failure message", () => {

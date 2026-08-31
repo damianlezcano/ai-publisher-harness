@@ -31,6 +31,7 @@ export default function WorkspaceView({
       <div className="workspace-grid">
         <ChatPanel
           projectId={project.id}
+          materials={project.materials}
           agentPhase={agentPhase}
           agentMessage={agentMessage}
           onRefresh={onRefresh}

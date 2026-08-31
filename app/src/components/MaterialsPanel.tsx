@@ -1,28 +1,42 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api, errorMessage } from "../api";
-import { humanSize, kindLabel } from "../labels";
+import { humanDate, humanSize, kindLabel } from "../labels";
 import type { MaterialView } from "../types";
 
 interface MaterialsPanelProps {
   projectId: string;
   materials: MaterialView[];
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
 }
 
 export default function MaterialsPanel({ projectId, materials, onRefresh }: MaterialsPanelProps) {
   const [error, setError] = useState<string | null>(null);
+  const [duplicateNote, setDuplicateNote] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
-  const addRef = useRef<(path: string) => Promise<void>>(async () => {});
+  const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
   useEffect(() => {
-    addRef.current = async (path: string) => {
+    importRef.current = async (paths: string[]) => {
+      if (paths.length === 0) return;
       setBusy(true);
       setError(null);
+      setDuplicateNote(null);
       try {
-        await api.materialAddFromPath(projectId, path);
+        const report = await api.materialsAddFromPaths(projectId, paths);
+        const duplicates = report.items.filter((item) => item.status === "duplicate");
+        const failures = report.items.filter(
+          (item) => item.status === "unsupported" || item.status === "failed",
+        );
+        if (duplicates.length > 0) {
+          setDuplicateNote("Ese archivo ya está en el proyecto.");
+        }
+        if (failures.length > 0) {
+          setError("No pudimos agregar algunos archivos.");
+        }
         await onRefresh();
       } catch (err) {
         setError(errorMessage(err));
@@ -42,9 +56,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
           setDragging(true);
         } else if (event.payload.type === "drop") {
           setDragging(false);
-          for (const path of event.payload.paths) {
-            void addRef.current(path);
-          }
+          void importRef.current(event.payload.paths);
         } else if (event.payload.type === "leave") {
           setDragging(false);
         }
@@ -60,11 +72,45 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
 
   async function pick() {
     setError(null);
+    setDuplicateNote(null);
     try {
       const path = await api.pickFile();
-      if (path) await addRef.current(path);
+      if (path) {
+        setBusy(true);
+        try {
+          await api.materialAddFromPath(projectId, path);
+          await onRefresh();
+        } catch (err) {
+          setError(errorMessage(err));
+        } finally {
+          setBusy(false);
+        }
+      }
     } catch (err) {
       setError(errorMessage(err));
+    }
+  }
+
+  async function openMaterial(materialId: string) {
+    setError(null);
+    try {
+      await api.materialOpen(projectId, materialId);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function removeMaterial(material: MaterialView) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.materialRemove(projectId, material.id);
+      setConfirmingId(null);
+      await onRefresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -74,6 +120,7 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
       <button type="button" className="secondary" onClick={() => void pick()} disabled={busy}>
         Agregar archivo
       </button>
+      {duplicateNote && <p className="notice">{duplicateNote}</p>}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -82,13 +129,60 @@ export default function MaterialsPanel({ projectId, materials, onRefresh }: Mate
       {materials.length === 0 ? (
         <p className="muted">Arrastrá archivos acá o usá “Agregar archivo”.</p>
       ) : (
-        <ul className="item-list">
+        <ul className="material-list">
           {materials.map((material) => (
-            <li key={material.id} className="item-row">
-              <span className="item-name">{material.displayName}</span>
-              <span className="item-meta">
-                {kindLabel(material.kind)} · {humanSize(material.byteSize)}
-              </span>
+            <li key={material.id} className="material-card">
+              <div className="material-card-body">
+                <span className="item-name">{material.displayName}</span>
+                <span className="item-meta">
+                  {kindLabel(material.kind)} · {humanSize(material.byteSize)} ·{" "}
+                  {humanDate(material.createdAt)}
+                </span>
+              </div>
+              {confirmingId === material.id ? (
+                <div className="remove-confirm" role="group" aria-label="Confirmar eliminación">
+                  <p>
+                    ¿Quitar <strong>{material.displayName}</strong>?
+                  </p>
+                  <div className="row-actions wrap">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => setConfirmingId(null)}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={busy}
+                      onClick={() => void removeMaterial(material)}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="row-actions wrap">
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void openMaterial(material.id)}
+                  >
+                    Abrir
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => setConfirmingId(material.id)}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
