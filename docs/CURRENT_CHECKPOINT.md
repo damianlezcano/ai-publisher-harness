@@ -9,6 +9,8 @@
 - Current milestone: **M10 — Packaging** (**CLOSED**)
 - Current phase: **CLOSED_READY_FOR_M11**
 - Current main commit: (see `git log -1` after this checkpoint commit)
+- **UX_RELEASE_GATE_01: APROBADO** (2026-08-31) — ver `docs/UX_RELEASE_GATE_01.md` §11. La UI
+  2×2 dashboard observada **no es** la UI objetivo; dirección aprobada: chat-first simple.
 - M1-M10: cerrados. M10 implementado, revisado e integrado (T1-T5).
 - ADR-0013 (sidecar resolution, pinning, checksum verification): **Accepted** e
   implementado.
@@ -56,3 +58,23 @@
 
 - M11 (Component Updates + native Windows CI): **no iniciado**. NO se ha
   empezado work de M11.
+- **Próximo paso (sin código en esta sesión):** delta de arquitectura acotado para la UX
+  chat-first (persistencia D1 + vocabulario D2), aprobado por el owner antes de planificar el
+  milestone de UX. B1/B2 son blockers de release.
+
+## Decisión UX — UX_RELEASE_GATE_01 (2026-08-31)
+
+Gate de validación visual de la UI actual contra la dirección de producto aprobada (chat-first).
+**APROBADO** por el owner. Evidencia: `docs/ux-release-gate-01/`.
+
+- **B1** (dashboard-first, no chat-first) y **B2** (superficie técnica modelo/proveedor) deben
+  corregirse **antes del release**.
+- **D1** — Persistencia de conversación **requerida** (sobrevive al restart). **No** se eligió ni
+  implementó mecanismo (localStorage u otro) en esta sesión; requiere una **decisión de
+  arquitectura acotada** antes de implementar.
+- **D2** — **"Conversación"** como concepto contenedor user-facing; el modelo de dominio interno
+  `Project` / `ProjectId` permanece sin cambios salvo que la revisión de arquitectura pruebe un
+  cambio aditivo mínimo.
+- **D3** — **"Compartir"** como acción en el área inferior de la conversación; **sin** panel
+  permanente `Compartir` en el dashboard.
+- **M11** — **no iniciado**; no se implementó ni diseñó la rediseño en esta sesión.

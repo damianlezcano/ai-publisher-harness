@@ -11,7 +11,7 @@ executable reflection (ADR-0012). Spanish (`es-AR`).
 | Concept | Canonical label(s) |
 | --- | --- |
 | App | EducAI |
-| Project | Proyecto / Mis proyectos / Nuevo proyecto |
+| Conversation (container) | Conversación / Conversaciones / Nueva conversación |
 | Material | Material / Materiales |
 | Creation | Creación / Creaciones |
 | AI assistant | Asistente (panel) |
@@ -31,6 +31,11 @@ executable reflection (ADR-0012). Spanish (`es-AR`).
 `Compartir` is the canonical user-facing share verb; `Publicar` is **not** used
 as a primary UI action. Internal domain identifiers (`Publication*`, `publish`,
 `unpublish`) are not renamed.
+
+> **D2 (UX_RELEASE_GATE_01, 2026-08-31):** "Conversación" is the primary user-facing container
+> concept. The internal domain object remains `Project` / `ProjectId`. The shipped copy catalog
+> (`app/src/messages.ts`) still renders "proyecto" and migrates to this vocabulary in the approved
+> chat-first UX milestone; ADR-0012 catalog tests must stay green.
 
 Avoid exposing in default UX:
 - OpenCode
@@ -75,7 +80,7 @@ No compartido ──[Compartir]──▶ Compartiendo… ──▶ Compartido
 ## Empty states and first-run
 
 Every empty state tells the user the next useful action. First-run is a short
-dismissible guide (crear proyecto → agregar material → pedir a la IA → mirar la
+dismissible guide (crear conversación → agregar material → pedir a la IA → mirar la
 creación → compartir), not a tutorial.
 
 ## Error recovery
@@ -88,15 +93,26 @@ stack trace.
 
 - `Ctrl/Cmd+Enter` — send prompt.
 - `Esc` — close the focused dialog or cancel the create/rename form.
-- `Ctrl/Cmd+N` — new project.
+- `Ctrl/Cmd+N` — new conversation.
 
-## Main screens
-### Projects
-List local projects and clearly show shared vs not-shared state. First-run guide
-on empty.
+## Main screens (approved chat-first direction, UX_RELEASE_GATE_01)
 
-### Project
-Asistente + Materiales + Creaciones + Vista previa + Compartir/Dejar de compartir.
+The 2×2 dashboard layout is **not** the target UI. Approved layout: persistent left conversation
+list / center conversation / fixed bottom bar with prompt + model + a single Compartir action /
+separate Settings with a close **X** / resources in conversation context. See §8 of
+`docs/UX_RELEASE_GATE_01.md`.
+
+### Conversations
+Persistent left list, newest first, with shared vs not-shared state and inline rename. First-run
+guide on empty.
+
+### Conversation
+Chat log with creations inline and materials in context; the bottom bar holds the prompt, model
+selector and Compartir/Dejar de compartir.
+
+### Settings
+Separate surface with a close **X**, returning to the same conversation; provider connection
+lives here.
 
 ### Shared state
 Show the share link, copy action, QR, and Dejar de compartir, with the
