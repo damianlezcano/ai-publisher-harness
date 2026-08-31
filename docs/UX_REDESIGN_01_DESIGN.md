@@ -1,6 +1,7 @@
 # UX_REDESIGN_01 — Simple chat-first experience (bounded architecture delta)
 
-Status: **APPROVED by the owner (2026-08-31). No code implemented in this session.**
+Status: **IMPLEMENTED — UX_REDESIGN_01 closed 2026-08-31 (T1–T7, Playwright gate passed).**
+Worker-model allocation in sections 24/25 was superseded by the owner's 2026-08-31 directive persisted in `docs/AGENT_POLICY.md`.
 Date: 2026-08-31
 Scope: Architecture-only. Enables the approved chat-first UX (`UX_RELEASE_GATE_01`,
 `docs/UX.md` §"Main screens") with the **smallest additive delta** over M1–M10.
