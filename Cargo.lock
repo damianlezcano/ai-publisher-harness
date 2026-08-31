@@ -703,6 +703,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-preview"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "getrandom",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "project-process"
 version = "0.0.0"
 dependencies = [

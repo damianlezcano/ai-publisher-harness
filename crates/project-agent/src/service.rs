@@ -12,6 +12,13 @@ use crate::registrar::CreationRegistrar;
 pub struct AgentRequest {
     pub project_id: String,
     pub prompt: AgentPrompt,
+    pub attachments: Vec<AgentAttachment>,
+}
+
+pub struct AgentAttachment {
+    pub display_name: String,
+    pub kind: String,
+    pub bytes: Vec<u8>,
 }
 
 pub struct AgentRunResult {
@@ -56,6 +63,8 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         fs::create_dir_all(&workspace_dir)
             .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
 
+        let prompt = provision_attachments(&workspace_dir, &request)?;
+
         let session = self.engine.open_session(&AgentProject {
             project_id: request.project_id.clone(),
             directory: workspace_dir.clone(),
@@ -74,13 +83,16 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             );
         }
 
-        let task = self.engine.send(&session, &request.prompt)?;
+        let task = self.engine.send(&session, &prompt)?;
         if task.status != crate::model::TaskStatus::Completed {
             return Err(AgentError::TaskFailed("task did not complete".into()));
         }
 
         let mut registered = Vec::new();
         for artifact in &task.artifacts {
+            if is_materials_artifact_path(&artifact.path) {
+                continue;
+            }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
             let id = self
                 .registrar
@@ -129,6 +141,83 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
+}
+
+fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentResult<AgentPrompt> {
+    let mut lines = Vec::new();
+    if !request.attachments.is_empty() {
+        for attachment in &request.attachments {
+            if !is_safe_display_name(&attachment.display_name) {
+                return Err(AgentError::RegistrationFailed(
+                    "unsafe attachment name".into(),
+                ));
+            }
+            if attachment.bytes.is_empty() {
+                return Err(AgentError::RegistrationFailed("empty attachment".into()));
+            }
+        }
+        let materials_dir = workspace_dir.join("materials");
+        fs::create_dir_all(&materials_dir)
+            .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
+        for (index, attachment) in request.attachments.iter().enumerate() {
+            let safe_name = project_core::safe_file_name(&attachment.display_name);
+            let file_name = format!("{}-{safe_name}", index + 1);
+            fs::write(materials_dir.join(&file_name), &attachment.bytes)
+                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
+            lines.push(format!("- {safe_name} ({})", kind_label(&attachment.kind)));
+        }
+    }
+    Ok(AgentPrompt {
+        text: augment_prompt(&request.prompt.text, &lines),
+        model: request.prompt.model.clone(),
+    })
+}
+
+fn augment_prompt(original: &str, lines: &[String]) -> String {
+    if lines.is_empty() {
+        return original.to_owned();
+    }
+    let mut block = String::from(
+        "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
+    );
+    block.push_str(&lines.join("\n"));
+    block.push('\n');
+    block.push('\n');
+    block.push_str(original);
+    block
+}
+
+fn kind_label(kind: &str) -> &'static str {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "pdf" => "pdf",
+        "image" => "image",
+        "document" => "document",
+        "spreadsheet" => "spreadsheet",
+        "presentation" => "presentation",
+        "text" => "text",
+        _ => "other",
+    }
+}
+
+fn is_safe_display_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return false;
+    }
+    if Path::new(trimmed).is_absolute() {
+        return false;
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return false;
+    }
+    trimmed != "." && trimmed != ".."
+}
+
+fn is_materials_artifact_path(artifact_path: &str) -> bool {
+    let normalized = artifact_path.replace('\\', "/");
+    let relative = normalized.trim_start_matches('/');
+    let relative = relative.strip_prefix("workspace/").unwrap_or(relative);
+    relative == "materials" || relative.starts_with("materials/")
 }
 
 /// Read `workspace_dir/<path>` after stripping a leading `workspace/` prefix.
