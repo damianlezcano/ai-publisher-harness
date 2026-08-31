@@ -1,9 +1,10 @@
 # M10 Packaging — Design
 
-Status: **Approved** (architecture accepted by the human owner; no
-implementation yet). ADR-0013 is Accepted. This document is the durable design
-handoff for the M10 implementation session (a fresh
-`opencode-go/deepseek-v4-flash` orchestrator).
+Status: **Implemented and closed** (M10 T1-T5 integrated on `main` and gated
+green: `verify: M10 contract passed`; see `docs/CURRENT_CHECKPOINT.md`). The
+design was approved by the human owner before implementation; ADR-0013 is
+Accepted and governs T1-T5. Artifacts (AppImage/RPM) are built only via the
+manual `scripts/smoke-package` (environment-gated).
 
 ## 1. Exact M10 objective (from repository)
 
