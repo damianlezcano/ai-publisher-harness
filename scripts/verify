@@ -267,6 +267,16 @@ fi
 
 printf 'verify: M10 version alignment: %s\n' "$m10_version"
 
+# --- UX_REDESIGN_01: closure gate ---------------------------------------------
+
+require_file docs/ux-redesign-01/RESULTS.md
+require_file docs/ux-redesign-01/harness/run.sh
+require_heading docs/ux-redesign-01/RESULTS.md '## Per-flow assertion matrix'
+require_file docs/decisions/0014-durable-conversation-history-in-project-aggregate.md
+require_file docs/decisions/0015-deterministic-free-model-discovery.md
+
+printf 'verify: UX_REDESIGN_01 contract passed\n'
+
 # --- M6: Tauri shell check ---------------------------------------------------
 
 if [[ -f app/src-tauri/Cargo.toml ]]; then
