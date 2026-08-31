@@ -9,7 +9,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/agent-launch --role ROLE --provider cursor|opencode [options]
 
-Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, high-architecture
+Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, review, high-review, high-architecture
+  review/high-review use Qwen3.8 Flash / Max respectively; high-review is ESCALATION-ONLY.
 Options:
   --worktree PATH  Required for --launch.
   --pane ID        Required for --launch; Herdr pane ID.
@@ -53,6 +54,8 @@ case "$role/$provider" in
   medium-high-fallback/opencode) model=$MEDIUM_HIGH_FALLBACK_OPENCODE_MODEL ;;
   high-coding/cursor) model=$HIGH_CODING_CURSOR_MODEL ;;
   high-coding/opencode) model=$HIGH_CODING_OPENCODE_MODEL ;;
+  review/opencode) model=$REVIEW_OPENCODE_MODEL ;;
+  high-review/opencode) model=$HIGH_REVIEW_OPENCODE_MODEL ;;
   high-architecture/opencode) model=$HIGH_ARCHITECTURE_OPENCODE_MODEL ;;
   *) echo "agent-launch: unsupported role/provider: $role/$provider" >&2; exit 2 ;;
 esac
@@ -67,6 +70,7 @@ case "$model" in
   cursor-grok-4.6-medium) model_display='Cursor Grok 4.6 Medium' ;;
   opencode-go/mimo-v2.5) model_display='MiMo V2.5 OpenCode Go' ;;
   opencode-go/deepseek-v4-flash) model_display='DeepSeek V4 Flash OpenCode Go' ;;
+  opencode-go/qwen3.8-flash) model_display='Qwen3.8 Flash OpenCode Go' ;;
   opencode-go/qwen3.8-max) model_display='Qwen3.8 Max OpenCode Go' ;;
   opencode-go/kimi-k2.7-code) model_display='Kimi K2.7 Code OpenCode Go' ;;
   opencode-go/deepseek-v4-pro) model_display='DeepSeek V4 Pro (New) OpenCode Go' ;;

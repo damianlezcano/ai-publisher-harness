@@ -7,40 +7,76 @@ historical failure example; it is not a current dependency.
 
 ## Principle
 
-Use the cheapest reliable model that can complete the task. Codex Tierra is a
-scarce orchestration resource and is not the default builder.
+Use the cheapest reliable model that can satisfy the task. Prefer
+specialization: Kimi K2.7 Code writes code, Qwen3.8 Flash reviews, DeepSeek V4
+Flash orchestrates, and Composer/MiMo handle simple visual/mechanical work. A
+MAX / PRO model is never used when a FLASH / CODE / LOW model can satisfy the
+task. Codex Tierra is a scarce orchestration resource and is not the default
+builder.
 
-## Agent pools and roles
+## Model matrix (owner directive 2026-08-31, supersedes earlier matrices)
 
-| Pool/model | Level | Preferred use |
+| Role | Model (CLI id) | Notes |
 | --- | --- | --- |
-| DeepSeek V4 Pro (fresh escalation) | HIGH_ARCHITECTURE | Genuine architecture/security decisions in a fresh session; session closed after the design is persisted |
-| Codex Tierra | HIGH_ARCHITECTURE fallback | Fallback for architecture escalation and final gate when V4 Pro is unavailable |
-| Cursor Composer 2.5 | LOW; MEDIUM fallback | Primary LOW worker and MEDIUM fallback for specified code, structs, adapters, tests, refactors, docs, boilerplate |
-| Cursor Grok 4.6 standard | MEDIUM_HIGH/HIGH_CODING | Complex coding, concurrency, difficult bugs, cross-module integration, security fixes; do not use Fast by default |
-| OpenCode Go MiMo-V2.5 | LOW | Simple tests, boilerplate, docs, repetitive corrections |
-| OpenCode Go DeepSeek V4 Flash | MEDIUM | Default OpenCode Go implementation/review worker for Rust, tests, filesystem, adapters, and moderate security |
-| OpenCode Go Qwen3.8 Max | MEDIUM fallback | Use after DeepSeek failure/degradation or for a deliberate second family opinion |
-| OpenCode Go Kimi K2.7 Code | HIGH_CODING fallback | Difficult code after medium workers fail, or when Grok is unavailable/inappropriate |
-| Antigravity CLI / AGY | Optional | Use only when available and clearly useful; never required by a workflow because of quota limits |
+| Orchestrator / integration / checkpoints | OpenCode Go DeepSeek V4 Flash (`opencode-go/deepseek-v4-flash`) | Decomposes, coordinates, handoffs, integrates, manages checkpoints. Does NOT implement normal coding tasks itself. |
+| Coding — normal / complex | OpenCode Go Kimi K2.7 Code (`opencode-go/kimi-k2.7-code`) | Primary coding worker. Used aggressively for Rust, TypeScript/React, state management, migrations, adapters, significant tests, refactors. |
+| Independent review — default | OpenCode Go Qwen3.8 Flash (`opencode-go/qwen3.8-flash`) | Code/contract/regression/security/implementation/frontend review. The default Qwen reviewer. |
+| Independent review — escalation | OpenCode Go Qwen3.8 Max (`opencode-go/qwen3.8-max`) | ESCALATION-ONLY. Launched only when the orchestrator records an explicit `ESCALATION_REASON` (security-critical cross-module finding, subtle concurrency issue, schema/data-loss risk, repeated author/reviewer disagreement, or a difficult architectural invariant). |
+| LOW / visual / CSS / copy | Cursor Composer 2.5 (`composer-2.5`); fallback OpenCode Go MiMo V2.5 (`opencode-go/mimo-v2.5`) | Simple test, boilerplate, docs, repetitive corrections, CSS/copy. |
+| HIGH_CODING fallback | Cursor Grok 4.6 medium (`cursor-grok-4.6-medium`) | Only after Kimi K2.7 Code fails twice on the SAME bounded task. Never used through OpenCode Go. |
+| HIGH_ARCHITECTURE | fresh OpenCode Go DeepSeek V4 Pro (`opencode-go/deepseek-v4-pro`) | ESCALATION-ONLY. Fresh session for genuine architecture/security decisions; closed after the design is persisted. Never used for orchestration, routine review, coding, tests, integration, or housekeeping. |
 
-OpenCode Go must not use GPT or Grok models. Cursor Grok is reserved for
-MEDIUM_HIGH/HIGH_CODING work; Composer and DeepSeek should absorb most normal
-work. HIGH_ARCHITECTURE escalation runs in a fresh DeepSeek V4 Pro session;
-Codex Tierra is the fallback.
+## Review policy
 
-## Reasoning matrix
+- AUTHOR != REVIEWER always. Prefer cross-family review: Kimi author →
+  Qwen3.8 Flash reviewer; Composer author → Qwen3.8 Flash or DeepSeek Flash
+  reviewer; DeepSeek Flash author (only when unavoidable) → Qwen3.8 Flash
+  reviewer.
+- Qwen3.8 Max is escalation-only. If no explicit escalation reason exists, do
+  NOT launch Qwen3.8 Max; prefer Qwen3.8 Flash.
 
-| Classification | Preference order |
-| --- | --- |
-| LOW | Composer 2.5 → MiMo-V2.5 |
-| MEDIUM | DeepSeek V4 Flash → Composer 2.5 → Qwen3.8 Max |
-| MEDIUM_HIGH | Grok 4.6 standard → DeepSeek V4 Flash → Kimi K2.7 Code |
-| HIGH_CODING | Grok 4.6 standard/medium → Kimi K2.7 Code |
-| HIGH_ARCHITECTURE | DeepSeek V4 Pro (fresh session) → Codex Tierra |
+## Worker session lifecycle (disposable execution contexts)
 
-These are preferences, not rigid dependencies. Availability and reliability
-may justify switching workers.
+Repository + commits + `docs/CURRENT_CHECKPOINT.md` are the durable memory;
+agent sessions are disposable and must not carry state between tasks.
+
+- Every bounded implementation task: ONE TASK → ONE FRESH AUTHOR SESSION.
+- Every independent review: ONE REVIEW → ONE FRESH REVIEWER SESSION.
+- A worker/reviewer session MUST NOT be reused for a different task.
+- An author session may remain alive ONLY for: the same bounded task, immediate
+  test/fix iteration, or REQUEST_CHANGES from the reviewer for that same task.
+- A reviewer session may remain alive ONLY for: the initial review, or re-review
+  of fixes for that SAME task.
+- After PASS + APPROVE + handoff captured: close the author session and the
+  reviewer session immediately. A done/idle pane with no pending same-task
+  re-review is CONTEXT_LEAK and must be closed.
+- Per task, before closing any worker/reviewer session: capture task ID,
+  requested/actual model, owned scope, commit SHA, tests/checks, findings, and
+  reviewer verdict in the handoff/PR. Do not retain conversational context for
+  audit; evidence lives in Git/docs.
+
+## Model verification
+
+Every worker must verify before receiving the full task that
+`MODEL_REQUESTED == MODEL_ACTUAL`. On mismatch, stop that worker and do not give
+it the task.
+
+## Failure policy
+
+For a recoverable failure on the SAME task, one retry in the same author session
+is allowed. Second failure: close that author session and switch model/provider
+per the matrix (e.g., Kimi → Cursor Grok 4.6 medium). Do not carry a failed
+session into another task.
+
+## Orchestrator context budget
+
+- Around ~80K: avoid unnecessary repository exploration; summarize active state
+  into `CURRENT_CHECKPOINT.md`.
+- Around ~100K: launch no new tasks; finish active bounded work; complete
+  reviews; integrate; close all completed panes; update `CURRENT_CHECKPOINT.md`;
+  rotate the orchestrator.
+- At >= 130K: ROTATE_SESSION as soon as the active task reaches a safe
+  checkpoint. Never let an orchestration session reach 200K-400K.
 
 ## Executable model enforcement
 
@@ -69,13 +105,15 @@ mismatch or an unavailable ID fails closed; the worker is terminated or
 reconfigured and only the documented fallback may be attempted.
 
 The approved OpenCode Go IDs are `opencode-go/mimo-v2.5`,
-`opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max`,
-`opencode-go/kimi-k2.7-code`, and `opencode-go/deepseek-v4-pro`. The V4 Pro ID
-is used only for fresh HIGH_ARCHITECTURE escalation sessions and must be pinned
-in `config/agent-models.env` before its first `--launch`. `opencode/mimo-v2.5-free`
-is not equivalent to the OpenCode Go MiMo ID and is never an automatic
-substitute. Big Pickle, GPT, Grok, provider defaults, and last-used OpenCode
-models are prohibited.
+`opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-flash`,
+`opencode-go/qwen3.8-max`, `opencode-go/kimi-k2.7-code`, and
+`opencode-go/deepseek-v4-pro`. The V4 Pro ID is used only for fresh
+HIGH_ARCHITECTURE escalation sessions and must be pinned in
+`config/agent-models.env` before its first `--launch`. The high-review role
+(`opencode-go/qwen3.8-max`) is escalation-only. `opencode/mimo-v2.5-free` is not
+equivalent to the OpenCode Go MiMo ID and is never an automatic substitute. Big
+Pickle, GPT, and Grok via OpenCode Go, provider defaults, and last-used
+OpenCode models are prohibited.
 
 ## Task contracts and worker behavior
 
@@ -109,17 +147,6 @@ COMMIT:
 - SHA
 ```
 
-## Review, sessions, and failure
-
-Author and reviewer must differ whenever practical, preferably across model or
-provider families. Codex reviews directly only for architecture, critical
-security, integration, cross-module changes, or reviewer conflicts.
-
-Reuse a healthy session for a small finding. Stop and switch when a worker
-deviates, repeats an error, or produces unrelated changes. Keep **FAIL TWICE →
-SWITCH AGENT**: assess prompt ambiguity, allow one retry, then switch model;
-escalate to Codex only when appropriate workers cannot solve the task.
-
 ## Token efficiency
 
 1. Small context over full-repository context.
@@ -127,8 +154,8 @@ escalate to Codex only when appropriate workers cannot solve the task.
 3. Cheap model first for clear tasks.
 4. Escalate capability only when necessary.
 5. Do not use multiple models for one task unless review, failure, or uncertainty justifies it.
-6. Reuse healthy sessions for small fixes.
-7. Switch quickly from unreliable workers.
+6. Reuse a healthy session for small fixes within the SAME task.
+7. Switch quickly from unreliable workers (FAIL TWICE → SWITCH AGENT).
 8. Treat Codex Tierra as a scarce orchestration resource.
 
 ## Session, checkpoint, and rotation policy
