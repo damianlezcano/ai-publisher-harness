@@ -9,6 +9,7 @@
 pub mod app;
 pub mod dtos;
 pub mod error;
+pub mod sidecar;
 
 pub use app::{APP_VERSION, AppConfig, AppState, SharedBackendRestarter};
 pub use dtos::{
