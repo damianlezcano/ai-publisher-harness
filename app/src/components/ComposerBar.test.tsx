@@ -1,0 +1,246 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { invoke } from "@tauri-apps/api/core";
+import ComposerBar from "./ComposerBar";
+import type {
+  MaterialAddImageView,
+  MaterialView,
+  ModelSummary,
+  ProviderSummary,
+  SelectedModelView,
+} from "../types";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+const invokeMock = vi.mocked(invoke);
+
+const projectId = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
+
+const materials: MaterialView[] = [
+  {
+    id: "m1",
+    displayName: "diagrama.png",
+    originalFileName: "diagrama.png",
+    kind: "image",
+    byteSize: 1024,
+    createdAt: "2026-08-28T15:00:00Z",
+  },
+  {
+    id: "m2",
+    displayName: "foto.png",
+    originalFileName: "foto.png",
+    kind: "image",
+    byteSize: 3,
+    createdAt: "2026-08-28T15:00:00Z",
+  },
+];
+
+const freeModel: ModelSummary = {
+  providerId: "opencode",
+  modelId: "big-pickle",
+  name: "Big Pickle",
+  free: true,
+  recommended: true,
+  deprecated: false,
+};
+
+const paidModel: ModelSummary = {
+  providerId: "openai",
+  modelId: "gpt-4",
+  name: "GPT-4",
+  free: false,
+  recommended: false,
+  deprecated: false,
+};
+
+const selectedFreeModel: SelectedModelView = {
+  model: freeModel,
+  notice: null,
+  requiresChoice: false,
+};
+
+const requiresChoiceModel: SelectedModelView = {
+  model: paidModel,
+  notice: "Elegí un modelo de pago conectado.",
+  requiresChoice: true,
+};
+
+const base = {
+  projectId,
+  materials,
+  agentPhase: "idle" as const,
+  aiUsable: true,
+  onSend: vi.fn(),
+  onCancel: vi.fn(),
+  onMaterialsChanged: vi.fn(),
+};
+
+function pasteImage(textarea: HTMLTextAreaElement) {
+  const file = new File([new Uint8Array([1, 2, 3])], "foto.png", { type: "image/png" });
+  fireEvent.paste(textarea, {
+    clipboardData: {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => file,
+        },
+      ],
+    },
+  });
+}
+
+function setupApiMock(responses: {
+  models?: ModelSummary[];
+  providers?: ProviderSummary[];
+  selected?: SelectedModelView;
+  addImage?: MaterialAddImageView;
+  selectResult?: void;
+}) {
+  invokeMock.mockImplementation((cmd: string) => {
+    if (cmd === "model_list") return Promise.resolve(responses.models ?? []);
+    if (cmd === "provider_list") return Promise.resolve(responses.providers ?? []);
+    if (cmd === "model_get_selected") return Promise.resolve(responses.selected ?? null);
+    if (cmd === "material_add_image")
+      return Promise.resolve(responses.addImage ?? { material: materials[0], duplicate: false });
+    if (cmd === "model_select") return Promise.resolve(responses.selectResult ?? undefined);
+    return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+  });
+}
+
+beforeEach(() => {
+  invokeMock.mockReset();
+  base.onSend.mockReset();
+  base.onCancel.mockReset();
+  base.onMaterialsChanged.mockReset();
+});
+
+describe("ComposerBar", () => {
+  it("renders the prompt textarea and Enviar button; typing then clicking Enviar calls onSend with the trimmed prompt", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "  Creá una actividad  ");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(base.onSend).toHaveBeenCalledWith("Creá una actividad", []);
+    expect(textarea).toHaveValue("");
+  });
+
+  it("Ctrl+Enter sends; Enter alone does not send", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Primera línea");
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+    expect(base.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(base.onSend).toHaveBeenCalledWith("Primera línea", []));
+  });
+
+  it("does not send an empty prompt", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(base.onSend).not.toHaveBeenCalled();
+  });
+
+  it("working state shows Cancelar (calls onCancel) and disables the textarea", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} agentPhase="working" />);
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enviar" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(base.onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("requiresChoice (aiUsable=false) disables the composer", async () => {
+    setupApiMock({ selected: requiresChoiceModel });
+    render(<ComposerBar {...base} aiUsable={false} />);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Elegí un modelo de pago conectado."),
+    );
+    expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled();
+  });
+
+  it("attach picker toggles material chips and selected chips are removable", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
+    const materialButton = screen.getByRole("button", { name: "diagrama.png" });
+    expect(materialButton).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(materialButton);
+    expect(materialButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
+    expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
+  });
+
+  it("paste of an image calls api.materialAddImage + onMaterialsChanged and adds the returned material id", async () => {
+    setupApiMock({
+      selected: selectedFreeModel,
+      addImage: { material: materials[1], duplicate: false },
+    });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    pasteImage(textarea);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "material_add_image",
+        expect.objectContaining({
+          projectId,
+          fileName: "foto.png",
+          contentType: "image/png",
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("foto.png")).toBeInTheDocument());
+    expect(base.onMaterialsChanged).toHaveBeenCalled();
+  });
+
+  it("model selector renders option names with Gratis suffix and does NOT render raw provider_id/model_id text; selecting calls api.modelSelect", async () => {
+    const connectedProviders: ProviderSummary[] = [
+      {
+        id: "openai",
+        name: "OpenAI",
+        authMethods: [],
+        connected: true,
+        connectionLabel: null,
+        highlighted: false,
+      },
+    ];
+    setupApiMock({
+      models: [freeModel, paidModel],
+      providers: connectedProviders,
+      selected: selectedFreeModel,
+    });
+    render(<ComposerBar {...base} />);
+    await waitFor(() => {
+      const options = screen.getAllByRole("option");
+      expect(options.map((o) => o.textContent)).toContain("Big Pickle (Gratis)");
+      expect(options.map((o) => o.textContent)).toContain("GPT-4 (De pago)");
+    });
+    expect(screen.queryByText("opencode")).not.toBeInTheDocument();
+    expect(screen.queryByText("big-pickle")).not.toBeInTheDocument();
+    expect(screen.queryByText("openai")).not.toBeInTheDocument();
+    expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
+
+    const select = screen.getByLabelText("Modelo") as HTMLSelectElement;
+    await userEvent.selectOptions(select, "openai::gpt-4");
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("model_select", {
+        providerId: "openai",
+        modelId: "gpt-4",
+      }),
+    );
+  });
+
+  it("shareAction node renders when provided", () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} shareAction={<button type="button">Compartir</button>} />);
+    expect(screen.getByRole("button", { name: "Compartir" })).toBeInTheDocument();
+  });
+});
