@@ -10,6 +10,9 @@ const EXPECTED_ACTIONS: Array<[string, GuidanceActionKind[]]> = [
   ["material_failed", []],
   ["material_unsupported", []],
   ["material_duplicate", []],
+  ["material_too_large", []],
+  ["material_image_invalid", []],
+  ["attachment_invalid", []],
   ["preview_unavailable", ["open-with-app"]],
   ["preview_too_large", ["open-with-app"]],
   ["credential_revoked", ["connect-ai"]],
@@ -44,6 +47,15 @@ describe("errorGuidance", () => {
   it("keeps per-file material guidance free of a global retry", () => {
     expect(errorGuidance("material_failed").title).toBe("No pudimos agregar ese archivo.");
     expect(errorGuidance("material_failed").actions).toEqual([]);
+  });
+
+  it("maps too-large and invalid files to per-file copy without a retry", () => {
+    expect(errorGuidance("material_too_large").title).toBe("No pudimos agregar ese archivo.");
+    expect(errorGuidance("material_too_large").actions).toEqual([]);
+    expect(errorGuidance("material_image_invalid").title).toBe("No pudimos agregar ese archivo.");
+    expect(errorGuidance("material_image_invalid").actions).toEqual([]);
+    expect(errorGuidance("attachment_invalid").title).toBe("No pudimos agregar ese archivo.");
+    expect(errorGuidance("attachment_invalid").actions).toEqual([]);
   });
 
   it("falls back to the internal guidance for unknown codes", () => {

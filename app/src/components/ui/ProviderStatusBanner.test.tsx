@@ -5,7 +5,7 @@ import ProviderStatusBanner from "./ProviderStatusBanner";
 
 describe("ProviderStatusBanner", () => {
   it("free shows the free-model badge and never claims no AI is connected", () => {
-    render(<ProviderStatusBanner status="free" onConnect={vi.fn()} />);
+    render(<ProviderStatusBanner status="free" />);
     expect(screen.getByText("Modelo gratuito")).toHaveClass("badge ok");
     expect(screen.queryByText("Conectar IA")).not.toBeInTheDocument();
     expect(screen.queryByText(/No hay una IA conectada/)).not.toBeInTheDocument();

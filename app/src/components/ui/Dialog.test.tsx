@@ -5,33 +5,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Dialog from "./Dialog";
 
-function DialogHarness({ initialFocusRef }: { initialFocusRef?: RefObject<HTMLElement> }) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  return (
-    <>
-      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>
-        Abrir diálogo
-      </button>
-      {open && (
-        <Dialog
-          title="Confirmar acción"
-          onClose={() => setOpen(false)}
-          initialFocusRef={initialFocusRef}
-        >
-          <p>Contenido del diálogo</p>
-          <div className="dialog-actions">
-            <button type="button">Guardar</button>
-            <button type="button" className="secondary">
-              Cancelar
-            </button>
-          </div>
-        </Dialog>
-      )}
-    </>
-  );
-}
-
 describe("Dialog", () => {
   it("renders a labelled modal dialog with children", () => {
     render(
@@ -82,17 +55,38 @@ describe("Dialog", () => {
     expect(second).toHaveFocus();
   });
 
-  it("focuses the initialFocusRef on open and restores focus to the trigger on close", async () => {
+  it("focuses the initialFocusRef element on open and restores focus to the trigger on close", async () => {
     const user = userEvent.setup();
-    function Harness() {
+    function InitialFocusHarness() {
+      const [open, setOpen] = useState(false);
       const initialFocusRef = useRef<HTMLButtonElement>(null);
-      return <DialogHarness initialFocusRef={initialFocusRef as RefObject<HTMLElement>} />;
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Abrir diálogo
+          </button>
+          {open && (
+            <Dialog
+              title="Confirmar acción"
+              onClose={() => setOpen(false)}
+              initialFocusRef={initialFocusRef as RefObject<HTMLElement>}
+            >
+              <div className="dialog-actions">
+                <button type="button">Guardar</button>
+                <button ref={initialFocusRef} type="button" className="secondary">
+                  Cancelar
+                </button>
+              </div>
+            </Dialog>
+          )}
+        </>
+      );
     }
-    render(<Harness />);
+    render(<InitialFocusHarness />);
     const trigger = screen.getByRole("button", { name: "Abrir diálogo" });
     await user.click(trigger);
-    const save = screen.getByRole("button", { name: "Guardar" });
-    expect(save).toHaveFocus();
+    const cancel = screen.getByRole("button", { name: "Cancelar" });
+    expect(cancel).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();

@@ -5,6 +5,10 @@ interface ToastProps {
   children: ReactNode;
 }
 
-export default function Toast({ children }: ToastProps) {
-  return <div className="toast">{children}</div>;
+export default function Toast({ id, children }: ToastProps) {
+  return (
+    <div className="toast" id={id}>
+      {children}
+    </div>
+  );
 }

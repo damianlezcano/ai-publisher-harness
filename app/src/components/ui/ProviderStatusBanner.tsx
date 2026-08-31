@@ -5,7 +5,7 @@ export type ProviderStatus = "free" | "requires-choice" | "needs-reconnect";
 
 interface ProviderStatusBannerProps {
   status: ProviderStatus;
-  onConnect: () => void;
+  onConnect?: () => void;
 }
 
 export default function ProviderStatusBanner({ status, onConnect }: ProviderStatusBannerProps) {
