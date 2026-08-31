@@ -131,3 +131,38 @@ credential. When all M7 checks pass, the final gate prints
 The real provider round trip is a manual, optional smoke test
 (`scripts/smoke-provider`, Fedora-only). It is never part of `scripts/verify`
 and never replaces the local gate.
+
+## M8 attachments / preview behavior
+
+M8 adds the `project-preview` crate (loopback-only, token-guarded preview
+server), prompt attachments in `project-agent`, and the project-app
+import/preview/attachment facade. On top of the M7 checks, `scripts/verify`
+adds:
+
+```bash
+cargo test --locked -p project-app --all-targets
+cargo test --locked -p project-app --test materials
+cargo test --locked -p project-app --test attachments
+cargo test --locked -p project-app --test preview
+cargo test --locked -p project-agent --test agent_attachment
+cargo test --locked -p project-preview --test preview_security
+cargo test --locked -p project-preview --test preview_lifecycle
+```
+
+The frontend M8 components (paste handler, attachment chips, material cards,
+preview modal) are covered by the existing `pnpm` suite (install,
+format:check, lint, typecheck, test), and the Tauri shell (new commands, empty
+`preview.json` capability, preview window) by `cargo check --manifest-path
+app/src-tauri/Cargo.toml`. All M8 suites are deterministic and offline: they use
+`FakeAgentEngine`, in-memory fixtures, and loopback-only HTTP against a real
+localhost preview server; none contact the Internet, an AI provider, or a
+browser. The preview security suite enforces the ADR-0010 invariants
+(loopback-only bind, single-use 128-bit token, read-only, containment, no
+directory listing, reserved-path blocking, nosniff, teardown). When all M8
+checks pass, the final gate prints `verify: M8 contract passed`.
+
+The real desktop preview/attachment round trip is a manual, optional smoke test
+(`scripts/smoke-preview`, Fedora-only, graphical session). It is never part of
+`scripts/verify` and SKIPs cleanly when a desktop/webkit environment is
+unavailable; real clipboard/drag behavior and the no-IPC preview window are
+exercised there, never in verify.

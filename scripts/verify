@@ -173,12 +173,35 @@ if [[ -f crates/project-agent/tests/agent_lifecycle.rs ]]; then
   cargo test --locked -p project-agent --test agent_lifecycle
 fi
 
+if [[ -f crates/project-agent/tests/agent_attachment.rs ]]; then
+  printf 'verify: cargo test --locked -p project-agent --test agent_attachment\n'
+  cargo test --locked -p project-agent --test agent_attachment
+fi
+
 # --- M6: project-app application facade --------------------------------------
 
 if [[ -f crates/project-app/tests/app_facade.rs ]]; then
   printf 'verify: cargo test --locked -p project-app --all-targets\n'
   cargo test --locked -p project-app --all-targets
 fi
+
+# --- M8: project-app named suites --------------------------------------------
+
+for suite in materials attachments preview; do
+  if [[ -f "crates/project-app/tests/$suite.rs" ]]; then
+    printf 'verify: cargo test --locked -p project-app --test %s\n' "$suite"
+    cargo test --locked -p project-app --test "$suite"
+  fi
+done
+
+# --- M8: project-preview security + lifecycle --------------------------------
+
+for suite in preview_security preview_lifecycle; do
+  if [[ -f "crates/project-preview/tests/$suite.rs" ]]; then
+    printf 'verify: cargo test --locked -p project-preview --test %s\n' "$suite"
+    cargo test --locked -p project-preview --test "$suite"
+  fi
+done
 
 # --- M7: provider/model surface -----------------------------------------------
 
@@ -234,7 +257,9 @@ fi
 printf 'verify: git diff --check\n'
 git diff --check
 
-if [[ -f crates/project-provider/tests/provider_security.rs ]]; then
+if [[ -f crates/project-preview/tests/preview_security.rs ]]; then
+  printf 'verify: M8 contract passed\n'
+elif [[ -f crates/project-provider/tests/provider_security.rs ]]; then
   printf 'verify: M7 contract passed\n'
 elif [[ -f app/src-tauri/Cargo.toml ]]; then
   printf 'verify: M6 contract passed\n'
