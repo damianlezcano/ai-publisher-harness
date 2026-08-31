@@ -5,6 +5,7 @@ import type { GuidanceActionKind } from "../guidance";
 import type { AgentPhase, MaterialView, ProjectView } from "../types";
 import ChatPanel from "./ChatPanel";
 import ComposerBar from "./ComposerBar";
+import ShareControl from "./PublishPanel";
 import { MaterialItem } from "./MaterialsPanel";
 import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
@@ -178,6 +179,14 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           onCancel={cancel}
           onOpenProvider={onOpenProvider}
           onMaterialsChanged={() => void onRefresh()}
+          shareAction={
+            <ShareControl
+              projectId={project.id}
+              projectName={project.name}
+              publication={project.publication}
+              onRefresh={onRefresh}
+            />
+          }
         />
       </div>
     </div>

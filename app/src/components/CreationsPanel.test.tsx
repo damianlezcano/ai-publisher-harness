@@ -27,72 +27,11 @@ beforeEach(() => {
 });
 
 describe("CreationsPanel", () => {
-  it("shows human-readable kind and a private visibility badge with switch off", () => {
+  it("shows human-readable kind and the open action", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     expect(screen.getByText("actividad")).toBeInTheDocument();
     expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
-    const badge = screen
-      .getAllByText(messages.creation.visibilityPrivate)
-      .find((element) => element.classList.contains("badge"));
-    expect(badge).toHaveClass("badge", "neutral");
-    const toggle = screen.getByRole("switch", { name: messages.creation.visibilityPrivate });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-  });
-
-  it("shows a public badge and switch with aria-checked=true", async () => {
-    const publicCreation = { ...creations[0], visibility: "public" as const };
-    invokeMock.mockResolvedValueOnce({ ...publicCreation, visibility: "private" });
-    render(
-      <CreationsPanel projectId={projectId} creations={[publicCreation]} onRefresh={() => {}} />,
-    );
-    const badge = screen
-      .getAllByText(messages.creation.visibilityPublic)
-      .find((element) => element.classList.contains("badge"));
-    expect(badge).toHaveClass("badge", "ok");
-    const toggle = screen.getByRole("switch", { name: messages.creation.visibilityPublic });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    await userEvent.click(toggle);
-    expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
-      projectId,
-      creationId: publicCreation.id,
-      public: false,
-    });
-  });
-
-  it("toggles visibility to share a private creation", async () => {
-    invokeMock.mockResolvedValueOnce({ ...creations[0], visibility: "public" });
-    render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(
-      screen.getByRole("switch", { name: messages.creation.visibilityPrivate }),
-    );
-    expect(invokeMock).toHaveBeenCalledWith("creation_set_visibility", {
-      projectId,
-      creationId: creations[0].id,
-      public: true,
-    });
-  });
-
-  it("shows the shared clarifier when shared is true", () => {
-    render(
-      <CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} shared />,
-    );
-    expect(screen.getByText(messages.creation.sharedClarifier)).toBeInTheDocument();
-  });
-
-  it("hides the shared clarifier when shared is false or omitted", () => {
-    const { rerender } = render(
-      <CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />,
-    );
-    expect(screen.queryByText(messages.creation.sharedClarifier)).not.toBeInTheDocument();
-    rerender(
-      <CreationsPanel
-        projectId={projectId}
-        creations={creations}
-        onRefresh={() => {}}
-        shared={false}
-      />,
-    );
-    expect(screen.queryByText(messages.creation.sharedClarifier)).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
   it("renders the empty state with title and hint", () => {

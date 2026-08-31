@@ -20,7 +20,7 @@ const url = "https://fake.trycloudflare.com/fotosintesis-a7k2m9/";
 const local: PublicationView = { state: "local", publicUrl: null };
 const published: PublicationView = { state: "published", publicUrl: url };
 
-function renderPanel(publication: PublicationView, onRefresh = vi.fn()) {
+function renderControl(publication: PublicationView, onRefresh = vi.fn()) {
   return render(
     <PublishPanel
       projectId={projectId}
@@ -43,28 +43,25 @@ beforeEach(() => {
   invokeMock.mockReset();
 });
 
-describe("PublishPanel", () => {
-  it("renders the not-shared empty state with the Compartir action", () => {
-    renderPanel(local);
-    expect(screen.getByText(messages.sharing.empty.title)).toBeInTheDocument();
+describe("ShareControl", () => {
+  it("renders a single Compartir button for a local project", () => {
+    renderControl(local);
     expect(screen.getByRole("button", { name: messages.sharing.shareAction })).toBeInTheDocument();
   });
 
-  it("shows the Compartiendo… busy state while publishing, then Compartido", async () => {
+  it("publishes and refreshes when Compartir is clicked", async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
     const gate = deferred<PublicationView>();
     invokeMock.mockReturnValueOnce(gate.promise);
-    const { rerender } = renderPanel(local, onRefresh);
+    const { rerender } = renderControl(local, onRefresh);
 
     await user.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
-    expect(screen.getByText(messages.sharing.sharing)).toBeInTheDocument();
-    expect(screen.getByText(messages.sharing.sharingNote)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.sharing.shareAction })).toBeDisabled();
     expect(invokeMock).toHaveBeenCalledWith("publish", { projectId });
 
     gate.resolve(published);
     await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+
     rerender(
       <PublishPanel
         projectId={projectId}
@@ -73,29 +70,57 @@ describe("PublishPanel", () => {
         onRefresh={onRefresh}
       />,
     );
-    expect(screen.getByText(messages.sharing.shared)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: messages.sharing.shared })).toBeInTheDocument();
   });
 
-  it("renders the Compartido badge, the link, and both temporary-link lines when shared", () => {
-    renderPanel(published);
-    expect(screen.getByText(messages.sharing.shared)).toBeInTheDocument();
-    expect(screen.getByLabelText(messages.sharing.linkLabel)).toHaveTextContent(url);
-    expect(screen.getByText(messages.sharing.temporaryNote)).toBeInTheDocument();
-    expect(screen.getByText(messages.sharing.temporaryGuidance)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.sharing.stopSharing })).toBeInTheDocument();
+  it("shows a busy Compartiendo… state while publishing", async () => {
+    const user = userEvent.setup();
+    const gate = deferred<PublicationView>();
+    invokeMock.mockReturnValueOnce(gate.promise);
+    renderControl(local);
+
+    await user.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
+    expect(screen.getByRole("button", { name: messages.sharing.sharing })).toBeDisabled();
+    gate.resolve(published);
   });
 
-  it("copies the link and swaps the button to Copiado", async () => {
+  it("opens a menu with copy, open, QR and stop-sharing when shared", async () => {
+    const user = userEvent.setup();
+    renderControl(published);
+
+    const trigger = screen.getByRole("button", { name: messages.sharing.shared });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    const menu = screen.getByRole("menu", { name: messages.sharing.panelLabel });
+    expect(
+      within(menu).getByRole("menuitem", { name: messages.sharing.copyLink }),
+    ).toBeInTheDocument();
+    expect(
+      within(menu).getByRole("menuitem", { name: messages.sharing.openLink }),
+    ).toBeInTheDocument();
+    expect(
+      within(menu).getByRole("menuitem", { name: messages.sharing.showQr }),
+    ).toBeInTheDocument();
+    expect(
+      within(menu).getByRole("menuitem", { name: messages.sharing.stopSharing }),
+    ).toBeInTheDocument();
+    expect(within(menu).getByText(messages.sharing.temporaryNote)).toBeInTheDocument();
+  });
+
+  it("copies the link and swaps the menu item to Copiado", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
       configurable: true,
     });
-    renderPanel(published);
-    await user.click(screen.getByRole("button", { name: messages.sharing.copyLink }));
+    renderControl(published);
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.copyLink }));
     expect(writeText).toHaveBeenCalledWith(url);
-    expect(screen.getByRole("button", { name: messages.common.copied })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: messages.common.copied })).toBeInTheDocument();
   });
 
   it("shows a message when copying fails", async () => {
@@ -104,8 +129,9 @@ describe("PublishPanel", () => {
       value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
       configurable: true,
     });
-    renderPanel(published);
-    await user.click(screen.getByRole("button", { name: messages.sharing.copyLink }));
+    renderControl(published);
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.copyLink }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(messages.sharing.copyLinkFailed),
     );
@@ -114,15 +140,16 @@ describe("PublishPanel", () => {
   it("opens the public URL via the api", async () => {
     const user = userEvent.setup();
     invokeMock.mockResolvedValueOnce(undefined);
-    renderPanel(published);
-    await user.click(screen.getByRole("button", { name: messages.sharing.openLink }));
+    renderControl(published);
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.openLink }));
     expect(invokeMock).toHaveBeenCalledWith("open_public_url", { projectId });
   });
 
   it("shows an ErrorNotice when publishing fails", async () => {
     const user = userEvent.setup();
     invokeMock.mockRejectedValueOnce({ code: "publish_failed", message: "x" });
-    renderPanel(local);
+    renderControl(local);
     await user.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(messages.error.publishFailed.title),
@@ -133,15 +160,14 @@ describe("PublishPanel", () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
     invokeMock.mockResolvedValueOnce(local);
-    const { rerender } = renderPanel(published, onRefresh);
+    const { rerender } = renderControl(published, onRefresh);
 
-    await user.click(screen.getByRole("button", { name: messages.sharing.stopSharing }));
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.stopSharing }));
+
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(messages.sharing.stopConfirm.title)).toBeInTheDocument();
     expect(within(dialog).getByText(messages.sharing.stopConfirm.message)).toBeInTheDocument();
-    expect(
-      within(dialog).queryByLabelText(messages.common.confirmNameLabel),
-    ).not.toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: messages.common.confirm }));
     expect(invokeMock).toHaveBeenCalledWith("unpublish", { projectId });
@@ -155,22 +181,24 @@ describe("PublishPanel", () => {
         onRefresh={onRefresh}
       />,
     );
-    expect(screen.getByText(messages.sharing.stopped)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: messages.sharing.shareAction })).toBeInTheDocument();
   });
 
   it("cancels the stop-sharing confirm without unpublishing", async () => {
     const user = userEvent.setup();
-    renderPanel(published);
-    await user.click(screen.getByRole("button", { name: messages.sharing.stopSharing }));
+    renderControl(published);
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.stopSharing }));
     await user.click(screen.getByRole("button", { name: messages.common.cancel }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalledWith("unpublish", expect.anything());
   });
 
-  it("opens the QR dialog from the public URL", async () => {
+  it("opens the QR dialog from the share menu", async () => {
     const user = userEvent.setup();
-    renderPanel(published);
-    await user.click(screen.getByRole("button", { name: messages.sharing.showQr }));
+    renderControl(published);
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.showQr }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: projectName })).toBeInTheDocument();
   });
