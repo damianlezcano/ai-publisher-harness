@@ -11,11 +11,13 @@ use std::thread;
 
 use project_core::{
     ContentType, CreationContent, CreationKind, CreationVisibility, IdGenerator, MaterialContent,
-    PROJECT_SCHEMA_VERSION, ProjectContentStore, ProjectCoreError, ProjectId, ProjectName,
-    ProjectRepository, ProjectService, Sha256Digest, Timestamp,
+    MessageRole, MessageStatus, PROJECT_SCHEMA_VERSION, ProjectContentStore, ProjectCoreError,
+    ProjectId, ProjectName, ProjectRepository, ProjectService, Sha256Digest, Timestamp,
 };
 
-use project_fs::{FilesystemProjectContentStore, FilesystemProjectRepository};
+use project_fs::{
+    FilesystemProjectContentStore, FilesystemProjectRepository, PublicationSnapshotStore,
+};
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -52,14 +54,21 @@ struct FakeIds {
     project_seq: Cell<usize>,
     material_seq: Cell<usize>,
     creation_seq: Cell<usize>,
+    message_seq: Cell<usize>,
 }
 
 impl FakeIds {
-    fn new(project_seq: usize, material_seq: usize, creation_seq: usize) -> Self {
+    fn new(
+        project_seq: usize,
+        material_seq: usize,
+        creation_seq: usize,
+        message_seq: usize,
+    ) -> Self {
         Self {
             project_seq: Cell::new(project_seq),
             material_seq: Cell::new(material_seq),
             creation_seq: Cell::new(creation_seq),
+            message_seq: Cell::new(message_seq),
         }
     }
 }
@@ -84,7 +93,13 @@ impl project_core::IdGenerator for FakeIds {
         project_core::CreationId::parse(id).unwrap()
     }
     fn message_id(&self) -> project_core::MessageId {
-        project_core::MessageId::parse("0198e4a6-90ab-7c01-8c0e-8b6fd26f1f22").unwrap()
+        let seq = self.message_seq.get();
+        self.message_seq.set(seq.wrapping_add(1));
+        project_core::MessageId::parse(format!(
+            "0198e4a6-90ab-7c01-8c0e-{:012x}",
+            seq & 0xffffffffffff
+        ))
+        .unwrap()
     }
 }
 
@@ -97,7 +112,7 @@ fn make_clock() -> FakeClock {
 }
 
 fn make_ids() -> FakeIds {
-    FakeIds::new(0x8b6fd26f1f22, 0xdb14, 0xcf10)
+    FakeIds::new(0x8b6fd26f1f22, 0xdb14, 0xcf10, 0x8b6fd26f1f22)
 }
 
 fn make_service(
@@ -232,7 +247,7 @@ fn create_and_reopen_preserves_all_metadata() {
 fn list_deterministic_order_and_rename_survives_restart() {
     let base = tmp_dir("list-rename");
     let mut clock = make_clock();
-    let ids = FakeIds::new(0x1f22, 0, 0);
+    let ids = FakeIds::new(0x1f22, 0, 0, 0);
     let id_a;
     {
         let mut svc = make_service_with(&base, clock.clone(), ids.clone());
@@ -485,7 +500,7 @@ fn source_bytes_unchanged_after_add_and_sha_matches() {
 fn two_materials_with_same_name_get_different_paths() {
     let base = tmp_dir("conflict-names");
     let mut clock = make_clock();
-    let ids = FakeIds::new(0x8b6fd26f1f22, 0, 0);
+    let ids = FakeIds::new(0x8b6fd26f1f22, 0, 0, 0);
     let pid;
     let m1;
     {
@@ -1103,14 +1118,14 @@ fn fixed_roots_cannot_be_substituted_by_metadata() {
 #[test]
 fn delete_removes_only_project_directory() {
     let base = tmp_dir("delete");
-    let ids = FakeIds::new(0x1f22, 0, 0);
+    let ids = FakeIds::new(0x1f22, 0, 0, 0);
     let id_a;
     {
         let mut svc = make_service_with(&base, make_clock(), ids.clone());
         let p = svc.create_project("Project A").unwrap();
         id_a = p.id;
     }
-    let ids_b = FakeIds::new(0x1f23, 0, 0);
+    let ids_b = FakeIds::new(0x1f23, 0, 0, 0);
     let id_b;
     {
         let mut svc = make_service_with(&base, make_clock(), ids_b.clone());
@@ -1191,7 +1206,7 @@ fn duplicate_project_id_rejected() {
     // Creating through the service with two different services would produce
     // distinct ids, so test the repository invariant directly instead.
     let mut repo = FilesystemProjectRepository::new(&base);
-    let ids = FakeIds::new(0x8b6fd26f1f22, 0, 0);
+    let ids = FakeIds::new(0x8b6fd26f1f22, 0, 0, 0);
     let p1 = project_core::Project::new(
         ids.project_id(),
         ProjectName::parse("First").unwrap(),
@@ -1383,13 +1398,13 @@ fn security_workspace_not_modified_by_adapter() {
 #[test]
 fn security_project_isolation_between_projects() {
     let base = tmp_dir("sec-isolation");
-    let ids = FakeIds::new(0x1f22, 0, 0);
+    let ids = FakeIds::new(0x1f22, 0, 0, 0);
 
     let mut svc = make_service_with(&base, make_clock(), ids.clone());
     let p1 = svc.create_project("Project 1").unwrap();
     svc.add_material(&p1.id, material_request()).unwrap();
 
-    let ids_b = FakeIds::new(0x1f23, 0, 0);
+    let ids_b = FakeIds::new(0x1f23, 0, 0, 0);
     let mut svc2 = make_service_with(&base, make_clock(), ids_b.clone());
     let p2 = svc2.create_project("Project 2").unwrap();
 
@@ -2228,5 +2243,152 @@ fn padded_persisted_project_name_is_reparsed() {
         reloaded.name.as_str(),
         "Test",
         "reparsed ProjectName must be the trimmed canonical form"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Message persistence and publication isolation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn messages_survive_reopen() {
+    let base = tmp_dir("messages-reopen");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+    let c = svc.create_creation(&p.id, creation_request()).unwrap();
+
+    let user = svc
+        .append_user_message(&p.id, "Hello assistant", std::slice::from_ref(&m.id))
+        .unwrap();
+    let assistant = svc
+        .append_assistant_message(
+            &p.id,
+            "Hello user",
+            MessageStatus::Ok,
+            std::slice::from_ref(&c.id),
+        )
+        .unwrap();
+
+    // Reopen with a fresh repository instance to exercise rehydration.
+    let svc2 = make_service(&base);
+    let msgs = svc2.messages(&p.id).unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].id, user.id);
+    assert_eq!(msgs[0].role, MessageRole::User);
+    assert_eq!(msgs[0].text, "Hello assistant");
+    assert_eq!(msgs[0].status, MessageStatus::Ok);
+    assert_eq!(msgs[0].material_ids, vec![m.id.clone()]);
+    assert!(msgs[0].creation_ids.is_empty());
+    assert_eq!(msgs[1].id, assistant.id);
+    assert_eq!(msgs[1].role, MessageRole::Assistant);
+    assert_eq!(msgs[1].text, "Hello user");
+    assert_eq!(msgs[1].status, MessageStatus::Ok);
+    assert_eq!(msgs[1].creation_ids, vec![c.id.clone()]);
+    assert!(msgs[1].material_ids.is_empty());
+}
+
+#[test]
+fn messages_are_not_published() {
+    let base = tmp_dir("messages-not-published");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+    let c = svc
+        .create_creation(
+            &p.id,
+            project_core::CreateCreation {
+                display_name: "Public activity".into(),
+                kind: CreationKind::Web,
+                visibility: CreationVisibility::Public,
+                content_type: Some(ContentType::parse("text/html").unwrap()),
+                content: CreationContent {
+                    bytes: b"<html>public</html>".to_vec(),
+                    file_name: "index.html".into(),
+                },
+                parent_creation_id: None,
+            },
+        )
+        .unwrap();
+
+    svc.append_user_message(
+        &p.id,
+        "User secret message content",
+        std::slice::from_ref(&m.id),
+    )
+    .unwrap();
+    svc.append_assistant_message(
+        &p.id,
+        "Assistant secret message content",
+        MessageStatus::Ok,
+        std::slice::from_ref(&c.id),
+    )
+    .unwrap();
+
+    let project = svc.open_project(&p.id).unwrap();
+    PublicationSnapshotStore::new(&base)
+        .prepare(&project)
+        .unwrap();
+
+    let publish = base.join("projects").join(p.id.as_str()).join("publish");
+    assert!(
+        publish.exists(),
+        "publish directory must exist after prepare"
+    );
+
+    fn assert_no_message_text(dir: &Path, needles: &[&str]) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                assert_no_message_text(&path, needles);
+            } else if path.is_file() {
+                let contents = fs::read(&path).unwrap();
+                let text = String::from_utf8_lossy(&contents);
+                for needle in needles {
+                    assert!(
+                        !text.contains(needle),
+                        "publish leaked message text at {path:?}: {needle:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    assert_no_message_text(
+        &publish,
+        &[
+            "User secret message content",
+            "Assistant secret message content",
+        ],
+    );
+}
+
+#[test]
+fn corrupted_message_reference_rejected() {
+    let base = tmp_dir("corrupt-message-ref");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+    let m = svc.add_material(&p.id, material_request()).unwrap();
+
+    svc.append_user_message(&p.id, "Hello", std::slice::from_ref(&m.id))
+        .unwrap();
+
+    // Corrupt the on-disk JSON so the message references a missing material.
+    let path = project_json_path(&base, p.id.as_str());
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let missing_id = "0198e4a6-79b2-7b51-9e68-c2eb7af3db15";
+    raw["messages"][0]["materialIds"] = serde_json::json!([missing_id]);
+    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+
+    let repo = FilesystemProjectRepository::new(&base);
+    let err = repo.get(&p.id);
+    assert!(
+        matches!(
+            err,
+            Err(ProjectCoreError::MissingMaterial(_) | ProjectCoreError::CorruptMetadata(_))
+        ),
+        "expected MissingMaterial or CorruptMetadata for absent material reference, got: {err:?}"
     );
 }
