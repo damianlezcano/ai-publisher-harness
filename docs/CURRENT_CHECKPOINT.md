@@ -6,75 +6,82 @@
 
 ## Estado actual
 
-- Current milestone: **M10 — Packaging** (**CLOSED**)
-- Current phase: **CLOSED_READY_FOR_M11**
-- Current main commit: (see `git log -1` after this checkpoint commit)
-- **UX_RELEASE_GATE_01: APROBADO** (2026-08-31) — ver `docs/UX_RELEASE_GATE_01.md` §11. La UI
-  2×2 dashboard observada **no es** la UI objetivo; dirección aprobada: chat-first simple.
-- M1-M10: cerrados. M10 implementado, revisado e integrado (T1-T5).
-- ADR-0013 (sidecar resolution, pinning, checksum verification): **Accepted** e
-  implementado.
-- M10 design: `docs/M10_DESIGN.md` (**Implemented and closed**).
-- Pins aprobados por el humano y commiteados en `config/components.json`:
-  - `opencode` **1.18.25** — `anomalyco/opencode` (ex-sst/opencode, redirect 301
-    verificado) — `opencode-linux-x64.tar.gz` —
-    `58a3729a6f3432dd6d2917fcc4a949788891a035818646ad480e12c947f56e78`.
-  - `cloudflared` **2026.8.3** — `cloudflare/cloudflared` —
-    `cloudflared-linux-amd64` —
-    `f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e`.
+- Current main commit: (see `git log -1` after the UX_REDESIGN_01 design commit)
+- **M1-M10: CLOSED.** M10 implementado, revisado e integrado (T1-T5).
+- **UX_RELEASE_GATE_01: APROBADO** (2026-08-31) — ver `docs/UX_RELEASE_GATE_01.md` §11.
+- **UX_REDESIGN_01: APROBADO** (2026-08-31) — ver `docs/UX_REDESIGN_01_DESIGN.md`.
+- **ADR-0014: Accepted** — historial de conversación durable en el aggregate `Project`.
+- **ADR-0015: Accepted** — descubrimiento determinista del modelo gratis.
+- **M11 (Component Updates + Windows CI): NO iniciado.** No se empezó work de M11.
 
-## Entregables M10 (integrados en main)
+## Decisiones de arquitectura aprobadas (UX_REDESIGN_01)
 
-- `crates/project-app/src/sidecar.rs` (+ `tests/sidecar.rs`): `resolve_sidecar`
-  / `resolve_sidecar_from_env`, `SidecarLocation { Bundled | OnPath }`, override
-  `EDUCAI_SIDECAR_DIR`, fallback `<name>-x86_64-unknown-linux-gnu`.
-- `crates/project-app/src/app.rs`: helper puro `apply_sidecar_locations`.
-- `app/src-tauri/src/lib.rs`: `build_state` resuelve sidecars desde
-  `current_exe().parent()`; fallback PATH dev preservado.
-- `app/src-tauri/tauri.conf.json`: version `0.1.0`, `targets = [appimage, rpm]`,
-  `bundle.externalBin = ["../sidecars/opencode", "../sidecars/cloudflared"]`
-  (Tauri añade `-<target-triple>` al source; el bundle queda con el nombre
-  simple). Crate versions 0.1.0 alineadas.
-- `config/components.json` (schema v1) + `scripts/fetch-sidecars` (fetch +
-  SHA-256 fail-closed + install triple-suffixed en `sidecars/` gitignored;
-  `--check` offline).
-- `scripts/verify`: gate M10 offline (`fetch-sidecars --check`, version
-  alignment 0.1.0, `cargo check` src-tauri con `externalBin` neutralizado vía
-  `TAURI_CONFIG`, gate final imprime `verify: M10 contract passed`).
-- `docs/VERIFY.md`: sección `## M10 packaging behavior`.
-- `scripts/smoke-package`: smoke manual de packaging (SKIP exit 3 sin tooling).
+1. **Vocabulario:** "Conversación" (user-facing) ↔ `Project`/`ProjectId` (dominio interno).
+   NO se introduce un aggregate `Conversation` separado.
+2. **Historial durable:** `Project.messages: Vec<Message>` persistido en `project.json`
+   (aggregate existente, atomic/CAS). **NO** localStorage como store autoritativo.
+3. **Schema:** `project.json` v2 → **v3** (migración lossless; `messages` default vacío).
+4. **Mensaje:** identidad estable, role (user/assistant), text, status (ok/failed/cancelled),
+   timestamp, `material_ids`, `creation_ids`. Materials/Creations siguen siendo los recursos
+   autoritativos; los mensajes solo los referencian (no duplican contenido).
+5. **Durabilidad de envío:** persistir mensaje USER **antes** de ejecutar el agente; persistir
+   mensaje ASSISTANT/resultado **después** del resultado exitoso. Fallos preservan el mensaje
+   user y exponen estado recuperable. El historial sobrevive restart, cambio de conversación,
+   fallo de proveedor y fallo de agente.
+6. **Modelo gratis:** dinámico desde el catálogo de OpenCode (disponible, usable, `cost==0`,
+   ranking determinista + tie-break `(provider_id, model_id)`). **Sin** hardcodear Big Pickle ni
+   ningún ID de modelo. Selección explícita del usuario pisa la automática; la automática es
+   efímera, la explícita persiste en `settings.json`.
+7. **Proveedores:** reusar M7. Settings es opcional; el usuario puede usar EducAI con el modelo
+   gratis auto-seleccionado sin configurar ChatGPT/Gemini/DeepSeek. NO crear una segunda capa de
+   proveedores.
+8. **UI objetivo:** LEFT lista de conversaciones / CENTER conversación / BOTTOM prompt + modelo +
+   Compartir / SETTINGS con X que vuelve a la conversación exacta / recursos en contexto.
+   NO restaurar el dashboard 2×2.
+9. **Lista de conversaciones:** más recientes primero (según diseño aprobado), renameable,
+   durable, backed by Project, sin exponer `ProjectId` crudo.
+10. **Arquitectura existente:** reusar sin rediseñar M1 filesystem, M2 HTTP, M3 publication,
+    M4 tunnel, M5 AgentEngine, M7 providers, M8 materials/previews, M10 packaging. Cualquier
+    tarea que requiera un rewrite mayor debe devolver `ARCHITECTURE_ESCALATION_REQUIRED`.
 
-## Verificación final (session M10)
+## Task graph (T1-T7, ver `docs/UX_REDESIGN_01_DESIGN.md` §22)
 
-- `./scripts/verify` → `verify: M10 contract passed`, exit 0 (offline; sin
-  descargas de sidecars, sin bundle).
-- `git diff --check` limpio.
-- Suites Rust + frontend verdes.
-- Artifacts AppImage/RPM **no** construidos en esta sesión (sin `cargo tauri`
-  CLI / appimagetool / rpmbuild en el entorno); `scripts/smoke-package` SKIP
-  (exit 3). El smoke real es operación de release manual.
+- **T1** core: `Message` + schema v3 + migración + validación — `crates/project-core/src/lib.rs`.
+- **T2** fs: rehidratación/validación de mensajes + tests de migración — `crates/project-fs`.
+- **T3** service/facade/commands: `append_*`, `send_message`, DTOs (`MessageView`,
+  `ProjectSummary{createdAt,updatedAt,shared}`, `ProjectView.messages`), `agent_send`/`project_open`/
+  `project_list` — `crates/project-core`, `crates/project-app`, `app/src-tauri`.
+- **T4** ranking determinista del modelo gratis — `crates/project-provider/src/service.rs`.
+- **T5a–T5e** frontend: shell + sidebar + first-launch, ComposerBar, timeline + recursos en
+  contexto, Settings (gear+X) + Compartir único, catálogo de copy — `app/src`.
+- **T6** Playwright headed (1366×768 / 1440×900 / 1920×1080) + a11y (gate final).
+- **T7** `scripts/verify` gate UX + docs.
 
-## Próximo milestone
+## Model allocation (aprobada)
 
-- M11 (Component Updates + native Windows CI): **no iniciado**. NO se ha
-  empezado work de M11.
-- **Próximo paso (sin código en esta sesión):** delta de arquitectura acotado para la UX
-  chat-first (persistencia D1 + vocabulario D2), aprobado por el owner antes de planificar el
-  milestone de UX. B1/B2 son blockers de release.
+- Orchestrator/integración: `opencode-go/deepseek-v4-flash` (coordina e integra, no implementa todo).
+- Coding normal/complejo: `opencode-go/kimi-k2.7-code`.
+- Reasoning / review independiente: `opencode-go/qwen3.8-max`.
+- LOW/visual/CSS/copy: Cursor Composer 2.5 (fallback `opencode-go/mimo-v2.5`).
+- Cross-cutting difícil: Kimi K2.7 Code (fallback Cursor Grok 4.6 medium).
+- HIGH_ARCHITECTURE: fresh `opencode-go/deepseek-v4-pro` SOLO en escalada.
+- Prohibido: Big Pickle; GPT/Grok vía OpenCode Go. AUTHOR != REVIEWER.
 
-## Decisión UX — UX_RELEASE_GATE_01 (2026-08-31)
+## Hallazgo de entorno (pre-existente, requiere diagnóstico del orchestrator)
 
-Gate de validación visual de la UI actual contra la dirección de producto aprobada (chat-first).
-**APROBADO** por el owner. Evidencia: `docs/ux-release-gate-01/`.
+`./scripts/verify` falla en `cargo clippy` con `clippy::chunks-exact-to-as-chunks`
+(`crates/project-preview/src/token.rs:27`): el entorno tiene `cargo/rustc/clippy 1.98.0`
+(Fedora) mientras `rust-toolchain.toml` pinea `1.97.1` sin rustup que lo honre. **No** se
+modificó `rust-toolchain.toml` ni la política de toolchain en esta sesión de arquitectura. El
+orchestrator de implementación debe diagnosticar el mismatch exacto antes de tocar toolchain.
 
-- **B1** (dashboard-first, no chat-first) y **B2** (superficie técnica modelo/proveedor) deben
-  corregirse **antes del release**.
-- **D1** — Persistencia de conversación **requerida** (sobrevive al restart). **No** se eligió ni
-  implementó mecanismo (localStorage u otro) en esta sesión; requiere una **decisión de
-  arquitectura acotada** antes de implementar.
-- **D2** — **"Conversación"** como concepto contenedor user-facing; el modelo de dominio interno
-  `Project` / `ProjectId` permanece sin cambios salvo que la revisión de arquitectura pruebe un
-  cambio aditivo mínimo.
-- **D3** — **"Compartir"** como acción en el área inferior de la conversación; **sin** panel
-  permanente `Compartir` en el dashboard.
-- **M11** — **no iniciado**; no se implementó ni diseñó la rediseño en esta sesión.
+## Próximo paso
+
+- Diagnóstico del mismatch de toolchain (Rust/clippy) como primera tarea de implementación.
+- Luego T1 (schema v3 + `Message`) como primera tarea de producto del milestone de UX, con
+  `scripts/agent-launch` para el worker asignado (Kimi K2.7 Code).
+- **M11 NO iniciado.** B1/B2 siguen siendo blockers de release.
+
+## Pines de sidecar (M10, en `config/components.json` / ADR-0013)
+
+- `opencode` 1.18.25, `cloudflared` 2026.8.3 (SHA-256 commiteados). Sin cambios en esta sesión.
