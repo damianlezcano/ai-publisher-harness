@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, errorMessage } from "../api";
 import type { ProjectSummary } from "../types";
 import ConfirmDialog from "./ConfirmDialog";
+import { messages } from "../messages";
 
 interface ProjectsViewProps {
   projects: ProjectSummary[];
@@ -66,9 +67,9 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
   return (
     <div className="view">
       <header className="view-header">
-        <h1>Tus proyectos</h1>
+        <h1>{messages.project.listHeading}</h1>
         <button type="button" className="primary" onClick={() => setCreating((v) => !v)}>
-          Nuevo proyecto
+          {messages.project.newButton}
         </button>
       </header>
 
@@ -81,20 +82,20 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
           }}
         >
           <label className="sr-only" htmlFor="new-project-name">
-            Nombre del proyecto
+            {messages.project.nameLabel}
           </label>
           <input
             id="new-project-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Nombre del proyecto"
+            placeholder={messages.project.namePlaceholder}
             autoFocus
           />
           <button type="submit" className="primary" disabled={busy || name.trim() === ""}>
-            Crear
+            {messages.common.create}
           </button>
           <button type="button" className="secondary" onClick={() => setCreating(false)}>
-            Cancelar
+            {messages.common.cancel}
           </button>
         </form>
       )}
@@ -106,9 +107,9 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
       )}
 
       {projects.length === 0 && !creating ? (
-        <p className="muted">Todavía no tenés proyectos. Creá el primero para empezar.</p>
+        <p className="muted">{messages.project.empty.title}</p>
       ) : (
-        <ul className="project-list" aria-label="Proyectos">
+        <ul className="project-list" aria-label={messages.project.listAriaLabel}>
           {projects.map((project) => (
             <li key={project.id} className="project-row">
               {editingId === project.id ? (
@@ -120,7 +121,7 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
                   }}
                 >
                   <label className="sr-only" htmlFor={`rename-${project.id}`}>
-                    Nuevo nombre
+                    {messages.project.renameLabel}
                   </label>
                   <input
                     id={`rename-${project.id}`}
@@ -133,10 +134,10 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
                     className="primary"
                     disabled={busy || editingName.trim() === ""}
                   >
-                    Guardar
+                    {messages.common.save}
                   </button>
                   <button type="button" className="secondary" onClick={() => setEditingId(null)}>
-                    Cancelar
+                    {messages.common.cancel}
                   </button>
                 </form>
               ) : (
@@ -144,7 +145,7 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
                   <span className="project-name">{project.name}</span>
                   <span className="row-actions">
                     <button type="button" className="primary" onClick={() => onOpen(project.id)}>
-                      Abrir
+                      {messages.project.open}
                     </button>
                     <button
                       type="button"
@@ -154,10 +155,10 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
                         setEditingName(project.name);
                       }}
                     >
-                      Renombrar
+                      {messages.project.rename}
                     </button>
                     <button type="button" className="danger" onClick={() => setDeleting(project)}>
-                      Eliminar
+                      {messages.common.delete}
                     </button>
                   </span>
                 </>
@@ -169,8 +170,8 @@ export default function ProjectsView({ projects, onRefresh, onOpen }: ProjectsVi
 
       {deleting && (
         <ConfirmDialog
-          title="Eliminar proyecto"
-          message={`Escribí “${deleting.name}” para confirmar la eliminación.`}
+          title={messages.project.delete.title}
+          message={messages.project.delete.confirmMessage(deleting.name)}
           confirmText={deleting.name}
           busy={busy}
           onCancel={() => setDeleting(null)}

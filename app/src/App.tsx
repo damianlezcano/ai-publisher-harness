@@ -5,6 +5,7 @@ import ProjectsView from "./components/ProjectsView";
 import WorkspaceView from "./components/WorkspaceView";
 import ModelSelector from "./components/provider/ModelSelector";
 import ProviderPanel from "./components/provider/ProviderPanel";
+import { messages } from "./messages";
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -47,11 +48,10 @@ export default function App() {
           setAgentMessage(null);
         } else if (event.status === "completed") {
           setAgentPhase("completed");
-          setAgentMessage(event.message ?? "Listo.");
-          void refreshProject(selectedId).catch(() => {});
+          setAgentMessage(event.message ?? messages.agent.completed);
         } else {
           setAgentPhase("failed");
-          setAgentMessage(event.message ?? "No se pudo completar la creación.");
+          setAgentMessage(event.message ?? messages.agent.taskFailed);
         }
       })
       .then((fn) => {
@@ -92,7 +92,7 @@ export default function App() {
   if (loading) {
     return (
       <main className="app" aria-busy="true">
-        <p className="muted">Cargando…</p>
+        <p className="muted">{messages.app.loading}</p>
       </main>
     );
   }
@@ -100,10 +100,10 @@ export default function App() {
   return (
     <main className="app">
       <header className="app-bar">
-        <span className="app-title">EducAI</span>
+        <span className="app-title">{messages.app.title}</span>
         <ModelSelector refreshKey={providerRefreshKey} />
         <button type="button" className="secondary" onClick={() => setProviderOpen(true)}>
-          Conectá tu IA
+          {messages.app.connectAi}
         </button>
       </header>
 

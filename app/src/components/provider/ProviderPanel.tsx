@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ProviderSummary } from "../../types";
 import ProviderCard from "./ProviderCard";
+import { messages } from "../../messages";
 
 interface ProviderPanelProps {
   onClose: () => void;
@@ -59,17 +60,15 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
         className="dialog provider-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Conectá tu IA"
+        aria-label={messages.provider.panelLabel}
       >
         <header className="provider-panel-header">
-          <h2>Conectá tu IA</h2>
+          <h2>{messages.provider.heading}</h2>
           <button type="button" className="secondary" onClick={onClose}>
-            Cerrar
+            {messages.common.close}
           </button>
         </header>
-        <p className="muted">
-          Tu cuenta y tus claves se guardan de forma segura en tu computadora. Nunca se comparten.
-        </p>
+        <p className="muted">{messages.provider.privacyNote}</p>
 
         {loadingError && (
           <p className="error" role="alert">
@@ -77,13 +76,13 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
           </p>
         )}
 
-        {providers === null && !loadingError && <p className="muted">Cargando…</p>}
+        {providers === null && !loadingError && <p className="muted">{messages.app.loading}</p>}
 
         {providers && (
           <div className="provider-list">
             <section className="provider-section">
-              <h3>Recomendados</h3>
-              {featured.length === 0 && <p className="muted">Aún no hay proveedores destacados.</p>}
+              <h3>{messages.provider.featuredHeading}</h3>
+              {featured.length === 0 && <p className="muted">{messages.provider.noFeatured}</p>}
               {featured.map((provider) => (
                 <ProviderCard key={provider.id} provider={provider} onChanged={changed} />
               ))}
@@ -96,7 +95,7 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
                 aria-expanded={othersOpen}
                 onClick={() => setOthersOpen((v) => !v)}
               >
-                Otros proveedores ({others.length})
+                {messages.provider.othersButton(others.length)}
               </button>
               {othersOpen && (
                 <div className="provider-others">
@@ -104,11 +103,11 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
                     type="search"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Buscar proveedor"
-                    aria-label="Buscar proveedor"
+                    placeholder={messages.provider.searchPlaceholder}
+                    aria-label={messages.provider.searchAriaLabel}
                   />
                   {filteredOthers.length === 0 && (
-                    <p className="muted">No encontramos proveedores.</p>
+                    <p className="muted">{messages.provider.noSearchResults}</p>
                   )}
                   {filteredOthers.map((provider) => (
                     <ProviderCard key={provider.id} provider={provider} onChanged={changed} />

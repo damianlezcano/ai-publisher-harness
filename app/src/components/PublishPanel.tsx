@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, errorMessage } from "../api";
 import type { PublicationView } from "../types";
 import QrDialog from "./QrDialog";
+import { messages } from "../messages";
 
 interface PublishPanelProps {
   projectId: string;
@@ -49,7 +50,7 @@ export default function PublishPanel({ projectId, publication, onRefresh }: Publ
       await navigator.clipboard.writeText(publication.publicUrl);
       setCopied(true);
     } catch {
-      setError("No pudimos copiar el enlace.");
+      setError(messages.sharing.copyLinkFailed);
     }
   }
 
@@ -64,21 +65,21 @@ export default function PublishPanel({ projectId, publication, onRefresh }: Publ
 
   if (publication.state === "published" && publication.publicUrl) {
     return (
-      <section className="panel" aria-label="Publicación">
-        <h2>Publicación</h2>
-        <p className="status published">Publicado</p>
-        <p className="url" aria-label="Enlace público">
+      <section className="panel" aria-label={messages.sharing.panelLabel}>
+        <h2>{messages.sharing.heading}</h2>
+        <p className="status published">{messages.sharing.shared}</p>
+        <p className="url" aria-label={messages.sharing.linkLabel}>
           {publication.publicUrl}
         </p>
         <div className="row-actions wrap">
           <button type="button" onClick={() => void copy()}>
-            {copied ? "Copiado" : "Copiar enlace"}
+            {copied ? messages.common.copied : messages.sharing.copyLink}
           </button>
           <button type="button" onClick={() => void open()}>
-            Abrir
+            {messages.sharing.openLink}
           </button>
           <button type="button" onClick={() => setShowQr(true)}>
-            Mostrar QR
+            {messages.sharing.showQr}
           </button>
           <button
             type="button"
@@ -86,7 +87,7 @@ export default function PublishPanel({ projectId, publication, onRefresh }: Publ
             disabled={busy === "unpublishing"}
             onClick={() => void unpublish()}
           >
-            {busy === "unpublishing" ? "Quitando…" : "Dejar de compartir"}
+            {busy === "unpublishing" ? messages.sharing.stopping : messages.sharing.stopSharing}
           </button>
         </div>
         {error && (
@@ -100,16 +101,16 @@ export default function PublishPanel({ projectId, publication, onRefresh }: Publ
   }
 
   return (
-    <section className="panel" aria-label="Publicación">
-      <h2>Publicación</h2>
-      <p className="muted">Este proyecto todavía no se comparte en Internet.</p>
+    <section className="panel" aria-label={messages.sharing.panelLabel}>
+      <h2>{messages.sharing.heading}</h2>
+      <p className="muted">{messages.sharing.empty.title}</p>
       <button
         type="button"
         className="primary"
         disabled={busy === "publishing"}
         onClick={() => void publish()}
       >
-        {busy === "publishing" ? "Publicando…" : "Publicar"}
+        {busy === "publishing" ? messages.sharing.sharing : messages.sharing.shareAction}
       </button>
       {error && (
         <p className="error" role="alert">

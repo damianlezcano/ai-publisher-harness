@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, errorMessage } from "../api";
 import type { AgentPhase, MaterialView } from "../types";
+import { messages } from "../messages";
 
 interface ChatPanelProps {
   projectId: string;
@@ -102,19 +103,19 @@ export default function ChatPanel({
   }
 
   return (
-    <section className="panel chat" aria-label="Conversación">
-      <h2>Conversación</h2>
+    <section className="panel chat" aria-label={messages.assistant.panelLabel}>
+      <h2>{messages.assistant.heading}</h2>
 
       <div className="chat-log" aria-live="polite">
         {turns.length === 0 && agentPhase === "idle" && (
-          <p className="muted">Describí qué recurso querés crear.</p>
+          <p className="muted">{messages.assistant.emptyHint}</p>
         )}
         {turns.map((turn, index) => (
           <p key={index} className="chat-user">
             {turn.text}
           </p>
         ))}
-        {working && <p className="chat-status">Creando tu recurso…</p>}
+        {working && <p className="chat-status">{messages.agent.creating}</p>}
         {agentPhase === "completed" && agentMessage && (
           <p className="chat-status ok">{agentMessage}</p>
         )}
@@ -132,17 +133,17 @@ export default function ChatPanel({
       )}
 
       {attachmentIds.length > 0 && (
-        <ul className="chip-list" aria-label="Archivos adjuntos">
+        <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
           {attachmentIds.map((id) => {
             const material = materialById.get(id);
-            const name = material?.displayName ?? "Archivo adjunto";
+            const name = material?.displayName ?? messages.assistant.attachmentFallback;
             return (
               <li key={id} className="chip">
                 <span>{name}</span>
                 <button
                   type="button"
                   className="chip-remove"
-                  aria-label={`Quitar ${name}`}
+                  aria-label={messages.assistant.removeAttachment(name)}
                   disabled={working || pasteBusy}
                   onClick={() => removeAttachment(id)}
                 >
@@ -162,25 +163,25 @@ export default function ChatPanel({
         }}
       >
         <label className="sr-only" htmlFor="prompt-input">
-          Pedido a la IA
+          {messages.assistant.promptLabel}
         </label>
         <textarea
           id="prompt-input"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onPaste={(e) => void handlePaste(e)}
-          placeholder="Ej.: Creá una actividad interactiva sobre la fotosíntesis"
+          placeholder={messages.assistant.placeholder}
           rows={3}
           disabled={working || pasteBusy}
         />
         <div className="chat-actions">
           {working ? (
             <button type="button" className="danger" onClick={() => void cancel()}>
-              Cancelar
+              {messages.common.cancel}
             </button>
           ) : (
             <button type="submit" className="primary" disabled={prompt.trim() === "" || pasteBusy}>
-              Enviar
+              {messages.common.send}
             </button>
           )}
         </div>

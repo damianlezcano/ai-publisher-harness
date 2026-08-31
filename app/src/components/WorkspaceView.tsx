@@ -3,6 +3,7 @@ import ChatPanel from "./ChatPanel";
 import CreationsPanel from "./CreationsPanel";
 import MaterialsPanel from "./MaterialsPanel";
 import PublishPanel from "./PublishPanel";
+import { messages } from "../messages";
 
 interface WorkspaceViewProps {
   project: ProjectView;
@@ -23,7 +24,7 @@ export default function WorkspaceView({
     <div className="view workspace">
       <header className="view-header">
         <button type="button" className="secondary" onClick={onBack}>
-          ← Proyectos
+          {messages.project.backToList}
         </button>
         <h1>{project.name}</h1>
       </header>

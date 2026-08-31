@@ -3,6 +3,7 @@ import { api, errorMessage } from "../api";
 import { humanDate, humanSize, kindLabel, visibilityLabel } from "../labels";
 import type { CreationView, PreviewData } from "../types";
 import PreviewModal from "./PreviewModal";
+import { messages } from "../messages";
 
 interface CreationsPanelProps {
   projectId: string;
@@ -52,7 +53,7 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
     setError(null);
     setPreviewAnnouncement(null);
     if (isWebKind(creation.kind)) {
-      setPreviewAnnouncement("Abriendo vista previa…");
+      setPreviewAnnouncement(messages.creation.previewLoading);
       try {
         await api.previewOpenWeb(projectId, creation.id);
       } catch (err) {
@@ -74,8 +75,8 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
   }
 
   return (
-    <section className="panel" aria-label="Creaciones">
-      <h2>Creaciones</h2>
+    <section className="panel" aria-label={messages.creation.panelLabel}>
+      <h2>{messages.creation.heading}</h2>
       <p className="sr-only" aria-live="polite">
         {previewAnnouncement ?? ""}
       </p>
@@ -85,7 +86,7 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
         </p>
       )}
       {creations.length === 0 ? (
-        <p className="muted">Todavía no hay creaciones. Pedile algo a la IA.</p>
+        <p className="muted">{messages.creation.empty.title}</p>
       ) : (
         <ul className="item-list">
           {creations.map((creation) => (
@@ -103,7 +104,7 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
                     disabled={busyId === creation.id}
                     onClick={() => void showPreview(creation)}
                   >
-                    Vista previa
+                    {messages.creation.preview}
                   </button>
                 )}
                 <button
@@ -112,7 +113,7 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
                   disabled={busyId === creation.id}
                   onClick={() => void toggle(creation)}
                 >
-                  {creation.visibility === "public" ? "Marcar privado" : "Se compartirá"}
+                  {visibilityLabel(creation.visibility)}
                 </button>
                 <button
                   type="button"
@@ -120,7 +121,9 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
                   disabled={busyId === creation.id}
                   onClick={() => void open(creation.id)}
                 >
-                  {isWebKind(creation.kind) ? "Abrir en navegador" : "Abrir"}
+                  {isWebKind(creation.kind)
+                    ? messages.creation.openInBrowser
+                    : messages.common.open}
                 </button>
               </span>
             </li>
