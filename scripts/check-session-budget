@@ -50,13 +50,21 @@ if [[ -z $session_id ]]; then
   [[ -n $session_id ]] || fail_closed "cannot resolve the current OpenCode session"
 fi
 
-export_json="$(opencode export "$session_id" 2>/dev/null || true)"
-[[ -n $export_json ]] || fail_closed "opencode export returned nothing for $session_id"
+# Capture the export to a temp file: `opencode export` output is large and
+# `$(...)` can be truncated by the capturing shell, which would fail closed even
+# though the session is well under the rotation budget.
+export_tmp="$(mktemp)"
+trap 'rm -f "$export_tmp"' EXIT
+opencode export "$session_id" > "$export_tmp" 2>/dev/null || true
+[[ -s $export_tmp ]] || {
+  rm -f "$export_tmp"
+  fail_closed "opencode export returned nothing for $session_id"
+}
 
-budget="$(printf '%s\n' "$export_json" | python3 -c '
+budget="$(python3 -c '
 import json, sys
 try:
-    data = json.load(sys.stdin)
+    data = json.load(open(sys.argv[1]))
     msgs = data.get("messages") or []
     total = None
     for m in msgs:
@@ -73,7 +81,8 @@ try:
     print(total)
 except Exception:
     sys.exit(2)
-' 2>/dev/null || true)"
+' "$export_tmp" 2>/dev/null || true)"
+rm -f "$export_tmp"
 [[ -n $budget ]] || fail_closed "export for $session_id has no measurable tokens.total"
 
 if (( budget < warn_at )); then
