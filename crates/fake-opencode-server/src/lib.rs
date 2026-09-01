@@ -27,13 +27,16 @@ pub struct Script {
     pub session_status: u16,
     pub session_body: String,
     pub last_directory: Option<String>,
+    pub last_session_id: String,
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
+    pub prompt_appends_response: bool,
     pub status_sequence: Vec<String>,
     pub status_index: usize,
     pub status_delay: Duration,
     pub status_body_override: Option<String>,
+    pub messages_body: String,
     pub diff_status: u16,
     pub diff_body: String,
     pub abort_status: u16,
@@ -196,6 +199,46 @@ fn default_models() -> Vec<Value> {
     ]
 }
 
+fn default_messages() -> String {
+    r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"done"}]}]"#.into()
+}
+
+/// Append a synthetic assistant response to the message list so that watermark
+/// checks (assistant message count before vs. after prompt_async) see progress.
+fn append_assistant_response(current: &str) -> String {
+    let mut messages: Vec<Value> = serde_json::from_str(current).unwrap_or_default();
+    let text = messages
+        .iter()
+        .rev()
+        .find(|m| {
+            m.get("role").and_then(Value::as_str).or_else(|| {
+                m.get("info")
+                    .and_then(|i| i.get("role"))
+                    .and_then(Value::as_str)
+            }) == Some("assistant")
+        })
+        .and_then(|m| {
+            m.get("parts")
+                .and_then(Value::as_array)
+                .and_then(|parts| {
+                    parts.iter().find_map(|p| {
+                        if p.get("type").and_then(Value::as_str) == Some("text") {
+                            p.get("text").and_then(Value::as_str)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .or_else(|| m.get("content").and_then(Value::as_str))
+        })
+        .unwrap_or("done");
+    messages.push(json!({
+        "info": { "id": "msg-appended", "role": "assistant" },
+        "parts": [{ "type": "text", "text": text }]
+    }));
+    serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())
+}
+
 impl Default for Script {
     fn default() -> Self {
         Self {
@@ -205,13 +248,16 @@ impl Default for Script {
             session_status: 200,
             session_body: r#"{"id":"ses-1"}"#.into(),
             last_directory: None,
+            last_session_id: "ses-1".into(),
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
             prompt_called: false,
+            prompt_appends_response: true,
             status_sequence: vec!["idle".into()],
             status_index: 0,
             status_delay: Duration::ZERO,
             status_body_override: None,
+            messages_body: default_messages(),
             diff_status: 200,
             diff_body: "[]".into(),
             abort_status: 204,
@@ -284,6 +330,7 @@ impl FakeServer {
 
     pub fn set_session_id(&self, id: &str) {
         self.script().session_body = format!(r#"{{"id":"{id}"}}"#);
+        self.script().last_session_id = id.to_owned();
     }
 
     pub fn fail_session(&self) {
@@ -307,6 +354,10 @@ impl FakeServer {
         self.script().diff_body = body.to_owned();
     }
 
+    pub fn set_messages_body(&self, body: &str) {
+        self.script().messages_body = body.to_owned();
+    }
+
     pub fn set_status_delay(&self, delay: Duration) {
         self.script().status_delay = delay;
     }
@@ -325,6 +376,13 @@ impl FakeServer {
 
     pub fn set_prompt_status(&self, status: u16) {
         self.script().prompt_status = status;
+    }
+
+    /// When true (default), each `POST /session/{id}/prompt_async` appends a
+    /// new assistant message to the message list, simulating the real sidecar
+    /// behavior that watermark checks rely on.
+    pub fn set_prompt_appends_response(&self, append: bool) {
+        self.script().prompt_appends_response = append;
     }
 
     pub fn set_session_poll_body(&self, body: &str) {
@@ -410,6 +468,9 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     let Some((method, path, body)) = read_request(&mut stream) else {
         return;
     };
+    // Strip query string so handlers can match routes with parameters (e.g.
+    // `/session/{id}/message?limit=...`).
+    let path = path.split('?').next().unwrap_or(&path).to_owned();
     let mut state = script
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -638,6 +699,45 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         return;
     }
 
+    if method == "GET" && path == "/session/status" {
+        let delay = state.status_delay;
+        let override_body = state.status_body_override.clone();
+        let session_id = state.last_session_id.clone();
+        let phase = if state.status_index < state.status_sequence.len() {
+            let phase = state.status_sequence[state.status_index].clone();
+            if state.status_index + 1 < state.status_sequence.len() {
+                state.status_index += 1;
+            }
+            phase
+        } else {
+            state
+                .status_sequence
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "idle".into())
+        };
+        drop(state);
+        if !delay.is_zero() {
+            thread::sleep(delay);
+        }
+        let body = override_body.unwrap_or_else(|| {
+            let lower = phase.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "idle" | "done" | "complete" | "completed" | "success"
+            ) {
+                // The real 1.18.25 sidecar signals completion by omitting the
+                // session key from /session/status (empty map).
+                "{}".into()
+            } else {
+                let status_type = if lower == "working" { "busy" } else { &phase };
+                format!(r#"{{"{session_id}":{{"type":"{status_type}"}}}}"#)
+            }
+        });
+        write_response(&mut stream, 200, body.as_bytes());
+        return;
+    }
+
     if method == "POST" && path == "/session" {
         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body)
             && let Some(dir) = value.get("directory").and_then(|v| v.as_str())
@@ -656,8 +756,11 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         .and_then(|rest| rest.strip_suffix("/prompt_async"))
         && method == "POST"
     {
-        let _ = id;
+        state.last_session_id = id.to_owned();
         state.prompt_called = true;
+        if state.prompt_appends_response {
+            state.messages_body = append_assistant_response(&state.messages_body);
+        }
         let delay = state.prompt_delay;
         let status = state.prompt_status;
         drop(state);
@@ -673,7 +776,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         .and_then(|rest| rest.strip_suffix("/abort"))
         && method == "POST"
     {
-        let _ = id;
+        state.last_session_id = id.to_owned();
         state.abort_called = true;
         let status = state.abort_status;
         drop(state);
@@ -686,7 +789,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         .and_then(|rest| rest.strip_suffix("/diff"))
         && method == "GET"
     {
-        let _ = id;
+        state.last_session_id = id.to_owned();
         let status = state.diff_status;
         let body = state.diff_body.clone();
         drop(state);
@@ -694,35 +797,27 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         return;
     }
 
+    if let Some(id) = path
+        .strip_prefix("/session/")
+        .and_then(|rest| rest.strip_suffix("/message"))
+        && method == "GET"
+    {
+        state.last_session_id = id.to_owned();
+        let body = state.messages_body.clone();
+        drop(state);
+        write_response(&mut stream, 200, body.as_bytes());
+        return;
+    }
+
     if let Some(id) = path.strip_prefix("/session/")
         && method == "GET"
         && !id.contains('/')
     {
-        let _ = id;
-        let delay = state.status_delay;
-        let override_body = state.status_body_override.clone();
-        let phase = if state.status_index < state.status_sequence.len() {
-            let phase = state.status_sequence[state.status_index].clone();
-            if state.status_index + 1 < state.status_sequence.len() {
-                state.status_index += 1;
-            }
-            phase
-        } else {
-            state
-                .status_sequence
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "working".into())
-        };
+        state.last_session_id = id.to_owned();
+        let body = format!(
+            r#"{{"id":"{id}","slug":"fake","projectID":"proj-fake","directory":"/tmp/fake","path":"","cost":0,"tokens":{{"input":0,"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}},"title":"Fake session","version":"1.18.25","time":{{"created":0,"updated":0}}}}"#
+        );
         drop(state);
-        if !delay.is_zero() {
-            thread::sleep(delay);
-        }
-        let body = override_body.unwrap_or_else(|| {
-            format!(
-                r#"{{"id":"{id}","status":"{phase}","messages":[{{"role":"assistant","parts":[{{"type":"text","text":"done"}}]}}]}}"#
-            )
-        });
         write_response(&mut stream, 200, body.as_bytes());
         return;
     }

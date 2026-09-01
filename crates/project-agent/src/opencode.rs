@@ -18,6 +18,8 @@ use crate::model::{
 use crate::port::AgentEngine;
 
 const DEFAULT_TASK: Duration = Duration::from_secs(120);
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const MESSAGE_LIMIT: &str = "1000";
 
 pub struct OpenCodeAgentEngine {
     backend: Arc<OpenCodeBackend>,
@@ -81,23 +83,43 @@ impl OpenCodeAgentEngine {
         self.backend.require_ready().map_err(map_backend_error)
     }
 
-    fn poll_session(&self, session_id: &str) -> AgentResult<(String, Option<String>)> {
-        let path = format!("/session/{session_id}");
+    fn poll_session(
+        &self,
+        session_id: &str,
+        before_assistant_count: usize,
+    ) -> AgentResult<(String, Option<String>)> {
+        let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
         loop {
-            let (status, body) = self.backend.get(&path).map_err(map_backend_error)?;
+            let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
             if !(200..300).contains(&status) {
                 return Err(AgentError::Http(format!("session status {status}")));
             }
             let value: Value = serde_json::from_str(&body)
-                .map_err(|err| AgentError::Http(format!("malformed session JSON: {err}")))?;
-            let phase = session_phase(&value);
+                .map_err(|err| AgentError::Http(format!("malformed session status JSON: {err}")))?;
+            let phase = session_status_phase(&value, session_id).unwrap_or_else(|| "idle".into());
             match phase.as_str() {
                 "idle" | "done" | "complete" | "completed" | "success" => {
-                    return Ok((phase, last_assistant_text(&value)));
+                    let messages = self.fetch_message_list(session_id)?;
+                    if assistant_message_count(&messages) > before_assistant_count {
+                        let message = last_assistant_text_from_messages(&messages);
+                        if message.is_some() {
+                            return Ok((phase, message));
+                        }
+                    }
+                    // The sidecar may have marked idle before the new assistant
+                    // message is visible; keep polling until a new one appears.
                 }
                 "failed" | "error" | "failure" => {
-                    return Err(AgentError::TaskFailed(phase));
+                    let messages = self.fetch_message_list(session_id)?;
+                    let text = if assistant_message_count(&messages) > before_assistant_count {
+                        last_assistant_text_from_messages(&messages)
+                    } else {
+                        None
+                    };
+                    return Err(AgentError::TaskFailed(
+                        text.unwrap_or_else(|| "task failed".into()),
+                    ));
                 }
                 "aborted" | "cancelled" | "canceled" => {
                     return Err(AgentError::Cancelled);
@@ -107,8 +129,31 @@ impl OpenCodeAgentEngine {
             if Instant::now() >= deadline {
                 return Err(AgentError::Timeout);
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(STATUS_POLL_INTERVAL);
         }
+    }
+
+    fn fetch_message_list(&self, session_id: &str) -> AgentResult<Vec<Value>> {
+        let path = format!("/session/{session_id}/message?limit={MESSAGE_LIMIT}");
+        let (status, body) = self.backend.get(&path).map_err(map_backend_error)?;
+        if !(200..300).contains(&status) {
+            return Err(AgentError::Http(format!("message list status {status}")));
+        }
+        let value: Value = serde_json::from_str(&body)
+            .map_err(|err| AgentError::Http(format!("malformed message list JSON: {err}")))?;
+        Ok(match value {
+            Value::Array(items) => items,
+            Value::Object(mut map) => map
+                .remove("data")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn count_assistant_messages(&self, session_id: &str) -> AgentResult<usize> {
+        let messages = self.fetch_message_list(session_id)?;
+        Ok(assistant_message_count(&messages))
     }
 
     fn fetch_artifacts(&self, session_id: &str) -> AgentResult<Vec<Artifact>> {
@@ -190,6 +235,7 @@ impl AgentEngine for OpenCodeAgentEngine {
                 "modelID": model.model_id,
             });
         }
+        let before_assistant_count = self.count_assistant_messages(&session.id)?;
         let path = format!("/session/{}/prompt_async", session.id);
         let (status, _) = self.backend.post(&path, &body).map_err(map_backend_error)?;
         if status != 204 && !(200..300).contains(&status) {
@@ -197,7 +243,7 @@ impl AgentEngine for OpenCodeAgentEngine {
             return Err(AgentError::Http(format!("prompt_async status {status}")));
         }
 
-        match self.poll_session(&session.id) {
+        match self.poll_session(&session.id, before_assistant_count) {
             Ok((_phase, message)) => {
                 let artifacts = self.fetch_artifacts(&session.id)?;
                 log_event("task completed");
@@ -267,29 +313,15 @@ fn log_event(event: &str) {
     eprintln!("[agent] {event}");
 }
 
-fn session_phase(value: &Value) -> String {
-    if let Some(status) = value.get("status").and_then(Value::as_str) {
-        return status.to_ascii_lowercase();
-    }
-    if let Some(status) = value
-        .get("status")
-        .and_then(|s| s.get("type").or_else(|| s.get("name")))
+fn session_status_phase(value: &Value, session_id: &str) -> Option<String> {
+    value
+        .get(session_id)
+        .and_then(|entry| entry.get("type"))
         .and_then(Value::as_str)
-    {
-        return status.to_ascii_lowercase();
-    }
-    if value
-        .get("time")
-        .and_then(|t| t.get("completed"))
-        .is_some_and(|c| !c.is_null())
-    {
-        return "idle".into();
-    }
-    "working".into()
+        .map(|s| s.to_ascii_lowercase())
 }
 
-fn last_assistant_text(value: &Value) -> Option<String> {
-    let messages = value.get("messages")?.as_array()?;
+fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
     let mut last = None;
     for message in messages {
         let role = message
@@ -310,6 +342,25 @@ fn last_assistant_text(value: &Value) -> Option<String> {
         }
     }
     last
+}
+
+fn assistant_message_count(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    message
+                        .get("info")
+                        .and_then(|info| info.get("role"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("");
+            role == "assistant"
+        })
+        .count()
 }
 
 fn message_text(message: &Value) -> Option<String> {
