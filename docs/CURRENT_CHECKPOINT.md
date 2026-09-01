@@ -4,23 +4,25 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK A INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK B INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
 
-- **Current main commit: `e6389ea`** (merge de Task A). `git log --oneline -12`
+- **Current main commit: `88761be`** (merge de Task B). `git log --oneline -12`
   para el detalle.
-- **Progreso del pass:** Task A INTEGRADA y verificada (`e6389ea`, merge de
-  `corr/a-creation-contract`; autor kimi `41a7969`+`a8547e1`, revisor qwen
-  APPROVE tras REQUEST_CHANGES resuelto). `./scripts/verify` PASS en main.
-  Worktrees de Task A removidos. Panes del author/reviewer cerrados.
-- **Session budget: CHECKPOINT_WARNING (85.7K, 80K-99,999)**. Este orquestador
-  rota en un punto seguro: Task A completa, integrada y verificada. NO se
-  inició Task B. NO M11. NO bypaseo del gate.
+- **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
+  `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
+  `corr/b-attachment-flow`; autor kimi `a16a07c`, revisor qwen APPROVE —
+  solo nits no bloqueantes). `./scripts/verify` PASS en main tras B
+  (175 tests frontend, cargo verde, M10 contract ok). Worktree de Task B
+  removido, branch borrado. Panes author/reviewer de A y B cerrados.
+- **Session budget: CHECKPOINT_WARNING (89.5K, 80K-99,999)**. Este orquestador
+  rota en un punto seguro: Task B completa, integrada y verificada. NO se
+  inició Task C. NO M11. NO bypaseo del gate.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
   AppImage real construido y verificado (detalles al final). NO reiniciar.
 - **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
-  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-G: A done, B-G pendientes.
+  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-G: A y B done, C-G pendientes.
 
 ## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
@@ -139,7 +141,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | # | Tarea | Autor | Revisor | Ownership | AC (resumen) |
 | --- | --- | --- | --- | --- | --- |
 | A | ~~Contrato de CREACIÓN user-facing + fin de fuga técnica~~ **HECHA** (`e6389ea`) | kimi-k2.7-code | qwen3.8-flash | ~~`crates/project-agent`, `crates/project-app/src/app.rs`, dtos, `app/src/components/CreationsPanel.tsx`~~ | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano (build_instruction en service.rs); sin paths/comandos en UX normal. APPROVE. |
-| B | Flujo real de adjunto/contexto | kimi-k2.7-code | qwen3.8-flash | `app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx`, `crates/project-agent` (tests E2E con fake) | Drop → material adjunto al mensaje del usuario; llega al agente; tests deterministas |
+| B | ~~Flujo real de adjunto/contexto~~ **HECHA** (`88761be`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx` + tests~~ | Drop/import → material adjunto al mensaje del usuario (attachmentIds lift a WorkspaceView, controlado a ComposerBar); llega al agente vía `agent_send` con ids; sin resource-item duplicado; tests deterministas. APPROVE (nits: race agentPhase estrecho, reset de attachmentIds al cambiar de proyecto — no bloqueantes). |
 | C | Error falso de arranque (STARTING/READY/FAILED) | kimi-k2.7-code | qwen3.8-flash | `crates/project-opencode`, `crates/project-agent`, `crates/project-app` (app_status), `app/src/App.tsx` | Estados explícitos; "Preparando el asistente…"; solo fallo terminal real; tests cold/delayed/failure/recovery |
 | D | Terminología de conversación | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/messages.ts`, tests, legacy naming | Default amigable; sin "Proyecto sin título" en UI activa; legacy schema ok |
 | E | Duplicado/texto verde | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx` | Eliminar doble render del contenido asistente; test de regresión |
@@ -163,6 +165,8 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
   (integrado `abd41bc`; puede removerse; quedó `app/package-lock.json` sin
   trackear — higiene conocida).
 - Worktrees de Task A removidos tras integración.
+- Worktree de Task B (`../ai-publisher-corr-01-b`, `corr/b-attachment-flow`)
+  removido y branch borrado tras integración de `88761be`.
 - Nuevos worktrees de la corrección: crear en paths hermanos (ej.
   `../ai-publisher-corr-01-<task>`) por tarea.
 
@@ -197,15 +201,17 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 - Task A: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
   (APPROVE tras REQUEST_CHANGES). Ambos panes cerrados. Grok NO usado (G/F-UI
   pendientes).
+- Task B: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
+  (APPROVE, nits no bloqueantes). Commit `a16a07c`. Ambos panes cerrados.
 
 ## Próximo paso (inmediato)
 
 1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
-   Task A; punto seguro: repo limpio, Task A verificada, panes de A cerrados).
+   Task B; punto seguro: repo limpio, Task B verificada, panes de B cerrados).
 2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   continuar con **Task B** (flujo real de adjunto/contexto) usando el circuito
-   autor→reviewer→integración con el orden A→B→C→D/E→F→G→Playwright→AppImage.
-   Task A NO se repite (leer el diff de `e6389ea` solo si hace falta contexto
-   para B: p.ej. `useShareControl`, `build_instruction`).
+   continuar con **Task C** (estados STARTING/READY/FAILED y eliminación del
+   error falso de arranque) usando el circuito autor→reviewer→integración con
+   el orden A→B→C→D/E→F→G→Playwright→AppImage. Task B NO se repite (leer el
+   diff de `88761be` solo si hace falta contexto para C).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
