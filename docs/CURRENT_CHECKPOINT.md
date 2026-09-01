@@ -4,7 +4,12 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (POST-T7 HUMAN BLOCKER PASS INTEGRADO — BLOQUEADORES A/B/C CORREGIDOS, ESPERANDO NUEVO APPIMAGE + RE-ACEPTACIÓN HUMANA, 2026-09-01)
+## Estado actual (APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO — TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE, M11 NO INICIADO, 2026-09-01)
+
+- **APPIMAGE NUEVO POST-T7 REAL = PASS (sesión FRESH, deepseek-v4-flash, validación técnica completa).** AppImage NUEVO construido desde main `773278d` (post-T7 human blocker merge `d6f97ab` + checkpoint `773278d`) con el packaging canónico M10 `scripts/smoke-package appimage`. **EXIT=0 (smoke-package PASS).** Artefacto:
+  `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`, **180.816.376 bytes**, **SHA-256 `930ee074bfbe40b4cf1e5c9582c93b884d695d6348bf7521e764ade5b9f6834d`** (NUEVO; difiere del stale T7 `3dba67a8…`), timestamp 2026-09-01 20:47:14 -0300, source commit `773278d`, build via `scripts/smoke-package appimage` (fetch-sidecars → `cargo tauri build --bundles appimage` → fallback documentado a appimagetool), repo limpio (working tree clean) antes del build, sin cambios de producto sin commitear. Sidecars bundlados pineados verificados en el payload extraído: opencode **1.18.25** y cloudflared **2026.8.3** (cloudflared SHA-256 `f29324fe…` idéntico al pin `config/components.json`). **Lanzamiento real en Fedora/Wayland (DISPLAY=:0):** app corre con WebKitNetworkProcess + WebKitWebProcess activos, backend `[agent] starting → ready` SIN falso error de arranque, sin errores en log. **PATH-independencia:** lanzado con PATH sin opencode/cloudflared; el sidecar opencode hijo se ejecuta desde el mount propio del AppImage (`/tmp/.mount_EducAIGcoBlM/usr/bin/opencode`, port 42523). **Frontend embebido correcto:** el binario embebe exactamente `assets/index-Dt0XeFOc.js` + `assets/index-CxEdFXeO.css` (idénticos nombres a los del `dist` generado en este build desde main `773278d`; los markers del fix — CSS `.conversation-menu-dropdown button.danger` / `danger-soft` y JS "Eliminar conversación" / `chat-status.err` — presentes en el dist embebido y `external_directory` en el binario). **`./scripts/verify` EXIT=0** (cargo fmt/clippy/test, FE 202/202, format/lint/typecheck, M10 + UX_REDESIGN_01 contracts, fetch-sidecars --check, cargo check src-tauri, git diff --check). **Targeted Blocker A runtime (probes directos contra el sidecar real empaquetado 1.18.25, 127.0.0.1:42523):** `POST /session` + body JSON `directory` → la sesión queda ligada al mount del AppImage (`/tmp/.mount_EducAIGcoBlM/usr`) — reproduce el bug; `POST /session?directory=%2Ftmp%2Fopencode%2Fpostt7-evidence%2Fws-test` → la sesión queda ligada al workspace EducAI deseado (campo `directory` en `GET /session`). **Secuencia de requests (sin aceptar "hola" único):** 3 prompts en la MISMA sesión ligada (hola → "Hola. ¿En qué puedo ayudarte?"; 2º → "Sí, sigo la conversación. ¿Qué necesitas?"; 3º → "Recibido, tercer mensaje. ¿En qué trabajamos?"), 1 conversación/sesión NUEVA con contexto de adjunto (rosco.txt → "Listo."), todos con `cwd` del message = `/tmp/opencode/postt7-evidence/ws-test`, sin ASK external_directory (permission deny bindeado), sin espera ~120s (respuestas en ~1s), y sin misclasificar fallo en vuelo como arranque. **Targeted Blocker B (vitest `ChatPanel.test.tsx`):** "does not duplicate a persisted failed assistant message as raw error text" PASS + "still renders a failed status line when an earlier failed bubble is not the newest message" PASS (fix de review preservado: burbuja histórica NO suprime fallo nuevo). **Targeted Blocker C (vitest `App.test.tsx` menu + CSS):** menu ⋮ Renombrar/Eliminar con `role=menu`/`menuitem` PASS; CSS `.conversation-menu-dropdown button.danger` con `color: var(--danger)` sobre superficie (contraste legible), hover `--danger-soft`, disabled `--muted`, nowrap + padding compacto, copy español intacto. Limpieza: instancias de prueba del AppImage (nueva y stale T7) terminadas, mounts `/tmp/.mount_EducAI*` removidos, worktrees limpios (solo `main`), branch único `corr/a-creation-contract` preexistente sin tocar. **Status: TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE. NO HUMAN ACCEPTED. M11 NO INICIADO. Gate siguiente y único: HUMAN PRODUCT-OWNER RE-ACCEPTANCE sobre ESTE AppImage nuevo (`930ee074…`).** Limitaciones para validación humana: (1) secuencia real-provider en el AppImage con modelo gratis y adjunto rosco se dejó al escenario §17 humano; (2) la validación de prompts usó el modelo gratis `big-pickle` determinista; (3) la visibilidad/contraste visual final del menú y los flows UI completos se confirman en el escenario humano; (4) no se ejecutó el escenario §17 completo (es humano).
+
+## Estado previo (POST-T7 HUMAN BLOCKER PASS INTEGRADO — BLOQUEADORES A/B/C CORREGIDOS, ESPERANDO NUEVO APPIMAGE + RE-ACEPTACIÓN HUMANA, 2026-09-01)
 
 - **POST-T7 HUMAN BLOCKER PASS INTEGRADO (`d6f97ab`).** El product owner probó
   el AppImage real T7 y encontró 3 bloqueadores; este pass los corrigió y
@@ -340,13 +345,13 @@ Resta solo la aprobación humana del product owner. NO es M11.**
 
 ## Aceptación final real (M9/M10 ya aprobados, no repetir)
 
-- **AppImage NUEVO (T7, main `d25f957`, Task G integrada):**
+- **AppImage NUEVO POST-T7 (main `773278d`, post-T7 blocker fixes integrados):**
   `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
   180.816.376 bytes, SHA-256
-  `3dba67a83223394efa697f3e95ff6ad46ae504093df931459d2eea9b05259bd7`,
-  timestamp 2026-09-01 17:35:27 -0300. Este es el artefacto para la revisión
-  humana. (AppImage previo sin Task G: SHA-256 `423cdb28…` — NO usar como
-  evidencia T7.)
+  `930ee074bfbe40b4cf1e5c9582c93b884d695d6348bf7521e764ade5b9f6834d`,
+  timestamp 2026-09-01 20:47:14 -0300. **ESTE es el artefacto para la
+  re-aceptación humana.** (AppImage previo T7 `3dba67a8…` es STALE — predata los
+  fixes A/B/C; NO usar como evidencia de aceptación.)
 - Modelo gratis real confirmado: `big-pickle` (providerID `opencode`), cost 0,
   respuesta "¡Hola! ¿Cómo puedo ayudarte?". `modelGetSelected`/`default_free_model`
   determinista (ADR-0015); NO hardcodear nombres (solo tests/fake).
@@ -486,12 +491,12 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
 
-**POST-T7 HUMAN BLOCKER PASS INTEGRADO (`d6f97ab`). Repo en
-`TÉCNICAMENTE LISTO PARA NUEVA REVISIÓN HUMANA`.** El ÚNICO gate siguiente es
-construir un **AppImage NUEVO desde `d6f97ab`** (packaging M10 canónico),
-verificarlo técnicamente (launch real + sidecars bundlados + `./scripts/verify`),
-y que el **product owner re-corra el escenario real §15** sobre ESE AppImage
-nuevo. M11 NO iniciar.
+**APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO (`930ee074…`, main `773278d`).** Repo en
+`TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE`. El ÚNICO gate siguiente es que el
+**product owner re-corra el escenario real §17** sobre ESE AppImage nuevo
+(`app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
+SHA-256 `930ee074bfbe40b4cf1e5c9582c93b884d695d6348bf7521e764ade5b9f6834d`).
+Solo el humano puede marcar HUMAN ACCEPTED. M11 NO iniciar.
 
 1. Construir AppImage NUEVO desde main `d6f97ab` con `scripts/smoke-package
    appimage` (fetch-sidecars → `cargo tauri build --bundles appimage`), sidecars
