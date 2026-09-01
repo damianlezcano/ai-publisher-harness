@@ -4,7 +4,39 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (FINAL VALIDATION — T6 PLAYWRIGHT HEADED PASS, T7 PENDIENTE EN SESIÓN FRESH, ORQUESTADOR ROTADO, 2026-09-01)
+## Estado actual (FINAL VALIDATION — T6 PLAYWRIGHT HEADED PASS + T7 APPIMAGE NUEVO REAL PASS, TÉCNICAMENTE LISTO PARA REVISIÓN HUMANA, 2026-09-01)
+
+- **T7 APPIMAGE NUEVO REAL = PASS (sesión FRESH, deepseek-v4-flash).** AppImage
+  NUEVO construido desde main `d25f957` (Task G integrada via `2451c50`) con el
+  packaging canónico M10 `scripts/smoke-package appimage` (fetch-sidecars →
+  `cargo tauri build --bundles appimage` → fallback documentado a appimagetool →
+  inspección payload sidecars). **EXIT=0 (smoke-package PASS).** Artefacto:
+  `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
+  **180.816.376 bytes**, **SHA-256 `3dba67a83223394efa697f3e95ff6ad46ae504093df931459d2eea9b05259bd7`**
+  (NUEVO; difiere del previo `423cdb28…`), timestamp 2026-09-01 17:35:27 -0300.
+  Sidecars bundlados pineados y verificados en el payload y en el mount en vivo:
+  opencode **1.18.25** y cloudflared **2026.8.3** (cloudflared SHA-256
+  `f29324fe…` idéntico al pin). **Lanzamiento real en Fedora/Wayland
+  (DISPLAY=:0):** app corre con WebKit renderer + network process activos,
+  backend `[agent] starting → ready` SIN falso error de arranque, sin errores en
+  log. **PATH-independencia:** lanzado con PATH sin opencode/cloudflared; el
+  sidecar opencode hijo se ejecuta desde el mount propio del AppImage
+  (`/tmp/.mount_EducAI…/usr/bin/opencode`). **Frontend Task G verificado:**
+  el binario embebe exactamente `assets/index-CJy6dhvp.js` +
+  `assets/index-BlpY7WEx.css` (idénticos al `dist` de main generado en este
+  build). **`./scripts/verify` EXIT=0** (cargo fmt/clippy/test ok — 85 suites
+  ok —, pnpm format/lint/typecheck ok, FE 201/201, fetch-sidecars --check ok,
+  M10 version alignment 0.1.0, UX_REDESIGN_01 contract ok, cargo check
+  src-tauri ok, git diff --check ok). Limpieza de procesos/mounts AppImage de
+  prueba completada. **Status: TÉCNICAMENTE READY FOR HUMAN REVIEW. M11 NO
+  iniciado. Gate siguiente y único: HUMAN PRODUCT-OWNER ACCEPTANCE (el humano
+  abre el AppImage y corre el escenario real §15).**
+- **T7 PENDIENTE (próxima sesión FRESH):** ~~AppImage NUEVO real desde main
+  `2451c50`, sidecars pineados (opencode 1.18.25, cloudflared 2026.8.3, SIN
+  cambiarlos), `./scripts/verify` PASS contra artefacto fresco, y luego STOP para
+  aprobación humana del product owner.~~ **HECHO (ver arriba). M11 NO iniciar.
+  Gate siguiente y único: HUMAN PRODUCT-OWNER ACCEPTANCE.**
+- **ESTADO PREVIO (T6 y Task G) — ver secciones históricas abajo.**
 
 - **Current main commit: `2451c50`** (merge de Task G). La corrección A-G sigue
   INTEGRADA y verificada (ver detalle abajo). `git log --oneline -14` para el
@@ -82,8 +114,9 @@
   arriba)**. **Task G INTEGRADA (`2451c50`; autor Cursor Grok 4.6 High
   `e345520`, revisor UX Cursor Grok 4.6 High APPROVE, revisor código/a11y qwen
   APPROVE — ver detalle arriba)**. `./scripts/verify` PASS en main tras G.
-  Tasks A-G hechas; **T6 Playwright headed PASS (57/57); resta T7 AppImage
-  NUEVO real (sesión fresh) y aprobación humana**.
+Tasks A-G hechas; **T6 Playwright headed PASS (57/57); T7 AppImage NUEVO
+   real PASS (ver arriba); resta solo la aprobación humana del product
+   owner**.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
@@ -224,14 +257,14 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | F | ~~Eliminar conversación (backend semántica + UI)~~ **HECHA** (`6ea0e67`) | kimi-k2.7-code (`26411f1` + fixes `14365c0`) | qwen3.8-flash | ~~`crates/project-app/src/app.rs` (delete + unpublish + serialización agente), `crates/project-agent/src/service.rs` (cleanup huérfanos), `app/src/{App,components/ConversationsSidebar}.tsx`, `messages.ts`, `styles.css`, tests~~ | Menú "…" contextual (Renombrar/Eliminar), ConfirmDialog type-name, delete durable + fail-closed + unpublish primero, sin huérfanos (serialización/cancel contra agente + cleanup mid-run), selección post-delete correcta, última → estado vacío, renombrar preserva id/orden/activa, tests 13 AC. REQUEST_CHANGES→APPROVE (MAJOR-1 resuelto). |
 | G | ~~Pass visual producto/UX~~ **HECHA** (`2451c50`) | Cursor Grok 4.6 High (`e345520`) | Cursor Grok 4.6 High FRESH (UX, APPROVE) + qwen3.8-flash (código/a11y, APPROVE) | ~~`app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú)~~ | Chat tipo mensajería; adjuntos en el mensaje (📄 nombre [Abrir]); creación card icon+kind+Abrir/Compartir (EducAI decide el opener); URL de compartir visible; Settings con X en título (vuelve a la misma conversación); selector de modelo sin raw ids / sin hardcode de modelo gratis; sidebar "Conversaciones"; sin dashboard; sin fuga técnica. APPROVE (UX: 5 nits no bloqueantes NIT-1..5; código/a11y: LOW/NIT). |
 | T6 | ~~Playwright headed~~ **HECHA (PASS, 57/57)** | LOW (deepseek-v4-flash) | qwen3.8-flash | `docs/ux-redesign-01/harness/` | 3 viewports, 17 flows, 57 aserciones, 78 PNG + 78 OCR + 17 a11y; flows 15-17 Task G/F (creación Abrir/Compartir, delete confirm, no-duplicado asistente); measure + ocr PASS. EXIT=0. |
-| T7 | AppImage real + `./scripts/verify` | LOW/Composer | qwen3.8-flash | packaging M10 | AppImage con sidecars, lanzamiento real, verificación completa |
+| T7 | ~~AppImage real + `./scripts/verify`~~ **HECHA (PASS)** | LOW/Composer | qwen3.8-flash | packaging M10 | AppImage con sidecars, lanzamiento real, verificación completa |
 
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
 D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
 Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
-**A, B, C, D, E, F, G YA integradas (main `2451c50`). La siguiente fase es la
-VALIDACIÓN FINAL: T6 Playwright headed, T7 AppImage NUEVO real, aprobación
-humana del product owner. NO es M11.**
+**A, B, C, D, E, F, G YA integradas (main `2451c50`). VALIDACIÓN FINAL:
+T6 Playwright headed PASS y T7 AppImage NUEVO real PASS (main `d25f957`).
+Resta solo la aprobación humana del product owner. NO es M11.**
 
 ## Worktrees
 
@@ -260,14 +293,22 @@ humana del product owner. NO es M11.**
 
 ## Aceptación final real (M9/M10 ya aprobados, no repetir)
 
-- AppImage previo: `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
-  180.816.376 bytes, SHA-256 `423cdb2815f23a01fa5e421c3203f47aea647cce3c1ea716fad1732e172fc8e2`.
+- **AppImage NUEVO (T7, main `d25f957`, Task G integrada):**
+  `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
+  180.816.376 bytes, SHA-256
+  `3dba67a83223394efa697f3e95ff6ad46ae504093df931459d2eea9b05259bd7`,
+  timestamp 2026-09-01 17:35:27 -0300. Este es el artefacto para la revisión
+  humana. (AppImage previo sin Task G: SHA-256 `423cdb28…` — NO usar como
+  evidencia T7.)
 - Modelo gratis real confirmado: `big-pickle` (providerID `opencode`), cost 0,
   respuesta "¡Hola! ¿Cómo puedo ayudarte?". `modelGetSelected`/`default_free_model`
   determinista (ADR-0015); NO hardcodear nombres (solo tests/fake).
-- PATH-independencia y sidecars bundled ya verificados (M10).
-- **Este pass NO re-testea M1-M10; solo integra las correcciones A-G, corre el
-  Playwright headed y construye un AppImage NUEVO para revisión humana.**
+- PATH-independencia y sidecars bundled verificados en M10 y re-verificados en
+  T7 contra el AppImage NUEVO (opencode 1.18.25 + cloudflared 2026.8.3 en
+  payload; launch con PATH sin sidecars usa el bundled).
+- **Este pass NO re-testea M1-M10; solo integró las correcciones A-G, corrió el
+  Playwright headed (T6) y construyó/verificó el AppImage NUEVO (T7) para
+  revisión humana.**
 
 ## Model allocation (sesión anterior cerrada)
 
@@ -387,19 +428,21 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
 
-**T6 queda HECHA (PASS) e integrada en el checkpoint. Orquestador ROTADO en
-111K al cierre de T6 (ROTATE_SESSION_REQUIRED).** La sesión siguiente FRESH
-debe continuar la VALIDACIÓN FINAL con **T7 AppImage NUEVO real**, NO con M11.
+**T6 HECHA (PASS) y T7 AppImage NUEVO real HECHO (PASS). Repo en
+`TECHNICALLY READY FOR HUMAN REVIEW`.** NO hay más gates técnicos. El ÚNICO gate
+siguiente es la **aprobación humana del product owner** con el escenario real
+§15 sobre el AppImage NUEVO
+`app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`
+(SHA-256 `3dba67a8…`, main `d25f957`, Task G integrada). M11 NO iniciar.
 
-1. Sesión FRESH (leer este checkpoint, correr `scripts/check-session-budget`,
-   esperar CONTINUE) para ejecutar **T7**: construir un AppImage NUEVO real desde
-   main `2451c50` (packaging M10 existente, sidecars pineados opencode 1.18.25 +
-   cloudflared 2026.8.3 SIN cambiarlos), verificación técnica real del artefacto
-   (lanzamiento, UI usable, sin falso error de arranque, sin dependencia de
-   opencode/cloudflared en PATH, frontend correspondiente a Task G, suite
-   `./scripts/verify` PASS contra artefacto fresco), capturar commit/source/build
-   exit/path/size/SHA-256, y STOP para **aprobación humana del product owner**
-   (solo el humano acepta el AppImage final). NO es M11.
+1. El product owner abre el AppImage NUEVO (Fedora/Wayland, chmod +x) y corre el
+   escenario real: sin falso error de arranque, modelo gratis usable, "Crear un
+   juego tipo Pasapalabra…", respuesta real del asistente, card de creación con
+   [Abrir] [Compartir], Abrir funciona, adjunto de rosco + "Usá estos datos",
+   el agente usa el archivo, la creación se actualiza, Abrir muestra la versión
+   actualizada, Compartir produce URL pública usable, renombrar/eliminar
+   conversación, reinicio y delete persistido. Solo el humano acepta el AppImage
+   final. NO intentar afirmar aceptación humana desde OpenCode.
 2. **Seguimiento recomendado NO bloqueante (de las reviews de G):**
    - (UX NIT-1 / qwen LOW) `PublishPanel.tsx`: la URL pública es `<p>` dentro de
      `role="menu"`; envolver en `role="group"` (o mover los `<p>` al contenedor
@@ -414,5 +457,5 @@ debe continuar la VALIDACIÓN FINAL con **T7 AppImage NUEVO real**, NO con M11.
      `humanSize` (export sin uso) quedaron muertos; cleanup de catálogo/CSS.
    - (F review) chequeo de existencia de proyecto autoritativo DENTRO del lock
      del agente en `AgentService::run` + test single-instance delete↔agent.
-3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
-   aprobación humana.
+3. NO iniciar M11. El pass de corrección queda en TÉCNICAMENTE READY FOR HUMAN
+   REVIEW esperando aceptación humana.
