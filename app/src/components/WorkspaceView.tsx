@@ -56,6 +56,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   const [importDetails, setImportDetails] = useState<MaterialImportResult[] | null>(null);
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
 
   const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
@@ -89,13 +90,22 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           setImportDetails(report.items);
         }
         await onRefresh();
+        if (agentPhase !== "working") {
+          const addedIds = report.items
+            .filter((item) => item.status === "added")
+            .map((item) => item.materialId ?? item.material?.id)
+            .filter((id): id is string => id != null);
+          if (addedIds.length > 0) {
+            setAttachmentIds((prev) => [...new Set([...prev, ...addedIds])]);
+          }
+        }
       } catch (err) {
         setMaterialError(err);
       } finally {
         setImporting(false);
       }
     };
-  }, [project.id, onRefresh]);
+  }, [project.id, onRefresh, agentPhase]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -224,6 +234,8 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           onCancel={cancel}
           onOpenProvider={onOpenProvider}
           onMaterialsChanged={() => void onRefresh()}
+          attachmentIds={attachmentIds}
+          onAttachmentIdsChange={setAttachmentIds}
           shareAction={
             <ShareControl
               projectId={project.id}

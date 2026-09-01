@@ -212,6 +212,72 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Falló.");
   });
 
+  it("renders an attached material only inside the user bubble, not as a standalone resource", () => {
+    render(
+      <ChatPanel
+        {...base}
+        materials={[materials[0]]}
+        messages={[
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Usá este material",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:00Z",
+            materialIds: ["m1"],
+            creationIds: [],
+          },
+        ]}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
+  });
+
+  it("renders a pending user attachment inside the bubble and not as a standalone resource", () => {
+    render(
+      <ChatPanel
+        {...base}
+        materials={[materials[0]]}
+        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
+        messages={[]}
+      />,
+    );
+    expect(screen.getByText("Pendiente")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
+  });
+
+  it("still renders genuinely unattached materials as resource items", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-1",
+            role: "user",
+            text: "Sin adjuntos",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getAllByText(messages.timeline.resourceLabel).length).toBe(2);
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
+    ).toBeInTheDocument();
+  });
+
   it("renders a pending user message until it matches a persisted message", () => {
     const { rerender } = render(
       <ChatPanel

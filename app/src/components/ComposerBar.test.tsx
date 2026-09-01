@@ -253,6 +253,38 @@ describe("ComposerBar", () => {
     expect(screen.getByRole("button", { name: "Compartir" })).toBeInTheDocument();
   });
 
+  it("renders controlled attachment ids as chips and notifies parent on remove", async () => {
+    const onAttachmentIdsChange = vi.fn();
+    setupApiMock({ selected: selectedFreeModel });
+    render(
+      <ComposerBar
+        {...base}
+        attachmentIds={["m1"]}
+        onAttachmentIdsChange={onAttachmentIdsChange}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
+    expect(onAttachmentIdsChange).toHaveBeenCalledWith([]);
+  });
+
+  it("sends controlled attachment ids and clears them through onAttachmentIdsChange", async () => {
+    const onAttachmentIdsChange = vi.fn();
+    setupApiMock({ selected: selectedFreeModel });
+    render(
+      <ComposerBar
+        {...base}
+        attachmentIds={["m2"]}
+        onAttachmentIdsChange={onAttachmentIdsChange}
+      />,
+    );
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "Usá estos datos");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(base.onSend).toHaveBeenCalledWith("Usá estos datos", ["m2"]);
+    expect(onAttachmentIdsChange).toHaveBeenCalledWith([]);
+  });
+
   it("shows a plain-language error when adding a picked file is rejected", async () => {
     openDialogMock.mockResolvedValueOnce("/tmp/bad.exe");
     setupApiMock({

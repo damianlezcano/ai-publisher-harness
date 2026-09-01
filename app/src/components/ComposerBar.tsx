@@ -20,6 +20,8 @@ export interface ComposerBarProps {
   onOpenProvider?: () => void;
   onMaterialsChanged?: () => void | Promise<void>;
   shareAction?: React.ReactNode;
+  attachmentIds?: string[];
+  onAttachmentIdsChange?: (ids: string[]) => void;
 }
 
 const TEXTAREA_MAX_HEIGHT_PX = 150;
@@ -47,11 +49,25 @@ export default function ComposerBar({
   onCancel,
   onMaterialsChanged,
   shareAction,
+  attachmentIds: attachmentIdsProp,
+  onAttachmentIdsChange,
 }: ComposerBarProps) {
   const [prompt, setPrompt] = useState("");
-  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [internalAttachmentIds, setInternalAttachmentIds] = useState<string[]>([]);
   const [pasteBusy, setPasteBusy] = useState(false);
   const [showMaterialPicker, setShowMaterialPicker] = useState(false);
+
+  const controlled = attachmentIdsProp !== undefined;
+  const attachmentIds = controlled ? attachmentIdsProp : internalAttachmentIds;
+
+  function setAttachmentIds(next: string[] | ((prev: string[]) => string[])) {
+    const resolved = typeof next === "function" ? next(attachmentIds) : next;
+    if (controlled) {
+      onAttachmentIdsChange?.(resolved);
+    } else {
+      setInternalAttachmentIds(resolved);
+    }
+  }
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [selected, setSelected] = useState<SelectedModelView | null>(null);

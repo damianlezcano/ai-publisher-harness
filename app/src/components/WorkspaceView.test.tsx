@@ -5,7 +5,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import WorkspaceView from "./WorkspaceView";
 import { messages } from "../messages";
-import type { CreationView, MaterialView, MessageView, ProjectView } from "../types";
+import type {
+  CreationView,
+  MaterialView,
+  MaterialsImportReport,
+  MessageView,
+  ProjectView,
+} from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/webview", () => ({
@@ -114,8 +120,14 @@ const baseProps = {
   onProviderError: vi.fn(),
 };
 
-function setupApi(options: { agentSendResult?: unknown; agentSendError?: unknown } = {}) {
-  const { agentSendResult = undefined, agentSendError } = options;
+function setupApi(
+  options: {
+    agentSendResult?: unknown;
+    agentSendError?: unknown;
+    importReport?: MaterialsImportReport;
+  } = {},
+) {
+  const { agentSendResult = undefined, agentSendError, importReport } = options;
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
       case "model_list":
@@ -146,6 +158,8 @@ function setupApi(options: { agentSendResult?: unknown; agentSendError?: unknown
         });
       case "agent_send":
         return agentSendError ? Promise.reject(agentSendError) : Promise.resolve(agentSendResult);
+      case "materials_add_from_paths":
+        return Promise.resolve(importReport ?? { items: [] });
       default:
         return Promise.resolve(undefined);
     }
@@ -288,6 +302,120 @@ describe("WorkspaceView", () => {
     await waitFor(() =>
       expect(screen.queryByText(messages.material.dropOverlay)).not.toBeInTheDocument(),
     );
+  });
+
+  it("attaches dropped files to the pending message and sends their ids to the agent", async () => {
+    const droppedMaterial: MaterialView = {
+      id: "m9",
+      displayName: "rosco-data.txt",
+      originalFileName: "rosco-data.txt",
+      kind: "text",
+      byteSize: 128,
+      createdAt: "2026-08-28T15:05:00Z",
+    };
+    const importReport: MaterialsImportReport = {
+      items: [
+        {
+          sourceName: "rosco-data.txt",
+          status: "added",
+          materialId: "m9",
+          material: droppedMaterial,
+        },
+      ],
+    };
+    const { dropHandler } = mockDragDrop();
+    setupApi({ importReport });
+    const { rerender } = render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    act(() => {
+      dropHandler({ payload: { type: "drop", paths: ["/fake/rosco-data.txt"] } });
+    });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("materials_add_from_paths", {
+        projectId,
+        paths: ["/fake/rosco-data.txt"],
+      }),
+    );
+    expect(baseProps.onRefresh).toHaveBeenCalled();
+
+    rerender(<WorkspaceView project={makeProject([droppedMaterial])} {...baseProps} />);
+
+    expect(
+      screen.getByRole("button", { name: `Quitar ${droppedMaterial.displayName}` }),
+    ).toBeInTheDocument();
+
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    await userEvent.type(textarea, "Usá estos datos para el rosco.");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+        projectId,
+        prompt: "Usá estos datos para el rosco.",
+        attachmentIds: ["m9"],
+      }),
+    );
+
+    // The attached dropped material must not also appear as a standalone resource item.
+    const resourceItems = screen.getAllByText(messages.timeline.resourceLabel);
+    expect(resourceItems.length).toBe(1);
+    const resourceCard = resourceItems[0].closest(".message-resource");
+    expect(resourceCard).not.toHaveTextContent(droppedMaterial.displayName);
+    expect(
+      screen.getByText(droppedMaterial.displayName).closest(".message-user"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not attach dropped materials while the agent is working", async () => {
+    const droppedMaterial: MaterialView = {
+      id: "m9",
+      displayName: "rosco-data.txt",
+      originalFileName: "rosco-data.txt",
+      kind: "text",
+      byteSize: 128,
+      createdAt: "2026-08-28T15:05:00Z",
+    };
+    const importReport: MaterialsImportReport = {
+      items: [
+        {
+          sourceName: "rosco-data.txt",
+          status: "added",
+          materialId: "m9",
+          material: droppedMaterial,
+        },
+      ],
+    };
+    const { dropHandler } = mockDragDrop();
+    setupApi({ importReport });
+    const { rerender } = render(
+      <WorkspaceView project={makeProject()} {...baseProps} agentPhase="working" />,
+    );
+
+    act(() => {
+      dropHandler({ payload: { type: "drop", paths: ["/fake/rosco-data.txt"] } });
+    });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("materials_add_from_paths", {
+        projectId,
+        paths: ["/fake/rosco-data.txt"],
+      }),
+    );
+
+    rerender(
+      <WorkspaceView
+        project={makeProject([droppedMaterial])}
+        {...baseProps}
+        agentPhase="working"
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: `Quitar ${droppedMaterial.displayName}` }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the creating status while the agent is working", () => {
