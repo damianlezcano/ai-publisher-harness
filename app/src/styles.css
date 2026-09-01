@@ -241,6 +241,18 @@ select {
   min-width: 0;
 }
 
+.creation-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.creation-card-icon {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
 .project-name,
 .item-name {
   font-weight: 600;
@@ -487,6 +499,19 @@ select {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.dialog-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  flex: 1 1 auto;
 }
 
 .dialog h2 {
@@ -1061,7 +1086,6 @@ select {
   padding: var(--space-1) var(--space-2);
   min-width: 28px;
   min-height: 28px;
-  opacity: 0;
   font-size: 0.85rem;
   font-weight: 700;
   line-height: 1;
@@ -1069,7 +1093,7 @@ select {
 
 .conversation-item:hover .conversation-menu-button,
 .conversation-item:focus-within .conversation-menu-button {
-  opacity: 1;
+  color: var(--text);
 }
 
 .conversation-menu-dropdown {
@@ -1352,6 +1376,46 @@ select {
   max-width: 100%;
 }
 
+.message-attachment-only {
+  align-self: flex-end;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  max-width: 72%;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  background: #eef0ff;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.9rem;
+}
+
+.attachment-icon {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.attachment-open {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+  min-height: 28px;
+  min-width: auto;
+}
+
 .message-error {
   background: #fce8e6;
 }
@@ -1450,6 +1514,16 @@ select {
   color: var(--muted);
   font-size: var(--font-size-meta);
   line-height: 1.4;
+}
+
+.share-control-url {
+  margin: 0;
+  padding: var(--space-2);
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-meta);
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
 }
 
 @media (max-width: 960px) {

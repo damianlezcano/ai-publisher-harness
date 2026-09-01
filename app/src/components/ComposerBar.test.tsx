@@ -172,6 +172,7 @@ describe("ComposerBar", () => {
     );
     expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Adjuntar" })).toBeDisabled();
   });
 
   it("attach picker toggles material chips and selected chips are removable", async () => {

@@ -533,9 +533,10 @@ describe("App", () => {
     expect(modelSelect).toBeInTheDocument();
     await waitFor(() =>
       expect(Array.from(modelSelect.options).map((option) => option.textContent)).toContain(
-        "big-pickle / Gratis",
+        messages.model.automaticFree,
       ),
     );
+    expect(screen.queryByText("big-pickle")).not.toBeInTheDocument();
     expect(screen.queryByText(/::/)).not.toBeInTheDocument();
   });
 

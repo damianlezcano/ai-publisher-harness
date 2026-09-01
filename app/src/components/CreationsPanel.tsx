@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { humanDate, humanSize, kindLabel } from "../labels";
+import { kindIcon, kindLabel } from "../labels";
 import type { CreationView, PreviewData } from "../types";
 import PreviewModal from "./PreviewModal";
 import { messages } from "../messages";
@@ -45,31 +45,25 @@ export function CreationCard(props: CreationCardProps) {
 
   async function open() {
     setError(null);
+    setPreviewAnnouncement(null);
     try {
+      if (isWebKind(creation.kind)) {
+        setPreviewAnnouncement(messages.creation.previewLoading);
+        await api.previewOpenWeb(projectId, creation.id);
+        return;
+      }
+      if (supportsInAppPreview(creation.kind)) {
+        try {
+          const data = await api.previewData(projectId, "creation", creation.id);
+          setPreview({ creation, data });
+          return;
+        } catch {
+          // Fall through to the system opener when in-app viewing is not available.
+        }
+      }
       await api.creationOpen(projectId, creation.id);
     } catch (err) {
-      setError(err);
-    }
-  }
-
-  async function showPreview() {
-    setError(null);
-    setPreviewAnnouncement(null);
-    if (isWebKind(creation.kind)) {
-      setPreviewAnnouncement(messages.creation.previewLoading);
-      try {
-        await api.previewOpenWeb(projectId, creation.id);
-      } catch (err) {
-        setPreviewAnnouncement(null);
-        setError(err);
-      }
-      return;
-    }
-    if (!supportsInAppPreview(creation.kind)) return;
-    try {
-      const data = await api.previewData(projectId, "creation", creation.id);
-      setPreview({ creation, data });
-    } catch (err) {
+      setPreviewAnnouncement(null);
       setError(err);
     }
   }
@@ -81,25 +75,22 @@ export function CreationCard(props: CreationCardProps) {
       </p>
       {error != null ? <ErrorNotice error={error} /> : null}
       <div className="creation-card-main">
-        <span className="item-name">{creation.displayName}</span>
-        <span className="item-meta">
-          {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
-          {humanDate(creation.createdAt)}
+        <span className="creation-card-title">
+          <span className="creation-card-icon" aria-hidden="true">
+            {kindIcon(creation.kind)}
+          </span>
+          <span className="item-name">{creation.displayName}</span>
         </span>
+        <span className="item-meta">{kindLabel(creation.kind)}</span>
       </div>
       <span className="row-actions wrap">
-        {(supportsInAppPreview(creation.kind) || isWebKind(creation.kind)) && (
-          <button type="button" className="secondary" onClick={() => void showPreview()}>
-            {messages.creation.preview}
-          </button>
-        )}
         <button type="button" className="primary" onClick={() => void open()}>
           {messages.common.open}
         </button>
         {share != null && (
           <button
             type="button"
-            className="primary"
+            className="secondary"
             disabled={share.busy || share.shared}
             onClick={() => void share.onShare()}
           >

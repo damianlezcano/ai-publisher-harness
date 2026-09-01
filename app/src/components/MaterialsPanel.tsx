@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { kindIcon } from "../labels";
 import { messages } from "../messages";
 import type { MaterialView } from "../types";
 
@@ -17,13 +18,19 @@ export function MaterialChip({ projectId, material }: MaterialChipProps) {
   }
 
   return (
-    <button
-      type="button"
-      className="chip"
-      onClick={() => void open()}
-      aria-label={`${messages.common.open} ${material.displayName}`}
-    >
-      {material.displayName}
-    </button>
+    <span className="attachment-chip">
+      <span className="attachment-icon" aria-hidden="true">
+        {kindIcon(material.kind)}
+      </span>
+      <span className="attachment-name">{material.displayName}</span>
+      <button
+        type="button"
+        className="ghost attachment-open"
+        onClick={() => void open()}
+        aria-label={`${messages.common.open} ${material.displayName}`}
+      >
+        {messages.common.open}
+      </button>
+    </span>
   );
 }

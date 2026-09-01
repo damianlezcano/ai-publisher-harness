@@ -13,11 +13,27 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 const KIND_FALLBACK = "Archivo";
+const KIND_ICONS: Record<string, string> = {
+  web: "🎮",
+  document: "📄",
+  image: "🖼️",
+  file: "📎",
+  pdf: "📄",
+  spreadsheet: "📊",
+  presentation: "📽️",
+  text: "📄",
+  other: "📎",
+};
+const KIND_ICON_FALLBACK = "📎";
 const VISIBILITY_PUBLIC = "Se compartirá";
 const VISIBILITY_PRIVATE = "Privado";
 
 export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? KIND_FALLBACK;
+}
+
+export function kindIcon(kind: string): string {
+  return KIND_ICONS[kind] ?? KIND_ICON_FALLBACK;
 }
 
 export function visibilityLabel(visibility: string): string {
@@ -61,7 +77,7 @@ export const messages = {
   },
 
   conversations: {
-    title: "Chat",
+    title: "Conversaciones",
     listAriaLabel: "Conversaciones",
     newButton: "Nueva conversación",
     sharedLabel: "Compartido",

@@ -196,10 +196,7 @@ export default function ChatPanel({
               share={share}
             />
           ) : (
-            <div key={item.key} className="message message-resource">
-              <div className="message-header">
-                <span className="message-role">{messages.timeline.resourceLabel}</span>
-              </div>
+            <div key={item.key} className="message message-user message-attachment-only">
               <MaterialChip projectId={projectId} material={item.material} />
             </div>
           ),
