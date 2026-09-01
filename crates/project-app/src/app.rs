@@ -308,6 +308,24 @@ where
     }
 
     pub fn delete_project(&self, id: &str) -> AppResult<()> {
+        // Unpublish first so a shared project never survives as a stale entry
+        // in PublicationManager. `unpublish` is idempotent, so this is safe
+        // when the project is already local. If unpublish fails we fail closed
+        // and do not begin removing project data.
+        self.unpublish(id)?;
+
+        // Serialize with the agent for this project: cancel any in-flight run
+        // and hold the per-project lock so a run that starts after this point
+        // sees the missing project and aborts before recreating files.
+        let agent_lock = self.agent.project_lock(id);
+        let _agent_guard = agent_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(err) = self.agent.cancel(id) {
+            // No active session is fine; anything else must stop the delete.
+            if !matches!(err, project_agent::AgentError::SessionNotFound(_)) {
+                return Err(AppError::from_agent(err));
+            }
+        }
+
         let pid = parse_project_id(id)?;
         self.projects
             .lock()
@@ -1012,6 +1030,22 @@ where
         &self,
         inputs: AgentRunInputs,
     ) -> project_agent::AgentResult<AgentRunResult> {
+        // Fail fast if the project was deleted before the run could start. The
+        // agent lock serialization in `delete_project` stops runs that are
+        // already in flight; this guards the gap before `AgentService::run`
+        // acquires that lock.
+        if self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&inputs.project_id)
+            .is_err()
+        {
+            return Err(project_agent::AgentError::TaskFailed(
+                "project no longer exists".into(),
+            ));
+        }
+
         self.agent.run(AgentRequest {
             project_id: inputs.project_id.as_str().to_owned(),
             prompt: AgentPrompt {

@@ -1,30 +1,39 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { ProjectSummary } from "../types";
+import type { AgentPhase, ProjectSummary } from "../types";
 import { humanDate, messages } from "../messages";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface ConversationsSidebarProps {
   conversations: ProjectSummary[];
   selectedId: string | null;
+  agentPhase?: AgentPhase;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
+  onDelete?: (id: string) => Promise<void>;
 }
 
 export default function ConversationsSidebar({
   conversations,
   selectedId,
+  agentPhase,
   onSelect,
   onRefresh,
+  onDelete,
 }: ConversationsSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const startRename = useCallback((project: ProjectSummary) => {
     setEditingId(project.id);
     setEditingName(project.name);
     setError(null);
+    setMenuOpenId(null);
   }, []);
 
   const cancelRename = useCallback(() => {
@@ -66,6 +75,33 @@ export default function ConversationsSidebar({
     }
   }, [busy, onRefresh, onSelect]);
 
+  const startDelete = useCallback((project: ProjectSummary) => {
+    setConfirmDeleteId(project.id);
+    setMenuOpenId(null);
+  }, []);
+
+  const commitDelete = useCallback(
+    async (id: string) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        if (onDelete) {
+          await onDelete(id);
+        } else {
+          await api.projectDelete(id);
+          await onRefresh();
+        }
+        setConfirmDeleteId(null);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, onDelete, onRefresh],
+  );
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "n" || !(event.ctrlKey || event.metaKey) || event.repeat) return;
@@ -77,6 +113,26 @@ export default function ConversationsSidebar({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [createConversation]);
+
+  useEffect(() => {
+    if (!menuOpenId) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpenId(null);
+    }
+    function handleClick(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpenId(null);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [menuOpenId]);
+
+  const confirmProject = conversations.find((c) => c.id === confirmDeleteId) ?? null;
 
   return (
     <nav className="conversations-sidebar" aria-label={messages.conversations.listAriaLabel}>
@@ -104,6 +160,8 @@ export default function ConversationsSidebar({
         {conversations.map((conversation) => {
           const isSelected = conversation.id === selectedId;
           const isEditing = editingId === conversation.id;
+          const isMenuOpen = menuOpenId === conversation.id;
+          const isGenerating = isSelected && agentPhase === "working";
 
           return (
             <li key={conversation.id} className="conversation-item">
@@ -169,21 +227,68 @@ export default function ConversationsSidebar({
                       </span>
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    className="ghost conversation-rename-button"
-                    aria-label={messages.conversations.renameAriaLabel}
-                    title={messages.conversations.renameAriaLabel}
-                    onClick={() => startRename(conversation)}
-                  >
-                    <span aria-hidden="true">✎</span>
-                  </button>
+                  <div className="conversation-menu" ref={isMenuOpen ? menuRef : undefined}>
+                    <button
+                      type="button"
+                      className="ghost conversation-menu-button"
+                      aria-label={messages.conversations.menuAriaLabel}
+                      aria-expanded={isMenuOpen}
+                      aria-haspopup="menu"
+                      title={messages.conversations.menuAriaLabel}
+                      disabled={busy}
+                      onClick={() =>
+                        setMenuOpenId((id) => (id === conversation.id ? null : conversation.id))
+                      }
+                    >
+                      <span aria-hidden="true">…</span>
+                    </button>
+                    {isMenuOpen && (
+                      <div
+                        className="conversation-menu-dropdown"
+                        role="menu"
+                        aria-label={messages.conversations.menuAriaLabel}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => startRename(conversation)}
+                        >
+                          {messages.conversations.renameAction}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="danger"
+                          disabled={isGenerating}
+                          title={
+                            isGenerating
+                              ? messages.conversations.deleteDisabledGenerating
+                              : undefined
+                          }
+                          onClick={() => startDelete(conversation)}
+                        >
+                          {messages.conversations.deleteAction}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </li>
           );
         })}
       </ul>
+
+      {confirmProject && (
+        <ConfirmDialog
+          title={messages.conversations.deleteConfirmTitle}
+          message={messages.conversations.deleteConfirmBody}
+          confirmText={confirmProject.name}
+          busy={busy}
+          onCancel={() => setConfirmDeleteId(null)}
+          onConfirm={() => void commitDelete(confirmProject.id)}
+        />
+      )}
     </nav>
   );
 }

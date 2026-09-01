@@ -162,6 +162,38 @@ export default function App() {
     void refreshConversations();
   }, [refreshConversations]);
 
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      await api.projectDelete(id);
+      const deletedIndex = conversations.findIndex((c) => c.id === id);
+      const remaining = conversations.filter((c) => c.id !== id);
+
+      try {
+        await refreshConversations();
+
+        if (selectedId !== id) {
+          // Deleted an inactive conversation; keep the current one active.
+          return;
+        }
+
+        if (remaining.length === 0) {
+          setSelectedId(null);
+          setConversation(null);
+        } else {
+          const nextIndex = deletedIndex < remaining.length ? deletedIndex : remaining.length - 1;
+          await openConversation(remaining[nextIndex].id);
+        }
+      } catch (error) {
+        // Refresh or re-selection failed; clear local selection so the UI
+        // doesn't pretend the deleted conversation still exists.
+        setSelectedId(null);
+        setConversation(null);
+        show(guidanceFromError(error).title);
+      }
+    },
+    [conversations, selectedId, refreshConversations, openConversation, show],
+  );
+
   const providerChanged = useCallback(() => {
     setNeedsReconnect(false);
     setProviderRefreshKey((k) => k + 1);
@@ -204,8 +236,10 @@ export default function App() {
         <ConversationsSidebar
           conversations={conversations}
           selectedId={selectedId}
+          agentPhase={agentPhase}
           onSelect={(id) => void openConversation(id)}
           onRefresh={refreshConversations}
+          onDelete={handleDeleteProject}
         />
 
         {selectedId && conversation ? (
@@ -225,7 +259,7 @@ export default function App() {
           </div>
         ) : (
           <div className="conversation-placeholder">
-            <p className="muted">{messages.app.loading}</p>
+            <p className="muted">{messages.conversations.emptyTitle}</p>
           </div>
         )}
       </div>
