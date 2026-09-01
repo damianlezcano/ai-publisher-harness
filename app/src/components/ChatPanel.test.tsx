@@ -202,9 +202,34 @@ describe("ChatPanel timeline", () => {
     expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("shows a completed status line", () => {
-    render(<ChatPanel {...base} agentPhase="completed" agentMessage="Listo." />);
-    expect(screen.getByText("Listo.")).toHaveClass("ok");
+  it("does not render a raw green completed status that duplicates assistant content", () => {
+    const assistantText = "Acá tenés la actividad";
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: assistantText,
+            status: "ok",
+            createdAt: "2026-08-28T15:01:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+        agentPhase="completed"
+        agentMessage={assistantText}
+      />,
+    );
+    // The assistant text renders once, inside the persisted assistant bubble.
+    expect(screen.getAllByText(assistantText)).toHaveLength(1);
+    // No green raw status line duplicates it.
+    expect(
+      screen.queryByText(assistantText, { selector: ".chat-status.ok" }),
+    ).not.toBeInTheDocument();
+    // The creation card still renders.
+    expect(screen.getByText(creations[0].displayName)).toBeInTheDocument();
   });
 
   it("shows a failed status line as an alert", () => {
@@ -312,5 +337,61 @@ describe("ChatPanel timeline", () => {
     // The pending duplicate is suppressed; only the persisted message chip is rendered.
     const chips = screen.getAllByRole("button", { name: `Abrir ${materials[0].displayName}` });
     expect(chips.length).toBe(1);
+  });
+
+  it("keeps the working status non-duplicating while an assistant bubble is present", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "Acá tenés la actividad",
+            status: "ok",
+            createdAt: "2026-08-28T15:01:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+        agentPhase="working"
+      />,
+    );
+    expect(screen.getByText(messages.agent.creating)).toBeInTheDocument();
+    expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
+    // The working status does not render the assistant content a second time.
+    expect(screen.getAllByText("Acá tenés la actividad")).toHaveLength(1);
+  });
+
+  it("keeps failure status human-readable as an alert alongside a persisted failed bubble", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-3",
+            role: "assistant",
+            text: "No se pudo completar.",
+            status: "failed",
+            createdAt: "2026-08-28T15:02:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+        ]}
+        agentPhase="failed"
+        agentMessage="No se pudo completar la creación."
+      />,
+    );
+    const errStatus = screen.getByText("No se pudo completar la creación.", {
+      selector: ".chat-status.err",
+    });
+    expect(errStatus).toHaveAttribute("role", "alert");
+    // The persisted failed bubble is still present and readable.
+    expect(screen.getByText("No se pudo completar.")).toBeInTheDocument();
+  });
+
+  it("keeps the polite live region on the chat log for accessibility", () => {
+    const { container } = render(<ChatPanel {...base} />);
+    expect(container.querySelector(".chat-log")).toHaveAttribute("aria-live", "polite");
   });
 });

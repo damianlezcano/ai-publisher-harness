@@ -294,6 +294,50 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the assistant result once and never as a raw green duplicate on completion", async () => {
+    const assistantText = "Acá tenés la actividad";
+    mockBackend();
+    const baseImpl = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "project_open") {
+        return Promise.resolve({
+          ...projectView,
+          messages: [
+            {
+              id: "assistant-msg",
+              role: "assistant",
+              text: assistantText,
+              status: "ok",
+              createdAt: "2026-08-31T12:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+        });
+      }
+      return baseImpl(cmd);
+    });
+    captureTaskListener();
+    render(<App />);
+    await waitForWorkspace();
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 1,
+        payload: {
+          projectId: baseSummary.id,
+          status: "completed",
+          message: assistantText,
+          registeredCreationIds: [],
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getAllByText(assistantText)).toHaveLength(1));
+    expect(
+      screen.queryByText(assistantText, { selector: ".chat-status.ok" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows free-model state only in the compact selector, never as a banner", async () => {
     mockBackend();
     render(<App />);

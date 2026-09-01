@@ -96,7 +96,7 @@ export default function App() {
           setAgentMessage(null);
         } else if (event.status === "completed") {
           setAgentPhase("completed");
-          setAgentMessage(event.message ?? messages.agent.completed);
+          setAgentMessage(null);
           show(messages.agent.ready);
         } else {
           setAgentPhase("failed");
