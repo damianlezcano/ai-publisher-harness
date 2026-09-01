@@ -4,7 +4,49 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (FINAL VALIDATION — T6 PLAYWRIGHT HEADED PASS + T7 APPIMAGE NUEVO REAL PASS, TÉCNICAMENTE LISTO PARA REVISIÓN HUMANA, 2026-09-01)
+## Estado actual (POST-T7 HUMAN BLOCKER PASS INTEGRADO — BLOQUEADORES A/B/C CORREGIDOS, ESPERANDO NUEVO APPIMAGE + RE-ACEPTACIÓN HUMANA, 2026-09-01)
+
+- **POST-T7 HUMAN BLOCKER PASS INTEGRADO (`d6f97ab`).** El product owner probó
+  el AppImage real T7 y encontró 3 bloqueadores; este pass los corrigió y
+  fusionó. **Blocker A (raíz CONFIRMADA):** el adapter mandaba el directorio de
+  sesión como campo JSON `directory`, que opencode 1.18.25 IGNORA (los campos
+  desconocidos del body se descartan; NO es `additionalProperties:false`).
+  La sesión quedaba ligada al cwd del sidecar (mount del AppImage), el agente no
+  veía los adjuntos, colgaba en un ASK `external_directory` sin responder y el
+  timeout de tarea de 120s se mapeaba como error de arranque falso
+  "No se pudo iniciar el asistente de IA.". **Fix:** `with_directory_query`
+  (`crates/project-opencode/src/lib.rs`) envía `POST /session?directory=<percent-encoded workspace>`
+  (probado contra el sidecar real empaquetado 1.18.25: el query bindea el
+  workspace y el asistente responde "listo"; el JSON body NO bindea). Se agrega
+  body `permission: [{external_directory,* ,deny}]` para que el agente no
+  pregunte por directorios externos (los adjuntos están dentro del workspace
+  ligado, no se ocultan). El timeout en vuelo de tarea ahora mapea a
+  `TaskFailed` → "No se pudo completar la creación." (honesto); el timeout de
+  arranque `ensure_ready` SIGUE mapeando a `AiUnavailable` → "No se pudo iniciar
+  el asistente de IA." (real). **Blocker B (doble render):** `ChatPanel` suprimía
+  el `.chat-status.err` con `hasPersistedFailure` si existía CUALQUIER burbuja
+  fallida histórica → podía ocultar un fallo nuevo sin burbuja persistida o en la
+  ventana pre-refresh. Fix (`21e9e5b`): la supresión solo aplica si la burbuja
+  MÁS NUEVA del timeline es assistant failed/cancelled con `text === agentMessage`;
+  cualquier otro caso muestra el `.chat-status.err` (role=alert) una vez.
+  **Blocker C (menú Eliminar):** `.danger` (texto blanco) ganaba sobre
+  `background: transparent` del dropdown → texto blanco en menú blanco. Fix:
+  `.conversation-menu-dropdown button.danger` con `--danger` sobre superficie,
+  nowrap, padding compacto, hover `--danger-soft`, disabled `--muted`; copy
+  español intacto. **Autor:** Cursor Grok 4.6 High (`corr/post-t7-blockers`,
+  `b106d07b` + fixes `21e9e5b`). **Reviews:** UX Cursor Grok 4.6 High FRESH
+  (APPROVE + re-APPROVE), código/a11y `opencode-go/qwen3.8-flash` FRESH
+  (REQUEST_CHANGES → APPROVE; MAJOR = supresión ligada a burbuja más nueva, no a
+  historial). **Evidencia runtime:** probes directos del orquestador contra el
+  sidecar real del AppImage T7 (opencode 1.18.25, 127.0.0.1:36771) —
+  `POST /session` + body JSON directory → `directory=/tmp/.mount_EducAIGjCKDD/usr`
+  (NO bindea); `POST /session?directory=%2Ftmp%2F...` → bindea el workspace y
+  `prompt_async` responde "listo". **Tests:** `./scripts/verify` EXIT=0 en main
+  post-merge (cargo 565+, FE 202/202, fmt/lint/typecheck, M10 + UX_REDESIGN_01
+  contracts, fetch-sidecars --check, git diff --check). **M11 NO iniciado.**
+  **Siguiente gate:** construir AppImage NUEVO desde `d6f97ab`, verificación
+  técnica, y re-aceptación humana del product owner (escenario real §15).
+- **T7 APPIMAGE NUEVO REAL = PASS (sesión FRESH, deepseek-v4-flash).** AppImage
 
 - **T7 APPIMAGE NUEVO REAL = PASS (sesión FRESH, deepseek-v4-flash).** AppImage
   NUEVO construido desde main `d25f957` (Task G integrada via `2451c50`) con el
@@ -38,9 +80,9 @@
   Gate siguiente y único: HUMAN PRODUCT-OWNER ACCEPTANCE.**
 - **ESTADO PREVIO (T6 y Task G) — ver secciones históricas abajo.**
 
-- **Current main commit: `2451c50`** (merge de Task G). La corrección A-G sigue
-  INTEGRADA y verificada (ver detalle abajo). `git log --oneline -14` para el
-  detalle.
+- **Current main commit: `d6f97ab`** (merge del post-T7 human blocker pass). La
+  corrección A-G + post-T7 A/B/C sigue INTEGRADA y verificada (ver detalle
+  arriba). `git log --oneline -14` para el detalle.
 - **T6 PLAYWRIGHT HEADED = PASS (sesión fresh, deepseek-v4-flash).** Ejecutado
   contra main `2451c50` (Task G integrada) con el harness canónico
   `docs/ux-redesign-01/harness/run.sh` (capture.py headed + measure.py + ocr.py,
@@ -269,7 +311,12 @@ Resta solo la aprobación humana del product owner. NO es M11.**
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `2451c50`; NO es workspace de autor).
+  (integración, `d6f97ab`; NO es workspace de autor).
+- Post-T7 pass: worktree autor `../ai-publisher-corr-01-postt7`
+  (`corr/post-t7-blockers`), UX review `../ai-publisher-corr-01-postt7-review`
+  (`corr/post-t7-ux-review`), a11y review `../ai-publisher-corr-01-postt7-a11y`
+  (`corr/post-t7-a11y-review`). A remover/branches a borrar en cierre de sesión
+  tras integración de `d6f97ab`.
 - Worktrees de Task A, B, C, D, E removidos tras integración.
 - Worktree de Task F (`../ai-publisher-corr-01-f`, `corr/f-conversation-delete`)
   y worktree de review F (`../ai-publisher-corr-01-f-review`,
@@ -312,6 +359,17 @@ Resta solo la aprobación humana del product owner. NO es M11.**
 
 ## Model allocation (sesión anterior cerrada)
 
+- **Post-T7 human blocker pass (este): orquestador `opencode-go/deepseek-v4-flash`
+  (rota en ROTATE_SESSION_REQUIRED 117K tras merge/cleanup). Autor
+  `cursor-grok-4.6-high` vía Cursor (`postt7-author`, pane `w1F:p1A`,
+  `corr/post-t7-blockers`, commits `b106d07b` + fixes `21e9e5b`). Revisor UX
+  independiente `cursor-grok-4.6-high` FRESH (`postt7-ux-review`, pane `w1F:p1B`,
+  `corr/post-t7-ux-review`, APPROVE + re-APPROVE tras MAJOR). Revisor código/a11y
+  `opencode-go/qwen3.8-flash` FRESH (`postt7-a11y-review`, pane `w1F:p1C`,
+  `corr/post-t7-a11y-review`, REQUEST_CHANGES → APPROVE; MAJOR resuelto en
+  `21e9e5b`). Merge `d6f97ab`, `./scripts/verify` EXIT=0 en main. Panes author y
+  ambos reviewers a cerrar en cierre de sesión; worktrees/branches a limpiar.
+  Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.**
 - **Task G: autor `cursor-grok-4.6-high` (HIGH_VISUAL vía Cursor,
   `task-g-author`, pane `w1M:p1`, commit `e345520` en
   `corr/g-product-ux-pass`), revisor UX independiente `cursor-grok-4.6-high`
@@ -428,21 +486,28 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
 
-**T6 HECHA (PASS) y T7 AppImage NUEVO real HECHO (PASS). Repo en
-`TECHNICALLY READY FOR HUMAN REVIEW`.** NO hay más gates técnicos. El ÚNICO gate
-siguiente es la **aprobación humana del product owner** con el escenario real
-§15 sobre el AppImage NUEVO
-`app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`
-(SHA-256 `3dba67a8…`, main `d25f957`, Task G integrada). M11 NO iniciar.
+**POST-T7 HUMAN BLOCKER PASS INTEGRADO (`d6f97ab`). Repo en
+`TÉCNICAMENTE LISTO PARA NUEVA REVISIÓN HUMANA`.** El ÚNICO gate siguiente es
+construir un **AppImage NUEVO desde `d6f97ab`** (packaging M10 canónico),
+verificarlo técnicamente (launch real + sidecars bundlados + `./scripts/verify`),
+y que el **product owner re-corra el escenario real §15** sobre ESE AppImage
+nuevo. M11 NO iniciar.
 
-1. El product owner abre el AppImage NUEVO (Fedora/Wayland, chmod +x) y corre el
-   escenario real: sin falso error de arranque, modelo gratis usable, "Crear un
-   juego tipo Pasapalabra…", respuesta real del asistente, card de creación con
-   [Abrir] [Compartir], Abrir funciona, adjunto de rosco + "Usá estos datos",
-   el agente usa el archivo, la creación se actualiza, Abrir muestra la versión
-   actualizada, Compartir produce URL pública usable, renombrar/eliminar
-   conversación, reinicio y delete persistido. Solo el humano acepta el AppImage
-   final. NO intentar afirmar aceptación humana desde OpenCode.
+1. Construir AppImage NUEVO desde main `d6f97ab` con `scripts/smoke-package
+   appimage` (fetch-sidecars → `cargo tauri build --bundles appimage`), sidecars
+   pineados SIN cambiar (opencode 1.18.25, cloudflared 2026.8.3), `./scripts/verify`
+   EXIT=0 contra el artefacto fresco, lanzamiento real en Fedora/Wayland con PATH
+   sin sidecars, y luego entregar al product owner.
+2. El product owner re-corre el escenario real §15 sobre el AppImage NUEVO:
+   conversación nueva + adjunto de rosco + prompt real → el asistente responde
+   (Blocker A corregido), el error de asistente aparece UNA sola vez (Blocker B),
+   menú "…" → Eliminar conversación legible y accesible (Blocker C), card de
+   creación [Abrir][Compartir], Abrir funciona, el agente usa el archivo, la
+   creación se actualiza, Compartir produce URL pública usable, renombrar/
+   eliminar conversación, reinicio y delete persistido. Solo el humano acepta el
+   AppImage final. NO afirmar aceptación humana desde OpenCode.
+3. NO iniciar M11. Este pass queda en TÉCNICAMENTE LISTO esperando el AppImage
+   nuevo y la re-aceptación humana.
 2. **Seguimiento recomendado NO bloqueante (de las reviews de G):**
    - (UX NIT-1 / qwen LOW) `PublishPanel.tsx`: la URL pública es `<p>` dentro de
      `role="menu"`; envolver en `role="group"` (o mover los `<p>` al contenedor
