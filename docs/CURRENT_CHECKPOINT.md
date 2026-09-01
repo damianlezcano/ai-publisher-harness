@@ -4,20 +4,23 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, ROOT CAUSES MAPEADAS, ORQUESTADOR EN ROTACIÓN OBLIGATORIA, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK A INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
 
-- **Current main commit: `5801cf6`.** `git log --oneline -12` para el detalle.
-- **Session budget: ROTATE_SESSION_REQUIRED_HARD (>= 130K) alcanzado en el
-  bootstrap** por el volumen de los reportes de exploración + lecturas. NO se
-  lanzó NINGÚN worker. No se integró ningún commit nuevo. El gate NO se
-  bypasea. **Rotar orquestador AHORA** (sesión siguiente: deepseek-v4-flash
-  fresh; leer solo este checkpoint + los archivos citados).
+- **Current main commit: `e6389ea`** (merge de Task A). `git log --oneline -12`
+  para el detalle.
+- **Progreso del pass:** Task A INTEGRADA y verificada (`e6389ea`, merge de
+  `corr/a-creation-contract`; autor kimi `41a7969`+`a8547e1`, revisor qwen
+  APPROVE tras REQUEST_CHANGES resuelto). `./scripts/verify` PASS en main.
+  Worktrees de Task A removidos. Panes del author/reviewer cerrados.
+- **Session budget: CHECKPOINT_WARNING (85.7K, 80K-99,999)**. Este orquestador
+  rota en un punto seguro: Task A completa, integrada y verificada. NO se
+  inició Task B. NO M11. NO bypaseo del gate.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
   AppImage real construido y verificado (detalles al final). NO reiniciar.
 - **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
-  (sección "Hallazgos humanos" abajo). Este pass los corrige.
+  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-G: A done, B-G pendientes.
 
 ## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
@@ -135,7 +138,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 
 | # | Tarea | Autor | Revisor | Ownership | AC (resumen) |
 | --- | --- | --- | --- | --- | --- |
-| A | Contrato de CREACIÓN user-facing + fin de fuga técnica | kimi-k2.7-code | qwen3.8-flash | `crates/project-agent` (prompt/system instruction), `crates/project-app/src/app.rs`, dtos si hace falta, `app/src/components/CreationsPanel.tsx` | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano; sin paths/comandos en UX normal |
+| A | ~~Contrato de CREACIÓN user-facing + fin de fuga técnica~~ **HECHA** (`e6389ea`) | kimi-k2.7-code | qwen3.8-flash | ~~`crates/project-agent`, `crates/project-app/src/app.rs`, dtos, `app/src/components/CreationsPanel.tsx`~~ | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano (build_instruction en service.rs); sin paths/comandos en UX normal. APPROVE. |
 | B | Flujo real de adjunto/contexto | kimi-k2.7-code | qwen3.8-flash | `app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx`, `crates/project-agent` (tests E2E con fake) | Drop → material adjunto al mensaje del usuario; llega al agente; tests deterministas |
 | C | Error falso de arranque (STARTING/READY/FAILED) | kimi-k2.7-code | qwen3.8-flash | `crates/project-opencode`, `crates/project-agent`, `crates/project-app` (app_status), `app/src/App.tsx` | Estados explícitos; "Preparando el asistente…"; solo fallo terminal real; tests cold/delayed/failure/recovery |
 | D | Terminología de conversación | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/messages.ts`, tests, legacy naming | Default amigable; sin "Proyecto sin título" en UI activa; legacy schema ok |
@@ -148,16 +151,18 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
 D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
 Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
+**Task A YA integrada. La sesión siguiente empieza con Task B.**
 
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `5801cf6`; NO es workspace de autor).
+  (integración, `e6389ea`; NO es workspace de autor).
 - `uxfix/functional` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-functional`
   (integrado `030d788`; puede removerse).
 - `uxfix/visual` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-visual`
   (integrado `abd41bc`; puede removerse; quedó `app/package-lock.json` sin
   trackear — higiene conocida).
+- Worktrees de Task A removidos tras integración.
 - Nuevos worktrees de la corrección: crear en paths hermanos (ej.
   `../ai-publisher-corr-01-<task>`) por tarea.
 
@@ -185,15 +190,22 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 
 ## Model allocation (sesión anterior cerrada)
 
-- Orquestador previo: `opencode-go/deepseek-v4-flash` (cerrada).
+- Orquestador previo: `opencode-go/deepseek-v4-flash` (cerrada en bootstrap
+  HARD). **Este pass:** deepseek-v4-flash (Task A integrada; rota en WARNING).
 - **Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.** (seguir así;
   Qwen3.8 Max solo con ESCALATION_REASON explícito).
+- Task A: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
+  (APPROVE tras REQUEST_CHANGES). Ambos panes cerrados. Grok NO usado (G/F-UI
+  pendientes).
 
 ## Próximo paso (inmediato)
 
-1. **Rotar orquestador** (budget HARD alcanzado en bootstrap; no se lanzó
-   ningún worker; repositorio sin cambios de este pass).
+1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
+   Task A; punto seguro: repo limpio, Task A verificada, panes de A cerrados).
 2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   ejecutar tareas A-G con el circuito autor→reviewer→integración.
+   continuar con **Task B** (flujo real de adjunto/contexto) usando el circuito
+   autor→reviewer→integración con el orden A→B→C→D/E→F→G→Playwright→AppImage.
+   Task A NO se repite (leer el diff de `e6389ea` solo si hace falta contexto
+   para B: p.ej. `useShareControl`, `build_instruction`).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
