@@ -92,6 +92,26 @@ describe("Dialog", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("renders a close X when closeButton is set", async () => {
+    const onClose = vi.fn();
+    render(
+      <Dialog title="Configuración" onClose={onClose} closeButton>
+        Contenido
+      </Dialog>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cerrar" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not render a close X by default", () => {
+    render(
+      <Dialog title="Confirmar" onClose={vi.fn()}>
+        Contenido
+      </Dialog>,
+    );
+    expect(screen.queryByRole("button", { name: "Cerrar" })).not.toBeInTheDocument();
+  });
+
   it("applies an extra className for sizing", () => {
     render(
       <Dialog title="Confirmar" onClose={vi.fn()} className="provider-dialog">

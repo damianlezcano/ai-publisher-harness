@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { ReactNode, RefObject } from "react";
+import { messages } from "../../messages";
 import { useFocusTrap } from "./useFocusTrap";
 
 interface DialogProps {
@@ -8,6 +9,7 @@ interface DialogProps {
   children: ReactNode;
   initialFocusRef?: RefObject<HTMLElement>;
   className?: string;
+  closeButton?: boolean;
 }
 
 export default function Dialog({
@@ -16,6 +18,7 @@ export default function Dialog({
   children,
   initialFocusRef,
   className,
+  closeButton = false,
 }: DialogProps) {
   const titleId = useId();
   const containerRef = useFocusTrap({ active: true, onEscape: onClose, initialFocusRef });
@@ -30,7 +33,19 @@ export default function Dialog({
         aria-labelledby={titleId}
         onClick={(event) => event.stopPropagation()}
       >
-        <h2 id={titleId}>{title}</h2>
+        <div className="dialog-header">
+          <h2 id={titleId}>{title}</h2>
+          {closeButton && (
+            <button
+              type="button"
+              className="ghost close-button"
+              aria-label={messages.common.close}
+              onClick={onClose}
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          )}
+        </div>
         {children}
       </div>
     </div>

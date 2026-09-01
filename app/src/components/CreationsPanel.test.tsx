@@ -29,8 +29,11 @@ describe("CreationsPanel", () => {
   it("shows human-readable kind and the primary actions", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     expect(screen.getByText("actividad")).toBeInTheDocument();
-    expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
+    expect(screen.getByText("Actividad interactiva")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: messages.creation.preview }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
@@ -40,27 +43,36 @@ describe("CreationsPanel", () => {
     expect(screen.getByText(messages.creation.empty.hint)).toHaveClass("empty-state-body");
   });
 
-  it("opens a creation through the safe command", async () => {
+  it("opens a web creation through the isolated preview (EducAI chooses the opener)", async () => {
     invokeMock.mockResolvedValueOnce(undefined);
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
-    expect(invokeMock).toHaveBeenCalledWith("creation_open", {
-      projectId,
-      creationId: creation.id,
-    });
-  });
-
-  it("opens web preview in an isolated window", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: messages.creation.preview }));
     expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
       projectId,
       creationId: creation.id,
     });
+    expect(invokeMock).not.toHaveBeenCalledWith("creation_open", expect.anything());
   });
 
-  it("shows Vista previa for file-kind text creations and calls preview_data with creation", async () => {
+  it("opens a document creation through the system opener", async () => {
+    const documentCreation = {
+      ...creation,
+      id: "0198e4a6-86d6-7c16-b4c4-3197b355cf12",
+      displayName: "guia.docx",
+      kind: "document",
+    };
+    invokeMock.mockResolvedValueOnce(undefined);
+    render(
+      <CreationsPanel projectId={projectId} creations={[documentCreation]} onRefresh={() => {}} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    expect(invokeMock).toHaveBeenCalledWith("creation_open", {
+      projectId,
+      creationId: documentCreation.id,
+    });
+  });
+
+  it("opens file-kind text creations in the in-app viewer via Abrir", async () => {
     const fileCreation = {
       id: "0198e4a6-86d6-7c16-b4c4-3197b355cf11",
       displayName: "notas.md",
@@ -77,8 +89,10 @@ describe("CreationsPanel", () => {
     render(
       <CreationsPanel projectId={projectId} creations={[fileCreation]} onRefresh={() => {}} />,
     );
-    expect(screen.getByRole("button", { name: messages.creation.preview })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: messages.creation.preview }));
+    expect(
+      screen.queryByRole("button", { name: messages.creation.preview }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
     expect(invokeMock).toHaveBeenCalledWith("preview_data", {
       projectId,
       resourceKind: "creation",
@@ -127,7 +141,7 @@ describe("CreationCard", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
-    expect(invokeMock).toHaveBeenCalledWith("creation_open", {
+    expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
       projectId,
       creationId: creation.id,
     });

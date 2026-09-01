@@ -277,8 +277,11 @@ describe("WorkspaceView", () => {
   it("lists unattached materials in the timeline and excludes attached materials from a second copy", () => {
     const project = makeProject();
     render(<WorkspaceView project={project} {...baseProps} />);
-    expect(screen.getByText(messages.timeline.resourceLabel)).toBeInTheDocument();
-    expect(screen.getByText(materials[1].displayName)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(materials[1].displayName).closest(".message-user")).toBeTruthy();
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
     expect(
       screen.queryAllByRole("button", { name: `Abrir ${materials[0].displayName}` }).length,
     ).toBe(1);
@@ -362,13 +365,11 @@ describe("WorkspaceView", () => {
     );
 
     // The attached dropped material must not also appear as a standalone resource item.
-    const resourceItems = screen.getAllByText(messages.timeline.resourceLabel);
-    expect(resourceItems.length).toBe(1);
-    const resourceCard = resourceItems[0].closest(".message-resource");
-    expect(resourceCard).not.toHaveTextContent(droppedMaterial.displayName);
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
     expect(
       screen.getByText(droppedMaterial.displayName).closest(".message-user"),
     ).toBeInTheDocument();
+    expect(screen.getByText(droppedMaterial.displayName).closest(".creation-card")).toBeNull();
   });
 
   it("does not attach dropped materials while the agent is working", async () => {

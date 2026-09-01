@@ -49,6 +49,7 @@ export function useShareControl({
     try {
       await api.publish(projectId);
       await onRefresh();
+      setMenuOpen(true);
     } catch (err) {
       setError(err);
     } finally {

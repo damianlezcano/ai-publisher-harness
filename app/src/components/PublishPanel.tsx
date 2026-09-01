@@ -88,6 +88,9 @@ export default function ShareControl({
               role="menu"
               aria-label={messages.sharing.panelLabel}
             >
+              {publication.publicUrl && (
+                <p className="share-control-url">{publication.publicUrl}</p>
+              )}
               <button type="button" role="menuitem" onClick={() => void copy()}>
                 {copied ? messages.common.copied : messages.sharing.copyLink}
               </button>

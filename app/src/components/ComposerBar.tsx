@@ -37,6 +37,13 @@ function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null
 }
 
 function modelOptionLabel(model: ModelSummary): string {
+  const nameLooksLikeId = model.name === model.modelId;
+  if (nameLooksLikeId) {
+    if (model.free) {
+      return model.recommended ? messages.model.automaticFree : messages.model.free;
+    }
+    return messages.model.paid;
+  }
   return `${model.name}${model.free ? messages.model.freeSuffix : messages.model.paidSuffix}`;
 }
 
@@ -252,18 +259,16 @@ export default function ComposerBar({
         }}
       >
         <div className="composer-primary">
-          {aiUsable && (
-            <button
-              type="button"
-              className="ghost composer-attach"
-              aria-label={messages.assistant.attachMaterial}
-              aria-expanded={showMaterialPicker}
-              disabled={composerDisabled}
-              onClick={() => void handleAttachClick()}
-            >
-              <span aria-hidden="true">📎</span>
-            </button>
-          )}
+          <button
+            type="button"
+            className="ghost composer-attach"
+            aria-label={messages.assistant.attachMaterial}
+            aria-expanded={showMaterialPicker}
+            disabled={composerDisabled}
+            onClick={() => void handleAttachClick()}
+          >
+            <span aria-hidden="true">📎</span>
+          </button>
           <label className="sr-only" htmlFor="composer-prompt">
             {messages.assistant.promptLabel}
           </label>

@@ -94,6 +94,7 @@ describe("ShareControl", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     const menu = screen.getByRole("menu", { name: messages.sharing.panelLabel });
+    expect(within(menu).getByText(url)).toBeInTheDocument();
     expect(
       within(menu).getByRole("menuitem", { name: messages.sharing.copyLink }),
     ).toBeInTheDocument();

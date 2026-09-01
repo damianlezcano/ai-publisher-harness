@@ -3,6 +3,7 @@ import {
   conversationDisplayName,
   humanDate,
   humanSize,
+  kindIcon,
   kindLabel,
   messages,
   visibilityLabel,
@@ -65,7 +66,7 @@ describe("messages catalog", () => {
   });
 
   it("uses canonical conversation vocabulary", () => {
-    expect(messages.conversations.title).toBe("Chat");
+    expect(messages.conversations.title).toBe("Conversaciones");
     expect(messages.conversations.listAriaLabel).toBe("Conversaciones");
     expect(messages.conversations.newButton).toBe("Nueva conversación");
     expect(messages.conversation.defaultName).toBe("Conversación nueva");
@@ -112,6 +113,8 @@ describe("messages catalog", () => {
   it("maps kinds and visibility through helpers", () => {
     expect(kindLabel("web")).toBe("Actividad interactiva");
     expect(kindLabel("unknown")).toBe("Archivo");
+    expect(kindIcon("web")).toBe("🎮");
+    expect(kindIcon("unknown")).toBe("📎");
     expect(visibilityLabel("public")).toBe("Se compartirá");
     expect(visibilityLabel("private")).toBe("Privado");
   });

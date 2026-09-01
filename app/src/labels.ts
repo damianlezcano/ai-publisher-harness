@@ -1,1 +1,1 @@
-export { kindLabel, visibilityLabel, humanSize, humanDate } from "./messages";
+export { kindLabel, kindIcon, visibilityLabel, humanSize, humanDate } from "./messages";

@@ -72,15 +72,17 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
   });
 
-  it("renders unattached materials as chronological conversation items", () => {
+  it("renders unattached materials as user-side attachments, not as assistant output", () => {
     render(<ChatPanel {...base} />);
-    expect(screen.getAllByText(messages.timeline.resourceLabel).length).toBe(2);
     expect(
       screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
     ).toBeInTheDocument();
+    expect(screen.getByText(materials[0].displayName).closest(".message-user")).toBeTruthy();
+    expect(screen.getByText(materials[0].displayName).closest(".creation-card")).toBeNull();
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.assistant.emptyHint)).not.toBeInTheDocument();
   });
 
@@ -277,7 +279,7 @@ describe("ChatPanel timeline", () => {
     expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
   });
 
-  it("still renders genuinely unattached materials as resource items", () => {
+  it("still renders genuinely unattached materials as user-side attachments", () => {
     render(
       <ChatPanel
         {...base}
@@ -294,13 +296,14 @@ describe("ChatPanel timeline", () => {
         ]}
       />,
     );
-    expect(screen.getAllByText(messages.timeline.resourceLabel).length).toBe(2);
     expect(
       screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
     ).toBeInTheDocument();
+    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
+    expect(screen.getByText(materials[0].displayName).closest(".creation-card")).toBeNull();
   });
 
   it("renders a pending user message until it matches a persisted message", () => {

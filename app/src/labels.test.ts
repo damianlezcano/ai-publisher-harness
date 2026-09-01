@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kindLabel, visibilityLabel } from "./labels";
+import { kindIcon, kindLabel, visibilityLabel } from "./labels";
 
 describe("labels", () => {
   it("maps creation kinds to human-readable Spanish labels", () => {
@@ -8,6 +8,9 @@ describe("labels", () => {
     expect(kindLabel("image")).toBe("Imagen");
     expect(kindLabel("file")).toBe("Archivo");
     expect(kindLabel("unknown")).toBe("Archivo");
+    expect(kindIcon("web")).toBe("🎮");
+    expect(kindIcon("image")).toBe("🖼️");
+    expect(kindIcon("unknown")).toBe("📎");
   });
 
   it("maps visibility to product language", () => {
