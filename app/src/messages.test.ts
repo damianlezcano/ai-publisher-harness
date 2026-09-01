@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { humanDate, humanSize, kindLabel, messages, visibilityLabel } from "./messages";
+import {
+  conversationDisplayName,
+  humanDate,
+  humanSize,
+  kindLabel,
+  messages,
+  visibilityLabel,
+} from "./messages";
 
 const FORBIDDEN_TERMS = [
   "Cloudflare",
@@ -114,5 +121,22 @@ describe("messages catalog", () => {
     expect(humanSize(2048)).toBe("2 KB");
     expect(humanDate("not-a-date")).toBe("not-a-date");
     expect(humanDate("2026-08-28T15:00:00Z")).toMatch(/\d/);
+  });
+});
+
+describe("conversationDisplayName", () => {
+  it("leaves friendly and user-renamed names unchanged", () => {
+    expect(conversationDisplayName("Conversación nueva")).toBe("Conversación nueva");
+    expect(conversationDisplayName("Fotosíntesis")).toBe("Fotosíntesis");
+  });
+
+  it("normalizes legacy auto-generated default names", () => {
+    expect(conversationDisplayName("Proyecto sin título")).toBe("Conversación nueva");
+    expect(conversationDisplayName("Proyecto sin título 1")).toBe("Conversación nueva");
+    expect(conversationDisplayName("Proyecto sin título 42")).toBe("Conversación nueva");
+  });
+
+  it("does not normalize names that only partially match the legacy pattern", () => {
+    expect(conversationDisplayName("Proyecto sin título rosco")).toBe("Proyecto sin título rosco");
   });
 });
