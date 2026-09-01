@@ -116,8 +116,10 @@ const baseProps = {
   onBack: vi.fn(),
   onRefresh: vi.fn(),
   aiUsable: true,
+  backendStatus: "ready" as const,
   onOpenProvider: vi.fn(),
   onProviderError: vi.fn(),
+  onRetryBackend: vi.fn(),
 };
 
 function setupApi(
@@ -427,5 +429,36 @@ describe("WorkspaceView", () => {
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
     const shareButtons = screen.getAllByRole("button", { name: messages.sharing.shareAction });
     expect(shareButtons.length).toBe(2);
+  });
+
+  it("treats an ai_unavailable send error as transient while the backend is starting", async () => {
+    setupApi({
+      agentSendError: {
+        code: "ai_unavailable",
+        message: "No se pudo iniciar el asistente de IA.",
+      },
+    });
+    render(<WorkspaceView project={makeProject()} {...baseProps} backendStatus="starting" />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Hola");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    await waitFor(() => expect(screen.getByText(messages.assistant.starting)).toBeInTheDocument());
+    expect(screen.queryByText(messages.error.aiUnavailable.title)).not.toBeInTheDocument();
+    expect(screen.queryByText("Hola")).toBeInTheDocument();
+  });
+
+  it("shows a terminal ai_unavailable error when the backend has failed", () => {
+    render(
+      <WorkspaceView
+        project={makeProject()}
+        {...baseProps}
+        backendStatus="failed"
+        aiUsable={false}
+      />,
+    );
+    expect(screen.getByText(messages.error.aiUnavailable.title)).toBeInTheDocument();
+    expect(screen.queryByText(messages.assistant.starting)).not.toBeInTheDocument();
   });
 });

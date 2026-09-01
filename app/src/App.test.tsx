@@ -63,6 +63,7 @@ interface MockOptions {
   requiresChoice?: boolean;
   freeModel?: boolean;
   agentSendError?: unknown;
+  agentStatus?: string | string[];
 }
 
 function mockBackend(options: MockOptions = {}) {
@@ -72,9 +73,17 @@ function mockBackend(options: MockOptions = {}) {
     requiresChoice = false,
     freeModel: useFree = true,
     agentSendError,
+    agentStatus = "ready",
   } = options;
 
   const allProjects = projects.map((project) => ({ ...project }));
+  let agentStatusIndex = 0;
+  function nextAgentStatus(): string {
+    if (typeof agentStatus === "string") return agentStatus;
+    const status = agentStatus[Math.min(agentStatusIndex, agentStatus.length - 1)];
+    if (agentStatusIndex < agentStatus.length - 1) agentStatusIndex++;
+    return status;
+  }
 
   invokeMock.mockImplementation((cmd: string, args?: unknown) => {
     switch (cmd) {
@@ -113,6 +122,8 @@ function mockBackend(options: MockOptions = {}) {
         });
       case "agent_send":
         return agentSendError ? Promise.reject(agentSendError) : Promise.resolve(undefined);
+      case "app_status":
+        return Promise.resolve({ version: "0.1.0", agent: nextAgentStatus() });
       default:
         return Promise.resolve(undefined);
     }
@@ -334,5 +345,70 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByText("No pudimos abrir el recurso.")).toBeInTheDocument();
     expect(screen.queryByText("detalle interno")).not.toBeInTheDocument();
+  });
+
+  it("shows no preparing state and enables the composer when the backend is ready immediately", async () => {
+    mockBackend();
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.queryByText(messages.assistant.starting)).not.toBeInTheDocument();
+  });
+
+  it("shows preparing during a delayed cold startup and enables the composer once ready", async () => {
+    vi.useFakeTimers();
+    mockBackend({ agentStatus: ["starting", "ready"] });
+    const { unmount } = render(<App />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByRole("heading", { name: projectView.name })).toBeInTheDocument();
+    expect(screen.getByText(messages.assistant.starting)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(screen.queryByText(messages.assistant.starting)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled();
+
+    unmount();
+    vi.useRealTimers();
+  });
+
+  it("shows a terminal error when the backend reports a genuine startup failure", async () => {
+    mockBackend({ agentStatus: "failed" });
+    render(<App />);
+    await waitForWorkspace();
+    expect(await screen.findByText(messages.error.aiUnavailable.title)).toBeInTheDocument();
+    expect(screen.queryByText(messages.assistant.starting)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
+  });
+
+  it("recovers automatically when a failed backend later reports ready", async () => {
+    mockBackend({ agentStatus: ["failed", "failed", "ready"] });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByText(messages.error.aiUnavailable.title)).toBeInTheDocument(),
+    );
+    await waitFor(
+      () => expect(screen.queryByText(messages.error.aiUnavailable.title)).not.toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled();
+  });
+
+  it("clicking Reintentar after a terminal failure re-checks the backend", async () => {
+    mockBackend({ agentStatus: "failed" });
+    render(<App />);
+    await waitForWorkspace();
+    expect(await screen.findByText(messages.error.aiUnavailable.title)).toBeInTheDocument();
+
+    const retry = screen.getByRole("button", { name: messages.error.actionRetry });
+    expect(retry).toBeEnabled();
+    await userEvent.click(retry);
+
+    expect(await screen.findByText(messages.assistant.starting)).toBeInTheDocument();
   });
 });

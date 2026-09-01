@@ -85,6 +85,8 @@ export interface AppError {
 
 export type AgentPhase = "idle" | "working" | "completed" | "failed";
 
+export type BackendReadiness = "starting" | "ready" | "failed";
+
 // -- M7 provider/model surface ------------------------------------------------
 
 export type AuthMethodKind = "api_key" | "account";
