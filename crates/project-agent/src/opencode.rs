@@ -192,8 +192,9 @@ impl AgentEngine for OpenCodeAgentEngine {
             }
         }
         let directory = project.directory.to_string_lossy().replace('\\', "/");
-        // OpenCode 1.18.25 reads the working directory from the query string,
-        // not from a JSON `directory` field (`additionalProperties: false`).
+        // OpenCode 1.18.25 reads the working directory from `?directory=`.
+        // Unknown JSON body fields are ignored (not 400); `permission` is a
+        // documented create-session field and is accepted.
         let path = with_directory_query("/session", &directory);
         let body = json!({
             "permission": [{

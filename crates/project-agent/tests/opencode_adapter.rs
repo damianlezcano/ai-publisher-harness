@@ -9,6 +9,7 @@ use project_agent::model::{
     AgentProject, AgentPrompt, AgentStatus, ArtifactKind, ModelRef, TaskStatus,
 };
 use project_agent::{AgentEngine, AgentError, OpenCodeAgentEngine};
+use serde_json::json;
 
 fn engine_for(server: &FakeServer) -> OpenCodeAgentEngine {
     OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
@@ -80,6 +81,14 @@ fn open_session_posts_directory_and_returns_id() {
     assert_eq!(session.id, "ses-42");
     assert_eq!(session.project_id, "proj-7");
     assert_eq!(server.last_directory().as_deref(), Some("/tmp/proj-7"));
+    assert_eq!(
+        server.last_permission(),
+        Some(json!([{
+            "permission": "external_directory",
+            "pattern": "*",
+            "action": "deny",
+        }]))
+    );
 }
 
 #[test]

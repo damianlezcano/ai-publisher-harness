@@ -180,11 +180,13 @@ export default function ChatPanel({
   const isEmpty =
     messageList.length === 0 && !hasPending && agentPhase === "idle" && unattachedCount === 0;
 
-  const hasPersistedFailure = messageList.some(
-    (message) =>
-      message.role === "assistant" &&
-      (message.status === "failed" || message.status === "cancelled"),
-  );
+  const lastMessage = timeline.filter((i) => i.kind === "message").slice(-1)[0];
+  const hasPersistedFailure =
+    agentMessage != null &&
+    lastMessage?.kind === "message" &&
+    lastMessage.message.role === "assistant" &&
+    (lastMessage.message.status === "failed" || lastMessage.message.status === "cancelled") &&
+    lastMessage.message.text === agentMessage;
 
   return (
     <section className="panel chat" aria-label={messages.assistant.panelLabel}>

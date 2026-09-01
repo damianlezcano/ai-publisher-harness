@@ -27,6 +27,7 @@ pub struct Script {
     pub session_status: u16,
     pub session_body: String,
     pub last_directory: Option<String>,
+    pub last_permission: Option<Value>,
     pub last_session_id: String,
     pub prompt_status: u16,
     pub prompt_delay: Duration,
@@ -248,6 +249,7 @@ impl Default for Script {
             session_status: 200,
             session_body: r#"{"id":"ses-1"}"#.into(),
             last_directory: None,
+            last_permission: None,
             last_session_id: "ses-1".into(),
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
@@ -364,6 +366,10 @@ impl FakeServer {
 
     pub fn last_directory(&self) -> Option<String> {
         self.script().last_directory.clone()
+    }
+
+    pub fn last_permission(&self) -> Option<Value> {
+        self.script().last_permission.clone()
     }
 
     pub fn abort_called(&self) -> bool {
@@ -746,6 +752,9 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         if let Some(dir) = query.as_deref().and_then(query_param_directory) {
             state.last_directory = Some(dir);
         }
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            state.last_permission = value.get("permission").cloned();
+        }
         let status = state.session_status;
         let body = state.session_body.clone();
         drop(state);
@@ -969,4 +978,26 @@ fn write_response(stream: &mut TcpStream, status: u16, body: &[u8]) {
     let _ = stream.write_all(header.as_bytes());
     let _ = stream.write_all(body);
     let _ = stream.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{percent_decode, query_param_directory};
+
+    #[test]
+    fn query_param_directory_decodes_encoded_path() {
+        assert_eq!(
+            query_param_directory("directory=%2Ftmp%2Fproj-7%2Fworkspace"),
+            Some("/tmp/proj-7/workspace".into())
+        );
+    }
+
+    #[test]
+    fn percent_decode_plus_is_space_and_malformed_percent_is_left_intact() {
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%z1"), "%z1");
+        assert_eq!(percent_decode("%2"), "%2");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+    }
 }

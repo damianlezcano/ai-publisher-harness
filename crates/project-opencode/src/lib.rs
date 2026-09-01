@@ -30,8 +30,14 @@ pub fn build_argv(port: u16) -> Vec<String> {
 /// in the create-session schema and is ignored, so the sidecar would otherwise
 /// bind the session to its process cwd (the AppImage mount).
 pub fn with_directory_query(path: &str, directory: &str) -> String {
-    let sep = if path.contains('?') { '&' } else { '?' };
-    format!("{path}{sep}directory={}", encode_query_component(directory))
+    let encoded = encode_query_component(directory);
+    if path.ends_with('?') {
+        format!("{path}directory={encoded}")
+    } else if path.contains('?') {
+        format!("{path}&directory={encoded}")
+    } else {
+        format!("{path}?directory={encoded}")
+    }
 }
 
 fn encode_query_component(value: &str) -> String {
@@ -101,5 +107,20 @@ mod tests {
     fn directory_query_appends_to_existing_query() {
         let path = with_directory_query("/session?limit=1", "/home/a");
         assert_eq!(path, "/session?limit=1&directory=%2Fhome%2Fa");
+    }
+
+    #[test]
+    fn directory_query_does_not_insert_ampersand_after_trailing_question_mark() {
+        let path = with_directory_query("/session?", "/tmp/a");
+        assert_eq!(path, "/session?directory=%2Ftmp%2Fa");
+    }
+
+    #[test]
+    fn directory_query_percent_encodes_ampersand_equals_plus_space_and_non_ascii() {
+        let path = with_directory_query("/session", "/tmp/a&b=c+d e/café");
+        assert_eq!(
+            path,
+            "/session?directory=%2Ftmp%2Fa%26b%3Dc%2Bd%20e%2Fcaf%C3%A9"
+        );
     }
 }
