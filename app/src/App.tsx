@@ -9,7 +9,7 @@ import ProviderStatusBanner from "./components/ui/ProviderStatusBanner";
 import type { ProviderStatus } from "./components/ui/ProviderStatusBanner";
 import ToastRegion from "./components/ui/ToastRegion";
 import { useToast } from "./components/ui/useToast";
-import { messages } from "./messages";
+import { conversationDisplayName, messages } from "./messages";
 
 export default function App() {
   const [conversations, setConversations] = useState<ProjectSummary[]>([]);
@@ -26,11 +26,15 @@ export default function App() {
   const { toasts, show } = useToast();
 
   const refreshConversations = useCallback(async () => {
-    setConversations(await api.projectList());
+    const list = await api.projectList();
+    setConversations(
+      list.map((summary) => ({ ...summary, name: conversationDisplayName(summary.name) })),
+    );
   }, []);
 
   const refreshConversation = useCallback(async (id: string) => {
-    setConversation(await api.projectOpen(id));
+    const view = await api.projectOpen(id);
+    setConversation({ ...view, name: conversationDisplayName(view.name) });
   }, []);
 
   const openConversation = useCallback(
@@ -39,7 +43,8 @@ export default function App() {
       setAgentPhase("idle");
       setAgentMessage(null);
       try {
-        setConversation(await api.projectOpen(id));
+        const view = await api.projectOpen(id);
+        setConversation({ ...view, name: conversationDisplayName(view.name) });
       } catch (error) {
         setConversation(null);
         show(guidanceFromError(error).title);
@@ -64,7 +69,9 @@ export default function App() {
             await openConversation(refreshed[0].id);
           }
         } else {
-          setConversations(list);
+          setConversations(
+            list.map((summary) => ({ ...summary, name: conversationDisplayName(summary.name) })),
+          );
           await openConversation(list[0].id);
         }
       } catch (error) {

@@ -102,8 +102,16 @@ function mockBackend(options: MockOptions = {}) {
         allProjects.push(created);
         return Promise.resolve(created);
       }
-      case "project_open":
-        return openError ? Promise.reject(openError) : Promise.resolve(projectView);
+      case "project_open": {
+        if (openError) return Promise.reject(openError);
+        const { projectId } = (args as { projectId: string }) ?? {};
+        const summary = allProjects.find((project) => project.id === projectId);
+        return Promise.resolve({
+          ...projectView,
+          id: projectId ?? projectView.id,
+          name: summary?.name ?? projectView.name,
+        });
+      }
       case "project_rename": {
         const { projectId, name } = (args as { projectId: string; name: string }) ?? {};
         const target = allProjects.find((p) => p.id === projectId);
@@ -138,9 +146,9 @@ function captureTaskListener() {
   });
 }
 
-async function waitForWorkspace() {
+async function waitForWorkspace(expectedName: string = projectView.name) {
   await waitFor(() =>
-    expect(screen.getByRole("heading", { name: projectView.name })).toBeInTheDocument(),
+    expect(screen.getByRole("heading", { name: expectedName })).toBeInTheDocument(),
   );
 }
 
@@ -160,7 +168,7 @@ describe("App", () => {
         name: messages.conversation.defaultName,
       }),
     );
-    await waitForWorkspace();
+    await waitForWorkspace(messages.conversation.defaultName);
     expect(
       screen.queryByRole("heading", { name: messages.project.listHeading }),
     ).not.toBeInTheDocument();
@@ -410,5 +418,91 @@ describe("App", () => {
     await userEvent.click(retry);
 
     expect(await screen.findByText(messages.assistant.starting)).toBeInTheDocument();
+  });
+
+  it("renders legacy default names as Conversación nueva in the sidebar and header", async () => {
+    const legacySummary: ProjectSummary = {
+      ...baseSummary,
+      name: "Proyecto sin título 1",
+    };
+    mockBackend({ projects: [legacySummary] });
+    render(<App />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: messages.conversation.defaultName }),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("button", { name: new RegExp(messages.conversation.defaultName) }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Proyecto sin título")).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/Proyecto sin título/)).toHaveLength(0);
+  });
+
+  it("renders user-renamed conversation names unchanged in the sidebar and header", async () => {
+    mockBackend({ projects: [baseSummary] });
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /Fotosíntesis/ })).toBeInTheDocument();
+  });
+
+  it("preserves sidebar ordering when legacy names are present", async () => {
+    const legacyNewest: ProjectSummary = {
+      ...baseSummary,
+      id: "legacy-newest-id",
+      name: "Proyecto sin título",
+      updatedAt: "2026-08-31T12:00:00Z",
+    };
+    const legacyOlder: ProjectSummary = {
+      ...otherSummary,
+      id: "legacy-older-id",
+      name: "Proyecto sin título 2",
+      updatedAt: "2026-08-31T11:00:00Z",
+    };
+    const userNamed: ProjectSummary = {
+      id: "user-named-id",
+      name: "Fotosíntesis",
+      createdAt: "2026-08-31T08:00:00Z",
+      updatedAt: "2026-08-31T10:00:00Z",
+      shared: false,
+    };
+    mockBackend({ projects: [legacyNewest, legacyOlder, userNamed] });
+    render(<App />);
+
+    const sidebar = await screen.findByRole("navigation", {
+      name: messages.conversations.listAriaLabel,
+    });
+    const buttons = sidebar.querySelectorAll(".conversation-select");
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]).toHaveTextContent(messages.conversation.defaultName);
+    expect(buttons[1]).toHaveTextContent(messages.conversation.defaultName);
+    expect(buttons[2]).toHaveTextContent("Fotosíntesis");
+  });
+
+  it("normalizes legacy names on restart without leaking project terminology", async () => {
+    const legacySummary: ProjectSummary = {
+      ...baseSummary,
+      name: "Proyecto sin título 1",
+    };
+
+    for (let mount = 0; mount < 2; mount++) {
+      mockBackend({ projects: [legacySummary] });
+      const { unmount } = render(<App />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole("heading", { name: messages.conversation.defaultName }),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.queryByText("Proyecto sin título")).not.toBeInTheDocument();
+      expect(screen.queryByText("Project")).not.toBeInTheDocument();
+      expect(screen.queryByText("ProjectId")).not.toBeInTheDocument();
+
+      unmount();
+    }
   });
 });

@@ -39,6 +39,15 @@ export function humanDate(iso: string): string {
   });
 }
 
+const LEGACY_DEFAULT_PROJECT_NAME = /^Proyecto sin título(\s+\d+)?$/;
+
+export function conversationDisplayName(name: string): string {
+  if (LEGACY_DEFAULT_PROJECT_NAME.test(name)) {
+    return messages.conversation.defaultName;
+  }
+  return name;
+}
+
 function importSummaryPart(count: number, singular: string, plural: string): string | null {
   if (count <= 0) return null;
   return count === 1 ? `1 ${singular}` : `${count} ${plural}`;
