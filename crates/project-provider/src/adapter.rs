@@ -22,6 +22,7 @@ use crate::secret::{SecretString, redact_credentials};
 
 const DEFAULT_FEATURED: [&str; 5] = ["openai", "google", "deepseek", "anthropic", "opencode"];
 const DEFAULT_TASK_TIMEOUT: Duration = Duration::from_secs(60);
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TEST_PROMPT: &str = "Respondé: ok";
 /// How long `list_models` keeps re-querying while the sidecar catalog is still
 /// loading (a cold packaged start exposes an empty catalog for ~200 ms after
@@ -327,6 +328,7 @@ impl ProviderConnector for OpenCodeProviderConnector {
         let Some(session_id) = value.get("id").and_then(Value::as_str) else {
             return failed_test(ConnectionTestOutcome::ProviderUnavailable);
         };
+        let before_assistant_count = self.count_assistant_messages(session_id).unwrap_or(0);
         let prompt_body = json!({
             "parts": [{"type": "text", "text": TEST_PROMPT}],
             "model": {"providerID": provider_id, "modelID": model_id},
@@ -349,7 +351,7 @@ impl ProviderConnector for OpenCodeProviderConnector {
         if !(200..300).contains(&status) {
             return failed_test(ConnectionTestOutcome::ProviderUnavailable);
         }
-        match self.poll_test_session(session_id) {
+        match self.poll_test_session(session_id, before_assistant_count) {
             Ok(test) => {
                 if test.outcome == ConnectionTestOutcome::Connected {
                     log_event("connected");
@@ -402,7 +404,11 @@ impl OpenCodeProviderConnector {
             .collect()
     }
 
-    fn poll_test_session(&self, session_id: &str) -> ProviderResult<ConnectionTest> {
+    fn poll_test_session(
+        &self,
+        session_id: &str,
+        before_assistant_count: usize,
+    ) -> ProviderResult<ConnectionTest> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
         loop {
@@ -417,47 +423,56 @@ impl OpenCodeProviderConnector {
             let phase = session_status_phase(&value, session_id).unwrap_or_else(|| "idle".into());
             match phase.as_str() {
                 "idle" | "done" | "complete" | "completed" | "success" => {
-                    let message = self.fetch_last_assistant_text(session_id)?;
-                    if message.is_some() {
+                    let messages = self.fetch_message_list(session_id)?;
+                    if assistant_message_count(&messages) > before_assistant_count {
                         return Ok(ConnectionTest {
                             outcome: ConnectionTestOutcome::Connected,
                             message: "Conectado.".into(),
                         });
                     }
-                    return failed_test(ConnectionTestOutcome::ProviderUnavailable);
+                    // Wait for the new assistant message to become visible.
                 }
                 "failed" | "error" | "failure" => {
-                    let message = self.fetch_last_assistant_text(session_id).unwrap_or(None);
-                    return Ok(map_session_failure_text(message.as_deref()));
+                    let messages = self.fetch_message_list(session_id)?;
+                    let text = if assistant_message_count(&messages) > before_assistant_count {
+                        last_assistant_text_from_messages(&messages)
+                    } else {
+                        None
+                    };
+                    return Ok(map_session_failure_text(text.as_deref()));
                 }
                 _ => {}
             }
             if Instant::now() >= deadline {
                 return failed_test(ConnectionTestOutcome::ProviderUnavailable);
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(STATUS_POLL_INTERVAL);
         }
     }
 
-    fn fetch_last_assistant_text(&self, session_id: &str) -> ProviderResult<Option<String>> {
+    fn fetch_message_list(&self, session_id: &str) -> ProviderResult<Vec<Value>> {
         let path = format!("/session/{session_id}/message?limit=1000");
         let (status, body) = self.get(&path)?;
         if !(200..300).contains(&status) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let value: Value = match serde_json::from_str(&body) {
             Ok(v) => v,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(Vec::new()),
         };
-        let messages = match value {
+        Ok(match value {
             Value::Array(items) => items,
             Value::Object(mut map) => map
                 .remove("data")
                 .and_then(|v| v.as_array().cloned())
                 .unwrap_or_default(),
-            _ => return Ok(None),
-        };
-        Ok(last_assistant_text_from_messages(&messages))
+            _ => Vec::new(),
+        })
+    }
+
+    fn count_assistant_messages(&self, session_id: &str) -> ProviderResult<usize> {
+        let messages = self.fetch_message_list(session_id)?;
+        Ok(assistant_message_count(&messages))
     }
 }
 
@@ -823,6 +838,25 @@ fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
         }
     }
     last
+}
+
+fn assistant_message_count(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| {
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    message
+                        .get("info")
+                        .and_then(|info| info.get("role"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("");
+            role == "assistant"
+        })
+        .count()
 }
 
 fn message_text(message: &Value) -> Option<String> {

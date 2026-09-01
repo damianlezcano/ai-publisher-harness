@@ -31,6 +31,7 @@ pub struct Script {
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
+    pub prompt_appends_response: bool,
     pub status_sequence: Vec<String>,
     pub status_index: usize,
     pub status_delay: Duration,
@@ -199,7 +200,43 @@ fn default_models() -> Vec<Value> {
 }
 
 fn default_messages() -> String {
-    r#"[{"role":"assistant","parts":[{"type":"text","text":"done"}]}]"#.into()
+    r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"done"}]}]"#.into()
+}
+
+/// Append a synthetic assistant response to the message list so that watermark
+/// checks (assistant message count before vs. after prompt_async) see progress.
+fn append_assistant_response(current: &str) -> String {
+    let mut messages: Vec<Value> = serde_json::from_str(current).unwrap_or_default();
+    let text = messages
+        .iter()
+        .rev()
+        .find(|m| {
+            m.get("role").and_then(Value::as_str).or_else(|| {
+                m.get("info")
+                    .and_then(|i| i.get("role"))
+                    .and_then(Value::as_str)
+            }) == Some("assistant")
+        })
+        .and_then(|m| {
+            m.get("parts")
+                .and_then(Value::as_array)
+                .and_then(|parts| {
+                    parts.iter().find_map(|p| {
+                        if p.get("type").and_then(Value::as_str) == Some("text") {
+                            p.get("text").and_then(Value::as_str)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .or_else(|| m.get("content").and_then(Value::as_str))
+        })
+        .unwrap_or("done");
+    messages.push(json!({
+        "info": { "id": "msg-appended", "role": "assistant" },
+        "parts": [{ "type": "text", "text": text }]
+    }));
+    serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())
 }
 
 impl Default for Script {
@@ -215,6 +252,7 @@ impl Default for Script {
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
             prompt_called: false,
+            prompt_appends_response: true,
             status_sequence: vec!["idle".into()],
             status_index: 0,
             status_delay: Duration::ZERO,
@@ -338,6 +376,13 @@ impl FakeServer {
 
     pub fn set_prompt_status(&self, status: u16) {
         self.script().prompt_status = status;
+    }
+
+    /// When true (default), each `POST /session/{id}/prompt_async` appends a
+    /// new assistant message to the message list, simulating the real sidecar
+    /// behavior that watermark checks rely on.
+    pub fn set_prompt_appends_response(&self, append: bool) {
+        self.script().prompt_appends_response = append;
     }
 
     pub fn set_session_poll_body(&self, body: &str) {
@@ -675,8 +720,20 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         if !delay.is_zero() {
             thread::sleep(delay);
         }
-        let body =
-            override_body.unwrap_or_else(|| format!(r#"{{"{session_id}":{{"type":"{phase}"}}}}"#));
+        let body = override_body.unwrap_or_else(|| {
+            let lower = phase.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "idle" | "done" | "complete" | "completed" | "success"
+            ) {
+                // The real 1.18.25 sidecar signals completion by omitting the
+                // session key from /session/status (empty map).
+                "{}".into()
+            } else {
+                let status_type = if lower == "working" { "busy" } else { &phase };
+                format!(r#"{{"{session_id}":{{"type":"{status_type}"}}}}"#)
+            }
+        });
         write_response(&mut stream, 200, body.as_bytes());
         return;
     }
@@ -701,6 +758,9 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     {
         state.last_session_id = id.to_owned();
         state.prompt_called = true;
+        if state.prompt_appends_response {
+            state.messages_body = append_assistant_response(&state.messages_body);
+        }
         let delay = state.prompt_delay;
         let status = state.prompt_status;
         drop(state);

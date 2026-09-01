@@ -101,7 +101,7 @@ fn open_session_error_is_session_creation_failed() {
 #[test]
 fn send_completes_with_web_and_document_artifacts() {
     let server = FakeServer::start();
-    server.set_status_sequence(&["working", "idle"]);
+    server.set_status_sequence(&["busy", "idle"]);
     server.set_diff_body(web_doc_diff());
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
@@ -159,7 +159,7 @@ fn send_failed_status_is_task_failed() {
 #[test]
 fn send_never_idle_times_out() {
     let server = FakeServer::start();
-    server.set_status_sequence(&["working"]);
+    server.set_status_sequence(&["busy"]);
     server.set_status_delay(Duration::from_millis(50));
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
@@ -248,7 +248,7 @@ fn status_stopped_ready_stopped() {
 #[test]
 fn send_fetches_assistant_text_from_message_endpoint() {
     let server = FakeServer::start();
-    server.set_status_sequence(&["working", "idle"]);
+    server.set_status_sequence(&["busy", "idle"]);
     server.set_messages_body(
         r#"[{"role":"assistant","parts":[{"type":"text","text":"hola desde el endpoint"}]}]"#,
     );
@@ -261,31 +261,46 @@ fn send_fetches_assistant_text_from_message_endpoint() {
 }
 
 #[test]
-fn send_no_assistant_response_is_task_failed() {
+fn send_idle_without_new_assistant_message_times_out() {
+    // Watermark check: a pre-existing assistant message without a new one after
+    // prompt_async must not be mistaken for this turn's completion.
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
-    server.set_messages_body("[]");
+    server.set_messages_body(
+        r#"[{"info":{"id":"msg-old","role":"assistant"},"parts":[{"type":"text","text":"old"}]}]"#,
+    );
+    server.set_prompt_appends_response(false);
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
-    let err = engine.send(&session, &prompt()).expect_err("no response");
-    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
+    let err = engine.send(&session, &prompt()).expect_err("timeout");
+    assert_eq!(err, AgentError::Timeout);
 }
 
 #[test]
-fn send_status_endpoint_is_scoped_to_session_id() {
+fn send_completes_when_status_map_omits_session_key() {
+    // The real 1.18.25 sidecar signals completion with an empty /session/status
+    // map (the session key disappears). The fake default idle already emits that.
     let server = FakeServer::start();
-    server.set_session_id("ses-scoped");
-    server.set_status_sequence(&["idle"]);
-    server.set_messages_body(
-        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"scoped"}]}]"#,
-    );
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
-    assert_eq!(session.id, "ses-scoped");
     let task = engine.send(&session, &prompt()).expect("send");
-    assert_eq!(task.message.as_deref(), Some("scoped"));
+    assert_eq!(task.message.as_deref(), Some("done"));
+}
+
+#[test]
+fn send_ignores_foreign_session_in_status_map() {
+    let server = FakeServer::start();
+    server.set_session_id("own-session");
+    // The engine's own session key is absent; a foreign session is busy.
+    server.set_session_poll_body(r#"{"foreign-session":{"type":"busy"}}"#);
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    assert_eq!(session.id, "own-session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("done"));
 }
 
 #[test]

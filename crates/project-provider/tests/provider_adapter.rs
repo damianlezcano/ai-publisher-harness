@@ -342,7 +342,7 @@ fn test_connection_5xx_is_provider_unavailable() {
 #[test]
 fn test_connection_timeout_is_provider_unavailable() {
     let server = FakeServer::start();
-    server.set_status_sequence(&["working"]);
+    server.set_status_sequence(&["busy"]);
     server.set_status_delay(Duration::from_millis(40));
     let connector = OpenCodeProviderConnector::new(ready_backend(&server))
         .with_scratch_root(unique_config_dir())
@@ -384,7 +384,7 @@ fn malformed_integration_json_does_not_panic() {
 #[test]
 fn test_connection_busy_then_idle_connected() {
     let server = FakeServer::start();
-    server.set_status_sequence(&["working", "idle"]);
+    server.set_status_sequence(&["busy", "idle"]);
     server.set_messages_body(r#"[{"role":"assistant","parts":[{"type":"text","text":"ok"}]}]"#);
     let connector = OpenCodeProviderConnector::new(ready_backend(&server))
         .with_scratch_root(unique_config_dir())
@@ -413,10 +413,22 @@ fn test_connection_no_assistant_response_is_provider_unavailable() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
     server.set_messages_body("[]");
+    server.set_prompt_appends_response(false);
     let result = connector(&server)
         .test_connection("opencode", "big-pickle")
         .expect("test");
     assert_eq!(result.outcome, ConnectionTestOutcome::ProviderUnavailable);
+}
+
+#[test]
+fn test_connection_ignores_foreign_busy_session() {
+    let server = FakeServer::start();
+    // Own session key absent; a foreign session is busy -> should still complete.
+    server.set_session_poll_body(r#"{"foreign-session":{"type":"busy"}}"#);
+    let result = connector(&server)
+        .test_connection("opencode", "big-pickle")
+        .expect("test");
+    assert_eq!(result.outcome, ConnectionTestOutcome::Connected);
 }
 
 #[test]
