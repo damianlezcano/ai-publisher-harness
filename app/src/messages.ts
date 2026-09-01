@@ -149,7 +149,6 @@ export const messages = {
 
   agent: {
     creating: "Creando tu recurso…",
-    completed: "Listo.",
     taskFailed: "No se pudo completar la creación.",
     ready: "Tu recurso está listo.",
   },

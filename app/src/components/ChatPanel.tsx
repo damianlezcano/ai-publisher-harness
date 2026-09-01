@@ -234,9 +234,6 @@ export default function ChatPanel({
             {messages.agent.creating}
           </p>
         )}
-        {agentPhase === "completed" && agentMessage && (
-          <p className="chat-status ok">{agentMessage}</p>
-        )}
         {agentPhase === "failed" && agentMessage && (
           <p className="chat-status err" role="alert">
             {agentMessage}
