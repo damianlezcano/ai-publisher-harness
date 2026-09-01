@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ComposerBar from "./ComposerBar";
 import type {
   MaterialAddImageView,
@@ -12,8 +13,10 @@ import type {
 } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const invokeMock = vi.mocked(invoke);
+const openDialogMock = vi.mocked(openDialog);
 
 const projectId = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
 
@@ -97,6 +100,7 @@ function setupApiMock(responses: {
   selected?: SelectedModelView;
   addImage?: MaterialAddImageView;
   selectResult?: void;
+  addFromPathError?: unknown;
 }) {
   invokeMock.mockImplementation((cmd: string) => {
     if (cmd === "model_list") return Promise.resolve(responses.models ?? []);
@@ -105,12 +109,17 @@ function setupApiMock(responses: {
     if (cmd === "material_add_image")
       return Promise.resolve(responses.addImage ?? { material: materials[0], duplicate: false });
     if (cmd === "model_select") return Promise.resolve(responses.selectResult ?? undefined);
+    if (cmd === "material_add_from_path") {
+      if (responses.addFromPathError) return Promise.reject(responses.addFromPathError);
+      return Promise.resolve(materials[0]);
+    }
     return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
   });
 }
 
 beforeEach(() => {
   invokeMock.mockReset();
+  openDialogMock.mockReset();
   base.onSend.mockReset();
   base.onCancel.mockReset();
   base.onMaterialsChanged.mockReset();
@@ -242,5 +251,24 @@ describe("ComposerBar", () => {
     setupApiMock({ selected: selectedFreeModel });
     render(<ComposerBar {...base} shareAction={<button type="button">Compartir</button>} />);
     expect(screen.getByRole("button", { name: "Compartir" })).toBeInTheDocument();
+  });
+
+  it("shows a plain-language error when adding a picked file is rejected", async () => {
+    openDialogMock.mockResolvedValueOnce("/tmp/bad.exe");
+    setupApiMock({
+      selected: selectedFreeModel,
+      addFromPathError: {
+        code: "material_unsupported",
+        message: "No admitimos ese tipo de archivo.",
+      },
+    });
+    render(<ComposerBar {...base} materials={[]} />);
+    await userEvent.click(screen.getByRole("button", { name: "Adjuntar" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("No admitimos ese tipo de archivo."),
+    );
+    expect(screen.queryByText("material_unsupported")).not.toBeInTheDocument();
+    expect(screen.queryByText("/tmp/bad.exe")).not.toBeInTheDocument();
+    expect(base.onMaterialsChanged).not.toHaveBeenCalled();
   });
 });

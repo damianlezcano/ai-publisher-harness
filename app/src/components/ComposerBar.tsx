@@ -8,6 +8,7 @@ import type {
   SelectedModelView,
 } from "../types";
 import { messages } from "../messages";
+import ErrorNotice from "./ui/ErrorNotice";
 
 export interface ComposerBarProps {
   projectId: string;
@@ -55,6 +56,7 @@ export default function ComposerBar({
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [selected, setSelected] = useState<SelectedModelView | null>(null);
   const [modelLoading, setModelLoading] = useState(true);
+  const [pickError, setPickError] = useState<unknown | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const working = agentPhase === "working";
@@ -109,12 +111,17 @@ export default function ComposerBar({
 
   async function pickFile() {
     if (composerDisabled) return;
-    const path = await api.pickFile();
-    if (!path) return;
-    const material = await api.materialAddFromPath(projectId, path);
-    await onMaterialsChanged?.();
-    setAttachmentIds((prev) => (prev.includes(material.id) ? prev : [...prev, material.id]));
-    setShowMaterialPicker(false);
+    setPickError(null);
+    try {
+      const path = await api.pickFile();
+      if (!path) return;
+      const material = await api.materialAddFromPath(projectId, path);
+      await onMaterialsChanged?.();
+      setAttachmentIds((prev) => (prev.includes(material.id) ? prev : [...prev, material.id]));
+      setShowMaterialPicker(false);
+    } catch (err) {
+      setPickError(err);
+    }
   }
 
   async function handleAttachClick() {
@@ -197,6 +204,7 @@ export default function ComposerBar({
 
   return (
     <div className="composer-bar" role="region" aria-label={messages.assistant.panelLabel}>
+      {pickError !== null && <ErrorNotice error={pickError} />}
       {attachmentIds.length > 0 && (
         <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
           {attachmentIds.map((id) => {
