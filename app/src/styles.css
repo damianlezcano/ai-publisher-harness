@@ -1051,19 +1051,53 @@ select {
   white-space: nowrap;
 }
 
-.conversation-rename-button {
+.conversation-menu {
+  position: relative;
   flex: 0 0 auto;
   align-self: center;
-  padding: var(--space-1);
+}
+
+.conversation-menu-button {
+  padding: var(--space-1) var(--space-2);
   min-width: 28px;
   min-height: 28px;
   opacity: 0;
   font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
-.conversation-item:hover .conversation-rename-button,
-.conversation-item:focus-within .conversation-rename-button {
+.conversation-item:hover .conversation-menu-button,
+.conversation-item:focus-within .conversation-menu-button {
   opacity: 1;
+}
+
+.conversation-menu-dropdown {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.conversation-menu-dropdown button {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+}
+
+.conversation-menu-dropdown button:hover:not(:disabled) {
+  background: var(--bg);
 }
 
 .conversation-rename-form {

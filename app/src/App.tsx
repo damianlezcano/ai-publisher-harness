@@ -162,6 +162,29 @@ export default function App() {
     void refreshConversations();
   }, [refreshConversations]);
 
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      await api.projectDelete(id);
+      const deletedIndex = conversations.findIndex((c) => c.id === id);
+      const remaining = conversations.filter((c) => c.id !== id);
+      await refreshConversations();
+
+      if (selectedId !== id) {
+        // Deleted an inactive conversation; keep the current one active.
+        return;
+      }
+
+      if (remaining.length === 0) {
+        setSelectedId(null);
+        setConversation(null);
+      } else {
+        const nextIndex = deletedIndex < remaining.length ? deletedIndex : remaining.length - 1;
+        await openConversation(remaining[nextIndex].id);
+      }
+    },
+    [conversations, selectedId, refreshConversations, openConversation],
+  );
+
   const providerChanged = useCallback(() => {
     setNeedsReconnect(false);
     setProviderRefreshKey((k) => k + 1);
@@ -206,6 +229,7 @@ export default function App() {
           selectedId={selectedId}
           onSelect={(id) => void openConversation(id)}
           onRefresh={refreshConversations}
+          onDelete={handleDeleteProject}
         />
 
         {selectedId && conversation ? (

@@ -115,8 +115,17 @@ function mockBackend(options: MockOptions = {}) {
       case "project_rename": {
         const { projectId, name } = (args as { projectId: string; name: string }) ?? {};
         const target = allProjects.find((p) => p.id === projectId);
-        if (target) target.name = name;
+        if (target) {
+          target.name = name;
+          target.updatedAt = new Date().toISOString();
+        }
         return Promise.resolve(target ?? null);
+      }
+      case "project_delete": {
+        const { projectId } = (args as { projectId: string }) ?? {};
+        const index = allProjects.findIndex((p) => p.id === projectId);
+        if (index !== -1) allProjects.splice(index, 1);
+        return Promise.resolve(undefined);
       }
       case "model_list":
         return Promise.resolve(useFree ? [freeModel] : []);
@@ -210,15 +219,19 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("renames a conversation from the sidebar and refreshes the list", async () => {
+  it("renames a conversation from the sidebar menu and refreshes the list", async () => {
     mockBackend({ projects: [baseSummary, otherSummary] });
     render(<App />);
     await waitForWorkspace();
 
-    const renameButton = screen.getAllByRole("button", {
-      name: messages.conversations.renameAriaLabel,
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
     })[0];
-    await userEvent.click(renameButton);
+    await userEvent.click(menuButton);
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.renameAction }),
+    );
 
     const input = screen.getByLabelText(messages.conversations.renameLabel);
     await userEvent.clear(input);
@@ -231,6 +244,102 @@ describe("App", () => {
         name: "Renombrado",
       }),
     );
+  });
+
+  it("deletes an inactive conversation and keeps the active one selected", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    render(<App />);
+    await waitForWorkspace();
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[1];
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+
+    const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
+    await userEvent.type(confirmInput, otherSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_delete", { projectId: otherSummary.id }),
+    );
+    expect(screen.getByRole("heading", { name: baseSummary.name })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: otherSummary.name })).not.toBeInTheDocument();
+  });
+
+  it("deletes the active conversation and selects another one", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    render(<App />);
+    await waitForWorkspace();
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[0];
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+
+    const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
+    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_delete", { projectId: baseSummary.id }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: otherSummary.name })).toBeInTheDocument(),
+    );
+  });
+
+  it("cancels deleting a conversation from the confirmation dialog", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    render(<App />);
+    await waitForWorkspace();
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[0];
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: messages.conversations.deleteConfirmTitle }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: messages.common.cancel }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("project_delete", expect.anything());
+    expect(screen.getByRole("heading", { name: baseSummary.name })).toBeInTheDocument();
+  });
+
+  it("shows the empty state after deleting the last conversation", async () => {
+    mockBackend({ projects: [baseSummary] });
+    render(<App />);
+    await waitForWorkspace();
+
+    const menuButton = screen.getByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    });
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+
+    const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
+    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_delete", { projectId: baseSummary.id }),
+    );
+    expect(screen.queryByRole("heading", { name: baseSummary.name })).not.toBeInTheDocument();
+    expect(document.querySelector(".conversation-placeholder")).toBeInTheDocument();
   });
 
   it("opens settings from the gear button and restores the conversation on close", async () => {

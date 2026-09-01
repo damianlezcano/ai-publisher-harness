@@ -65,8 +65,13 @@ export const messages = {
     listAriaLabel: "Conversaciones",
     newButton: "Nueva conversación",
     sharedLabel: "Compartido",
+    menuAriaLabel: "Opciones de conversación",
     renameLabel: "Renombrar conversación",
     renameAriaLabel: "Renombrar",
+    renameAction: "Renombrar",
+    deleteAction: "Eliminar conversación",
+    deleteConfirmTitle: "¿Eliminar esta conversación?",
+    deleteConfirmBody: "Se eliminarán los mensajes y los recursos asociados a esta conversación.",
   },
 
   conversation: {

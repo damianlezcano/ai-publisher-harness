@@ -308,6 +308,11 @@ where
     }
 
     pub fn delete_project(&self, id: &str) -> AppResult<()> {
+        // Unpublish first so a shared project never survives as a stale entry
+        // in PublicationManager. `unpublish` is idempotent, so this is safe
+        // when the project is already local. If unpublish fails we fail closed
+        // and do not begin removing project data.
+        self.unpublish(id)?;
         let pid = parse_project_id(id)?;
         self.projects
             .lock()
