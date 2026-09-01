@@ -4,47 +4,48 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK F NO INICIADA, ORQUESTADOR ROTADO EN ROTATE_SESSION_REQUIRED, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK F INTEGRADA, ORQUESTADOR SESSION HEALTHY, 2026-09-01)
 
-- **Current main commit: `57e01d4`** (docs del checkpoint tras Task E). La
-  corrección A-E sigue INTEGRADA y verificada (ver detalle abajo). `git log
-  --oneline -12` para el detalle.
-- **TASK F NO INICIADA.** La sesión anterior (deepseek-v4-flash) solo hizo el
-  bootstrap de Task F: leyó el contrato (checkpoint, AGENT_POLICY, WORKTREES,
-  MULTI_AGENT_WORKFLOW, AGENT-POLICY budget), inspeccionó el estado, creó
-  worktree `corr/f-conversation-delete` (`../ai-publisher-corr-01-f`) y pane
-  `w1F:p19`, y recopiló el contexto de dominio (ver "Mapa de Task F" abajo).
-  **NO se escribió código. NO se lanzó autor.** El orquestador llegó a
-  **ROTATE_SESSION_REQUIRED (105K, 100K-129,999)** mientras recopilaba el
-  contexto → `scripts/agent-launch --launch` falló cerrado (exit 10) → se
-  respetó el gate: sin Task F en esta sesión. Worktree removido, branch
-  `corr/f-conversation-delete` borrado (era `57e01d4`), pane `w1F:p19` cerrado.
-  `git status --short` limpio, `main` intacto.
-- **Session budget: ROTATE_SESSION_REQUIRED (105K)**. NO iniciar Tasks F/G.
-  NO M11. NO bypass del gate. La sesión siguiente arranca en Task F desde un
-  orquestador FRESH y low-context.
-- **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
-  `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
-  `corr/b-attachment-flow`). Task C INTEGRADA (`c94e114`, merge de
-  `corr/c-startup-states`; autor kimi `fd1d928`, revisor qwen APPROVE tras
-  REQUEST_CHANGES — MAJOR-1 resuelto y con cobertura de regresión, restantes
-  NIT no bloqueantes). Task D INTEGRADA (`f44d507`, merge de
-  `corr/d-conversation-terms`; autor Composer 2.5 commit `18ac233`, revisor
-  qwen3.8-flash APPROVE sin hallazgos). **Task E INTEGRADA (`cea141e`, merge de
-  `corr/e-duplicate-render`; fix LOW commit `60dc786`; revisor qwen3.8-flash
-  FRESH APPROVE — ver detalle abajo)**. `./scripts/verify` PASS en main tras E
-  (193 tests frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok).
-  Worktrees de Task D y E removidos, branches borrados. Panes author/reviewer
-  de D y E cerrados.
-- **Session budget: CHECKPOINT_WARNING (94.9K, 80K-99,999)**. Este orquestador
-  rota en el punto seguro: Task E completa, integrada y verificada, panes
-  cerrados. NO se inician Tasks F-G. NO M11. NO bypass del gate.
+- **Current main commit: `6ea0e67`** (merge de Task F). La corrección A-F sigue
+  INTEGRADA y verificada (ver detalle abajo). `git log --oneline -12` para el
+  detalle.
+- **TASK F INTEGRADA (`6ea0e67`).** Autor `opencode-go/kimi-k2.7-code`
+  (commits `26411f1` + fixes `14365c0` en `corr/f-conversation-delete`),
+  revisor `opencode-go/qwen3.8-flash` FRESH (pane `w1K:p1`): REQUEST_CHANGES →
+  APPROVE. El REQUEST_CHANGES fue por MAJOR-1 (delete-while-generating dejaba
+  archivos huérfanos: `AgentService::run` hacía `create_dir_all` sin verificar
+  metadata y el delete no cancelaba/serializaba contra el agente). Fixes
+  aplicados por el MISMO autor (círculo autor→revisor respetado): delete
+  serializa contra el per-project lock y cancela el run en vuelo antes de
+  remover; `run_agent_with_inputs` falla rápido si metadata ya no existe;
+  `AgentService::run` limpia el árbol huérfano si el proyecto desaparece
+  mid-run; UI deshabilita "Eliminar" mientras la conversación genera; tests
+  fail-closed (unpublish-failure aborta con datos intactos) y de error de
+  delete (dialogo queda abierto, item preservado). `./scripts/verify` PASS en
+  main tras F (199 tests frontend, cargo verde, M10 + UX_REDESIGN_01 contract
+  ok). Panes author (`w1J:p1`) y reviewer (`w1K:p1`) cerrados tras APPROVE.
+  Worktree `../ai-publisher-corr-01-f` y `../ai-publisher-corr-01-f-review`
+  removidos; branch `corr/f-conversation-delete` y `-review` borrados.
+- **Session budget: CONTINUE (58K al cierre de F)**. La sesión está sana y NO
+  debe ampliar el trabajo automáticamente. El siguiente trabajo alto-valor es
+  **Task G (pass visual producto/UX, Cursor Grok 4.6 High)** y debería idealmente
+  arrancar desde una sesión de orquestador FRESH (Task G es trabajo de producto,
+  no funcional; el contrato exige Grok solo vía Cursor). Este orquestador
+  prefiere checkpointear Task F limpio y detenerse.
+- **Progreso del pass:** Task A INTEGRADA (`e6389ea`). Task B INTEGRADA
+  (`88761be`). Task C INTEGRADA (`c94e114`; autor kimi `fd1d928`, revisor qwen
+  APPROVE tras REQUEST_CHANGES). Task D INTEGRADA (`f44d507`; autor Composer
+  2.5 `18ac233`, revisor qwen APPROVE). Task E INTEGRADA (`cea141e`; fix LOW
+  `60dc786`, revisor qwen FRESH APPROVE). **Task F INTEGRADA (`6ea0e67`; autor
+  kimi `26411f1`+`14365c0`, revisor qwen REQUEST_CHANGES→APPROVE — ver detalle
+  arriba)**. `./scripts/verify` PASS en main tras F. Tasks A-F hechas;
+  **Task G PENDIENTE**.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
   AppImage real construido y verificado (detalles al final). NO reiniciar.
 - **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
-  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-D done, E-G pendientes.
+  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-F done, G pendiente.
 
 ## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
@@ -104,14 +105,21 @@
     `service.rs:146-174`, prompt "Materiales adjuntos… están en la carpeta
     materials"). El eslabón roto es FRONTEND: drop → adjuntar al mensaje.
 15. Los recursos deben seguir entendibles sin dashboard Materiales.
-16. **No hay forma contextual de eliminar conversaciones.** `project_delete`
+16. **No hay forma contextual de eliminar conversaciones.** ~~`project_delete`
     existe end-to-end (commando `commands.rs:80-89`, `AppState::delete_project`
     `app.rs:310-317`, `ProjectService::delete_project` `project-core/src/lib.rs:807-811`,
     `api.ts:31`) pero NINGÚN componente lo llama; `ConfirmDialog` existe
     (type-name-to-confirm, `ConfirmDialog.tsx:15-48`) pero no está cableado.
     **Bug adicional detectado:** `delete_project` NO hace `unpublish` → entrada
     stale en `PublicationManager.published` y el proyecto aparece "shared"
-    hasta reiniciar.
+    hasta reiniciar.~~ **RESUELTO EN TASK F (`6ea0e67`):** menú contextual "…"
+    por conversación (Renombrar / Eliminar conversación) en
+    `ConversationsSidebar.tsx`; `ConfirmDialog` cableado (type-name-to-confirm,
+    copy en lenguaje llano); `delete_project` hace `unpublish` primero
+    (fail-closed); delete serializa contra el agente (cancela run en vuelo) y
+    limpia huérfanos; UI deshabilita Eliminar mientras genera; selección
+    post-delete correcta (inactiva queda, activa → siguiente predecible, última
+    → estado vacío "No hay conversaciones").
 
 ## Contratos clave actuales (para los workers)
 
@@ -167,7 +175,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | C | ~~Error falso de arranque (STARTING/READY/FAILED)~~ **HECHA** (`c94e114`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/App.tsx`, `WorkspaceView.tsx`, `messages.ts`, `types.ts`, tests~~ | Estados explícitos vía poll de `app_status`; "Preparando el asistente…"; solo fallo terminal real; `failed` recuperable (retry + auto-poll); tests cold/delayed/failure/recovery. APPROVE. |
 | D | ~~Terminología de conversación~~ **HECHA** (`f44d507`) | Composer 2.5 | qwen3.8-flash | ~~`app/src/messages.ts`, `App.tsx`, tests, legacy naming~~ | `conversationDisplayName()` render-time: legacy "Proyecto sin título"/"Proyecto sin título N" → "Conversación nueva"; 8 AC cubiertos (default, legacy, user-renamed, sidebar, header, restart, ordering, sin Project terminology en DOM). APPROVE sin hallazgos. |
 | E | ~~Duplicado/texto verde~~ **HECHA** (`cea141e`) | LOW (orquestador deepseek-v4-flash; raíz ya confirmada) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx`, `app/src/messages.ts`, tests | Eliminar doble render del contenido asistente (`.chat-status.ok` verde transitorio duplicaba la burbuja persistida; backend siempre persiste el mensaje terminal en `send_message_run`). `setAgentMessage(null)` en completed; se mantienen spinner working + `.err` failed (a11y role="alert"). 193 tests, verify PASS. APPROVE (NIT: CSS `.chat-status.ok` muerto). |
-| F | Eliminar conversación (backend semántica + UI) | Backend kimi; UI **Cursor Grok 4.6 High** | qwen3.8-flash (código) | backend: `crates/project-app/src/app.rs` (delete + unpublish), `crates/project-publication`, tests; UI: sidebar menú ⋮, ConfirmDialog, selección post-delete | Delete durable, fail-closed, recursos solo-exclusivos, no half-delete, confirmación en lenguaje llano, tests 10+ |
+| F | ~~Eliminar conversación (backend semántica + UI)~~ **HECHA** (`6ea0e67`) | kimi-k2.7-code (`26411f1` + fixes `14365c0`) | qwen3.8-flash | ~~`crates/project-app/src/app.rs` (delete + unpublish + serialización agente), `crates/project-agent/src/service.rs` (cleanup huérfanos), `app/src/{App,components/ConversationsSidebar}.tsx`, `messages.ts`, `styles.css`, tests~~ | Menú "…" contextual (Renombrar/Eliminar), ConfirmDialog type-name, delete durable + fail-closed + unpublish primero, sin huérfanos (serialización/cancel contra agente + cleanup mid-run), selección post-delete correcta, última → estado vacío, renombrar preserva id/orden/activa, tests 13 AC. REQUEST_CHANGES→APPROVE (MAJOR-1 resuelto). |
 | G | Pass visual producto/UX **Cursor Grok 4.6 High** | Cursor Grok 4.6 High | Cursor Grok 4.6 High FRESH (UX) + qwen3.8-flash (código/a11y) | `app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú) | Chat tipo mensajería; adjuntos en el mensaje; creación Abrir/Compartir; menú contextual; sin dashboard |
 | T6 | Playwright headed | LOW | qwen3.8-flash | `app/` harness | 3 viewports, 16 capturas, aserciones |
 | T7 | AppImage real + `./scripts/verify` | LOW/Composer | qwen3.8-flash | packaging M10 | AppImage con sidecars, lanzamiento real, verificación completa |
@@ -175,16 +183,18 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
 D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
 Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
-**A, B, C, D YA integradas. La sesión siguiente empieza con Task E.**
+**A, B, C, D, E, F YA integradas. La sesión siguiente empieza con Task G**
+**(pass visual producto/UX, idealmente desde orquestador FRESH).**
 
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `f44d507`; NO es workspace de autor).
-- Worktrees de Task A, B y C removidos tras integración.
-- Worktree de Task D (`../ai-publisher-corr-01-d`, `corr/d-conversation-terms`)
-  y worktree de review D (`../ai-publisher-corr-01-d-review`) removidos; branch
-  borrado tras integración de `f44d507`.
+  (integración, `6ea0e67`; NO es workspace de autor).
+- Worktrees de Task A, B, C, D, E removidos tras integración.
+- Worktree de Task F (`../ai-publisher-corr-01-f`, `corr/f-conversation-delete`)
+  y worktree de review F (`../ai-publisher-corr-01-f-review`,
+  `corr/f-conversation-delete-review`) removidos; branches borrados tras
+  integración de `6ea0e67`.
 - Nuevos worktrees de la corrección: crear en paths hermanos (ej.
   `../ai-publisher-corr-01-<task>`) por tarea.
 
@@ -238,10 +248,28 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
   CSS `.chat-status.ok` (`app/src/styles.css:407`) quedó muerto (solo referencias
   en selectores negativos de test). Merge `cea141e`, branch borrado, worktree y
   pane de review cerrados.** Grok NO usado (G/F-UI pendientes).
+- **Task F: autor `opencode-go/kimi-k2.7-code` (`task-f-author`, pane `w1J:p1`,
+  commits `26411f1` + fixes `14365c0`), revisor `opencode-go/qwen3.8-flash`
+  (`task-f-review`, pane `w1K:p1`, FRESH — REQUEST_CHANGES → APPROVE tras
+  verificar MAJOR-1 resuelto con lock-ordering sólido, fail-closed testeado, y
+  gates verdes 199 FE + cargo + fmt/clippy). Ambas panes cerrados. Merge
+  `6ea0e67`, branches `corr/f-conversation-delete`(-review) borrados, worktrees
+  removidos. Hallazgos residuales NO bloqueantes anotados por el revisor:
+  MINOR TOCTOU (si delete completa en la ventana entre el pre-check de
+  `run_agent_with_inputs` y que `AgentService::run` adquiera el lock del agente,
+  puede quedar un scratch dir `projects/<id>/workspace` sin datos de usuario;
+  fix recomendado: chequeo de existencia autoritativo DENTRO del lock del agente
+  en `run`, antes de `create_dir_all`), NIT comment del pre-check (usa lock
+  distinto al del agente), NIT test de serialización usa dos AppState
+  independientes (pasa vía cleanup, no vía el mecanismo "waits"; añadir twin
+  single-instance), NIT disable UI solo cubre la conversación seleccionada.
+  Grok NO usado (G pendiente).**
 
-## Mapa de Task F (contexto recopilado, sin escribir código)
+## Mapa de Task F (contexto histórico — YA EJECUTADO en `6ea0e67`, conservado como contexto)
 
 Backend delete ya existe end-to-end pero NO des-publica (bug hallazgo 16):
+(MAPEO ORIGINAL — Task F ya resuelta arriba; se conserva para auditoría del
+estado previo.)
 
 - `project_delete` Tauri: `app/src-tauri/src/commands.rs:80-89`.
 - `AppState::delete_project`: `crates/project-app/src/app.rs:310-317` — solo
@@ -299,18 +327,22 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
 
-1. **Rotar orquestador AHORA** (ROTATE_SESSION_REQUIRED 105K alcanzado durante
-   el bootstrap/contexto de Task F, antes de lanzar autor; punto seguro: repo
-   limpio, main intacto, sin código nuevo, worktree/pane de F removidos).
-2. Sesión FRESH low-context: leer este checkpoint, correr
-   `scripts/check-session-budget` (esperar CONTINUE), crear worktree
-   `corr/f-conversation-delete` en `../ai-publisher-corr-01-f`, y ejecutar
-   **Task F** con el contrato de arriba: backend kimi-k2.7-code (delete +
-   unpublish fail-closed en `app.rs`, tests en `app_facade.rs`), revisión código
-   qwen3.8-flash, UI menú ⋮ + ConfirmDialog + selección post-delete + última
-   conversación + persistencia restart (tests deterministas 14 AC del contrato
-   original). Luego G (pass visual Grok 4.6 High), review Grok independiente,
-   review qwen, Playwright headed, AppImage NUEVO, `./scripts/verify`, STOP para
-   aprobación humana. Tasks A-E NO se repiten (`cea141e`/`60dc786` es contexto).
-3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
+Task F queda CERRADA e integrada en `6ea0e67` con `./scripts/verify` PASS y
+budget CONTINUE. **NO ampliar el trabajo automáticamente en esta sesión.**
+
+1. **Checkpointear Task F limpio y detenerse** (preferido): este orquestador ya
+   capturó el handoff durable; Task G es trabajo de producto/visual de alto
+   valor y debe arrancar desde una sesión de orquestador FRESH (contrato exige
+   Cursor Grok 4.6 High solo vía Cursor; review UX Grok FRESH + qwen para
+   código/a11y).
+2. Sesión FRESH para **Task G (pass visual producto/UX)**: leer este checkpoint,
+   correr `scripts/check-session-budget` (esperar CONTINUE), ejecutar G con el
+   contrato de la tabla de arriba. Luego Playwright headed (T6), AppImage NUEVO
+   (T7), `./scripts/verify`, STOP para aprobación humana.
+3. **Seguimiento recomendado NO bloqueante (de la review de F):** hacer el
+   chequeo de existencia de proyecto autoritativo DENTRO del lock del agente en
+   `AgentService::run` (antes de `create_dir_all`) para cerrar el micro-window
+   TOCTOU que puede dejar un scratch dir `projects/<id>/workspace` sin datos de
+   usuario; añadir test single-instance de serialización delete↔agent.
+4. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
