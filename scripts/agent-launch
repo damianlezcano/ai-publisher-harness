@@ -9,8 +9,9 @@ usage() {
   cat <<'EOF'
 Usage: scripts/agent-launch --role ROLE --provider cursor|opencode [options]
 
-Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, review, high-review, high-architecture
+Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, high-visual, review, high-review, high-architecture
   review/high-review use Qwen3.8 Flash / Max respectively; high-review is ESCALATION-ONLY.
+  high-visual maps to Cursor Grok 4.6 High (Cursor provider only) for explicit visual-design author tasks.
 Options:
   --worktree PATH  Required for --launch.
   --pane ID        Required for --launch; Herdr pane ID.
@@ -54,6 +55,7 @@ case "$role/$provider" in
   medium-high-fallback/opencode) model=$MEDIUM_HIGH_FALLBACK_OPENCODE_MODEL ;;
   high-coding/cursor) model=$HIGH_CODING_CURSOR_MODEL ;;
   high-coding/opencode) model=$HIGH_CODING_OPENCODE_MODEL ;;
+  high-visual/cursor) model=$HIGH_VISUAL_CURSOR_MODEL ;;
   review/opencode) model=$REVIEW_OPENCODE_MODEL ;;
   high-review/opencode) model=$HIGH_REVIEW_OPENCODE_MODEL ;;
   high-architecture/opencode) model=$HIGH_ARCHITECTURE_OPENCODE_MODEL ;;
@@ -68,6 +70,7 @@ esac
 case "$model" in
   composer-2.5) model_display='Composer 2.5' ;;
   cursor-grok-4.6-medium) model_display='Cursor Grok 4.6 Medium' ;;
+  cursor-grok-4.6-high) model_display='Cursor Grok 4.6 High' ;;
   opencode-go/mimo-v2.5) model_display='MiMo V2.5 OpenCode Go' ;;
   opencode-go/deepseek-v4-flash) model_display='DeepSeek V4 Flash OpenCode Go' ;;
   opencode-go/qwen3.8-flash) model_display='Qwen3.8 Flash OpenCode Go' ;;
