@@ -27,6 +27,7 @@ pub struct Script {
     pub session_status: u16,
     pub session_body: String,
     pub last_directory: Option<String>,
+    pub last_permission: Option<Value>,
     pub last_session_id: String,
     pub prompt_status: u16,
     pub prompt_delay: Duration,
@@ -248,6 +249,7 @@ impl Default for Script {
             session_status: 200,
             session_body: r#"{"id":"ses-1"}"#.into(),
             last_directory: None,
+            last_permission: None,
             last_session_id: "ses-1".into(),
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
@@ -366,6 +368,10 @@ impl FakeServer {
         self.script().last_directory.clone()
     }
 
+    pub fn last_permission(&self) -> Option<Value> {
+        self.script().last_permission.clone()
+    }
+
     pub fn abort_called(&self) -> bool {
         self.script().abort_called
     }
@@ -465,12 +471,16 @@ fn enveloped(array_bytes: &[u8]) -> Vec<u8> {
 }
 
 fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
-    let Some((method, path, body)) = read_request(&mut stream) else {
+    let Some((method, full_path, body)) = read_request(&mut stream) else {
         return;
     };
     // Strip query string so handlers can match routes with parameters (e.g.
-    // `/session/{id}/message?limit=...`).
-    let path = path.split('?').next().unwrap_or(&path).to_owned();
+    // `/session/{id}/message?limit=...`). Keep the query for POST /session,
+    // where OpenCode 1.18.25 takes `directory` as a query parameter.
+    let (path, query) = match full_path.split_once('?') {
+        Some((path, query)) => (path.to_owned(), Some(query.to_owned())),
+        None => (full_path, None),
+    };
     let mut state = script
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -739,10 +749,11 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     }
 
     if method == "POST" && path == "/session" {
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body)
-            && let Some(dir) = value.get("directory").and_then(|v| v.as_str())
-        {
-            state.last_directory = Some(dir.to_owned());
+        if let Some(dir) = query.as_deref().and_then(query_param_directory) {
+            state.last_directory = Some(dir);
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            state.last_permission = value.get("permission").cloned();
         }
         let status = state.session_status;
         let body = state.session_body.clone();
@@ -850,6 +861,51 @@ fn append_connection(state: &mut Script, provider_id: &str, label: Option<String
     true
 }
 
+fn query_param_directory(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?;
+        if key != "directory" {
+            continue;
+        }
+        let value = parts.next().unwrap_or("");
+        return Some(percent_decode(value));
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn read_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut buf = Vec::new();
@@ -922,4 +978,26 @@ fn write_response(stream: &mut TcpStream, status: u16, body: &[u8]) {
     let _ = stream.write_all(header.as_bytes());
     let _ = stream.write_all(body);
     let _ = stream.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{percent_decode, query_param_directory};
+
+    #[test]
+    fn query_param_directory_decodes_encoded_path() {
+        assert_eq!(
+            query_param_directory("directory=%2Ftmp%2Fproj-7%2Fworkspace"),
+            Some("/tmp/proj-7/workspace".into())
+        );
+    }
+
+    #[test]
+    fn percent_decode_plus_is_space_and_malformed_percent_is_left_intact() {
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%z1"), "%z1");
+        assert_eq!(percent_decode("%2"), "%2");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+    }
 }

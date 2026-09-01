@@ -366,7 +366,8 @@ describe("ChatPanel timeline", () => {
     expect(screen.getAllByText("Acá tenés la actividad")).toHaveLength(1);
   });
 
-  it("keeps failure status human-readable as an alert alongside a persisted failed bubble", () => {
+  it("does not duplicate a persisted failed assistant message as raw error text", () => {
+    const failure = "No se pudo iniciar el asistente de IA.";
     render(
       <ChatPanel
         {...base}
@@ -374,7 +375,7 @@ describe("ChatPanel timeline", () => {
           {
             id: "msg-3",
             role: "assistant",
-            text: "No se pudo completar.",
+            text: failure,
             status: "failed",
             createdAt: "2026-08-28T15:02:00Z",
             materialIds: [],
@@ -382,15 +383,48 @@ describe("ChatPanel timeline", () => {
           },
         ]}
         agentPhase="failed"
-        agentMessage="No se pudo completar la creación."
+        agentMessage={failure}
       />,
     );
-    const errStatus = screen.getByText("No se pudo completar la creación.", {
-      selector: ".chat-status.err",
-    });
+    expect(screen.getAllByText(failure)).toHaveLength(1);
+    expect(screen.queryByText(failure, { selector: ".chat-status.err" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(failure);
+  });
+
+  it("still renders a failed status line when an earlier failed bubble is not the newest message", () => {
+    const previousFailure = "No se pudo completar la creación.";
+    const currentFailure = "No se pudo iniciar el asistente de IA.";
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          {
+            id: "msg-old-fail",
+            role: "assistant",
+            text: previousFailure,
+            status: "failed",
+            createdAt: "2026-08-28T15:02:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+          {
+            id: "msg-new-user",
+            role: "user",
+            text: "Intentá de nuevo",
+            status: "ok",
+            createdAt: "2026-08-28T15:03:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+        ]}
+        agentPhase="failed"
+        agentMessage={currentFailure}
+      />,
+    );
+    expect(screen.getByText(previousFailure)).toBeInTheDocument();
+    const errStatus = screen.getByText(currentFailure, { selector: ".chat-status.err" });
     expect(errStatus).toHaveAttribute("role", "alert");
-    // The persisted failed bubble is still present and readable.
-    expect(screen.getByText("No se pudo completar.")).toBeInTheDocument();
+    expect(screen.getAllByText(currentFailure)).toHaveLength(1);
   });
 
   it("keeps the polite live region on the chat log for accessibility", () => {

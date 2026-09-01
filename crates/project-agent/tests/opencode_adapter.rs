@@ -9,6 +9,7 @@ use project_agent::model::{
     AgentProject, AgentPrompt, AgentStatus, ArtifactKind, ModelRef, TaskStatus,
 };
 use project_agent::{AgentEngine, AgentError, OpenCodeAgentEngine};
+use serde_json::json;
 
 fn engine_for(server: &FakeServer) -> OpenCodeAgentEngine {
     OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
@@ -80,6 +81,14 @@ fn open_session_posts_directory_and_returns_id() {
     assert_eq!(session.id, "ses-42");
     assert_eq!(session.project_id, "proj-7");
     assert_eq!(server.last_directory().as_deref(), Some("/tmp/proj-7"));
+    assert_eq!(
+        server.last_permission(),
+        Some(json!([{
+            "permission": "external_directory",
+            "pattern": "*",
+            "action": "deny",
+        }]))
+    );
 }
 
 #[test]
@@ -168,7 +177,10 @@ fn send_never_idle_times_out() {
         Err(err) => err,
         Ok(_) => panic!("timeout"),
     };
-    assert_eq!(err, AgentError::Timeout);
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -274,7 +286,10 @@ fn send_idle_without_new_assistant_message_times_out() {
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let err = engine.send(&session, &prompt()).expect_err("timeout");
-    assert_eq!(err, AgentError::Timeout);
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        "{err:?}"
+    );
 }
 
 #[test]

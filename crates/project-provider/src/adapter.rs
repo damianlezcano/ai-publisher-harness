@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use project_opencode::{BackendError, OpenCodeBackend};
+use project_opencode::{BackendError, OpenCodeBackend, with_directory_query};
 use serde_json::{Value, json};
 
 use crate::error::{ProviderError, ProviderResult};
@@ -317,7 +317,8 @@ impl ProviderConnector for OpenCodeProviderConnector {
         let scratch = make_scratch_dir(self.scratch_root.as_ref())?;
         let _guard = ScratchGuard(scratch.clone());
         let directory = scratch.to_string_lossy().replace('\\', "/");
-        let (status, text) = self.post("/session", &json!({ "directory": directory }))?;
+        let path = with_directory_query("/session", &directory);
+        let (status, text) = self.post(&path, &json!({}))?;
         if !(200..300).contains(&status) {
             return failed_test(ConnectionTestOutcome::ProviderUnavailable);
         }
