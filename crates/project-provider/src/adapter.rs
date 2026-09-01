@@ -403,10 +403,10 @@ impl OpenCodeProviderConnector {
     }
 
     fn poll_test_session(&self, session_id: &str) -> ProviderResult<ConnectionTest> {
-        let path = format!("/session/{session_id}");
+        let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
         loop {
-            let (status, body) = self.get(&path)?;
+            let (status, body) = self.get(path)?;
             if !(200..300).contains(&status) {
                 return failed_test(ConnectionTestOutcome::ProviderUnavailable);
             }
@@ -414,10 +414,11 @@ impl OpenCodeProviderConnector {
                 Ok(v) => v,
                 Err(_) => return failed_test(ConnectionTestOutcome::ProviderUnavailable),
             };
-            let phase = session_phase(&value);
+            let phase = session_status_phase(&value, session_id).unwrap_or_else(|| "idle".into());
             match phase.as_str() {
                 "idle" | "done" | "complete" | "completed" | "success" => {
-                    if last_assistant_text(&value).is_some() {
+                    let message = self.fetch_last_assistant_text(session_id)?;
+                    if message.is_some() {
                         return Ok(ConnectionTest {
                             outcome: ConnectionTestOutcome::Connected,
                             message: "Conectado.".into(),
@@ -426,7 +427,8 @@ impl OpenCodeProviderConnector {
                     return failed_test(ConnectionTestOutcome::ProviderUnavailable);
                 }
                 "failed" | "error" | "failure" => {
-                    return Ok(map_session_failure(&value, &body));
+                    let message = self.fetch_last_assistant_text(session_id).unwrap_or(None);
+                    return Ok(map_session_failure_text(message.as_deref()));
                 }
                 _ => {}
             }
@@ -435,6 +437,27 @@ impl OpenCodeProviderConnector {
             }
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn fetch_last_assistant_text(&self, session_id: &str) -> ProviderResult<Option<String>> {
+        let path = format!("/session/{session_id}/message?limit=1000");
+        let (status, body) = self.get(&path)?;
+        if !(200..300).contains(&status) {
+            return Ok(None);
+        }
+        let value: Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        let messages = match value {
+            Value::Array(items) => items,
+            Value::Object(mut map) => map
+                .remove("data")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default(),
+            _ => return Ok(None),
+        };
+        Ok(last_assistant_text_from_messages(&messages))
     }
 }
 
@@ -771,29 +794,15 @@ fn oauth_kind(raw: &str) -> Option<OAuthStatusKind> {
     }
 }
 
-fn session_phase(value: &Value) -> String {
-    if let Some(status) = value.get("status").and_then(Value::as_str) {
-        return status.to_ascii_lowercase();
-    }
-    if let Some(status) = value
-        .get("status")
-        .and_then(|s| s.get("type").or_else(|| s.get("name")))
+fn session_status_phase(value: &Value, session_id: &str) -> Option<String> {
+    value
+        .get(session_id)
+        .and_then(|entry| entry.get("type"))
         .and_then(Value::as_str)
-    {
-        return status.to_ascii_lowercase();
-    }
-    if value
-        .get("time")
-        .and_then(|t| t.get("completed"))
-        .is_some_and(|c| !c.is_null())
-    {
-        return "idle".into();
-    }
-    "working".into()
+        .map(|s| s.to_ascii_lowercase())
 }
 
-fn last_assistant_text(value: &Value) -> Option<String> {
-    let messages = value.get("messages")?.as_array()?;
+fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
     let mut last = None;
     for message in messages {
         let role = message
@@ -836,19 +845,14 @@ fn message_text(message: &Value) -> Option<String> {
     }
 }
 
-fn map_session_failure(value: &Value, raw_body: &str) -> ConnectionTest {
-    let haystack = format!(
-        "{} {}",
-        last_assistant_text(value).unwrap_or_default(),
-        value.get("error").and_then(Value::as_str).unwrap_or("")
-    );
+fn map_session_failure_text(message: Option<&str>) -> ConnectionTest {
+    let haystack = message.unwrap_or("");
     let lower = haystack.to_ascii_lowercase();
     let outcome = if lower.contains("401") || lower.contains("403") {
         ConnectionTestOutcome::CredentialInvalid
     } else if lower.contains("not found") || lower.contains("404") {
         ConnectionTestOutcome::NoCompatibleModel
     } else {
-        let _ = raw_body;
         ConnectionTestOutcome::ProviderUnavailable
     };
     ConnectionTest {

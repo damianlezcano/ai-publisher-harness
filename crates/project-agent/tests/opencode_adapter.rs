@@ -246,6 +246,49 @@ fn status_stopped_ready_stopped() {
 }
 
 #[test]
+fn send_fetches_assistant_text_from_message_endpoint() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["working", "idle"]);
+    server.set_messages_body(
+        r#"[{"role":"assistant","parts":[{"type":"text","text":"hola desde el endpoint"}]}]"#,
+    );
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert_eq!(task.message.as_deref(), Some("hola desde el endpoint"));
+}
+
+#[test]
+fn send_no_assistant_response_is_task_failed() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body("[]");
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let err = engine.send(&session, &prompt()).expect_err("no response");
+    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
+}
+
+#[test]
+fn send_status_endpoint_is_scoped_to_session_id() {
+    let server = FakeServer::start();
+    server.set_session_id("ses-scoped");
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"scoped"}]}]"#,
+    );
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    assert_eq!(session.id, "ses-scoped");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("scoped"));
+}
+
+#[test]
 fn shutdown_is_idempotent() {
     let server = FakeServer::start();
     let engine = engine_for(&server);

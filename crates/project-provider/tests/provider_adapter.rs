@@ -382,6 +382,44 @@ fn malformed_integration_json_does_not_panic() {
 }
 
 #[test]
+fn test_connection_busy_then_idle_connected() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["working", "idle"]);
+    server.set_messages_body(r#"[{"role":"assistant","parts":[{"type":"text","text":"ok"}]}]"#);
+    let connector = OpenCodeProviderConnector::new(ready_backend(&server))
+        .with_scratch_root(unique_config_dir())
+        .with_task_timeout(Duration::from_secs(2));
+    let result = connector
+        .test_connection("opencode", "big-pickle")
+        .expect("test");
+    assert_eq!(result.outcome, ConnectionTestOutcome::Connected);
+}
+
+#[test]
+fn test_connection_failed_status_maps_to_outcome() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["failed"]);
+    server.set_messages_body(
+        r#"[{"role":"assistant","parts":[{"type":"text","text":"HTTP 401 from provider"}]}]"#,
+    );
+    let result = connector(&server)
+        .test_connection("opencode", "big-pickle")
+        .expect("test");
+    assert_eq!(result.outcome, ConnectionTestOutcome::CredentialInvalid);
+}
+
+#[test]
+fn test_connection_no_assistant_response_is_provider_unavailable() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body("[]");
+    let result = connector(&server)
+        .test_connection("opencode", "big-pickle")
+        .expect("test");
+    assert_eq!(result.outcome, ConnectionTestOutcome::ProviderUnavailable);
+}
+
+#[test]
 fn provider_detail_unknown_is_not_found() {
     let server = FakeServer::start();
     let err = connector(&server)
