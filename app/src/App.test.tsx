@@ -60,6 +60,7 @@ let taskHandler: ((event: Event<unknown>) => void) | null = null;
 interface MockOptions {
   projects?: ProjectSummary[];
   openError?: unknown;
+  deleteError?: unknown;
   requiresChoice?: boolean;
   freeModel?: boolean;
   agentSendError?: unknown;
@@ -70,6 +71,7 @@ function mockBackend(options: MockOptions = {}) {
   const {
     projects = [baseSummary],
     openError,
+    deleteError,
     requiresChoice = false,
     freeModel: useFree = true,
     agentSendError,
@@ -122,6 +124,7 @@ function mockBackend(options: MockOptions = {}) {
         return Promise.resolve(target ?? null);
       }
       case "project_delete": {
+        if (deleteError) return Promise.reject(deleteError);
         const { projectId } = (args as { projectId: string }) ?? {};
         const index = allProjects.findIndex((p) => p.id === projectId);
         if (index !== -1) allProjects.splice(index, 1);
@@ -340,6 +343,78 @@ describe("App", () => {
     );
     expect(screen.queryByRole("heading", { name: baseSummary.name })).not.toBeInTheDocument();
     expect(document.querySelector(".conversation-placeholder")).toBeInTheDocument();
+  });
+
+  it("keeps the confirm dialog and conversation when deletion is rejected", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      deleteError: { code: "internal", message: "No se pudo eliminar la conversación." },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[0];
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+
+    const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
+    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_delete", { projectId: baseSummary.id }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: messages.conversations.deleteConfirmTitle }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: baseSummary.name })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(otherSummary.name) })).toBeInTheDocument();
+    expect(
+      screen.getByText("No se pudo eliminar la conversación.", { selector: ".error" }),
+    ).toBeInTheDocument();
+  });
+
+  it("disables delete for the conversation that is currently generating", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    captureTaskListener();
+    render(<App />);
+    await waitForWorkspace();
+
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 1,
+        payload: {
+          projectId: baseSummary.id,
+          status: "working",
+          message: null,
+          registeredCreationIds: [],
+        },
+      });
+    });
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[0];
+    await userEvent.click(menuButton);
+
+    const deleteItem = screen.getByRole("menuitem", {
+      name: messages.conversations.deleteAction,
+    });
+    expect(deleteItem).toBeDisabled();
+
+    const otherMenuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[1];
+    await userEvent.click(otherMenuButton);
+    const otherDeleteItem = screen.getByRole("menuitem", {
+      name: messages.conversations.deleteAction,
+    });
+    expect(otherDeleteItem).toBeEnabled();
   });
 
   it("opens settings from the gear button and restores the conversation on close", async () => {

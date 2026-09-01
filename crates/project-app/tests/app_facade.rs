@@ -184,6 +184,127 @@ fn delete_persists_after_restart() {
 }
 
 #[test]
+fn delete_aborts_when_unpublish_fails_leaving_project_intact() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, tunnel) = app(tmp.path());
+    let p = app.create_project("Fotosíntesis").expect("create");
+    app.publish(&p.id).expect("publish");
+
+    tunnel.fail_stop();
+    let err = app.delete_project(&p.id).unwrap_err();
+    assert_eq!(err.code, ErrorCode::PublishFailed);
+
+    assert_eq!(app.list_projects().expect("list").len(), 1);
+    assert!(app.open_project(&p.id).is_ok());
+}
+
+#[test]
+fn delete_waits_for_in_flight_agent_and_leaves_no_orphans() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    engine.set_message("Listo.".to_owned());
+
+    let barrier = Arc::new(Barrier::new(2));
+    let entered_send = Arc::new(AtomicBool::new(false));
+
+    #[derive(Clone)]
+    struct BlockingEngine {
+        inner: FakeAgentEngine,
+        barrier: Arc<Barrier>,
+        entered_send: Arc<AtomicBool>,
+    }
+
+    impl project_agent::AgentEngine for BlockingEngine {
+        fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+            self.inner.ensure_ready()
+        }
+        fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+            self.inner.open_session(project)
+        }
+        fn send(
+            &self,
+            session: &AgentSession,
+            req: &AgentPrompt,
+        ) -> project_agent::AgentResult<AgentTask> {
+            self.entered_send.store(true, Ordering::SeqCst);
+            self.barrier.wait();
+            self.inner.send(session, req)
+        }
+        fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+            self.inner.cancel(session)
+        }
+        fn status(&self) -> AgentStatus {
+            self.inner.status()
+        }
+        fn shutdown(&self) -> project_agent::AgentResult<()> {
+            self.inner.shutdown()
+        }
+    }
+
+    let blocking_engine = BlockingEngine {
+        inner: engine.clone(),
+        barrier: barrier.clone(),
+        entered_send: entered_send.clone(),
+    };
+
+    let run_app = AppState::with_components(
+        tmp.path().to_path_buf(),
+        blocking_engine,
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    let delete_app = app(tmp.path()).0;
+
+    let p = run_app.create_project("A").expect("create");
+    let run_id = p.id.clone();
+    let delete_id = p.id.clone();
+
+    let run_handle = thread::spawn(move || run_app.run_agent(&run_id, "hacé algo", &[]));
+
+    while !entered_send.load(Ordering::SeqCst) {
+        thread::yield_now();
+    }
+
+    let delete_handle = thread::spawn(move || delete_app.delete_project(&delete_id));
+
+    thread::sleep(Duration::from_millis(50));
+    barrier.wait();
+
+    run_handle.join().expect("run thread").expect("run ok");
+    delete_handle
+        .join()
+        .expect("delete thread")
+        .expect("delete ok");
+
+    let pd = tmp.path().join("projects").join(&p.id);
+    assert!(!pd.exists());
+}
+
+#[test]
+fn run_on_deleted_project_aborts_without_creating_orphans() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("A").expect("create");
+    let pd = tmp.path().join("projects").join(&p.id);
+
+    app.delete_project(&p.id).expect("delete");
+    assert!(!pd.exists());
+
+    engine.set_message("Listo.".to_owned());
+    engine.set_artifacts(vec![artifact("workspace/guia.pdf", ArtifactKind::Pdf)]);
+    let err = app.run_agent(&p.id, "hacé algo", &[]).unwrap_err();
+    assert_eq!(err.code, ErrorCode::AiTaskFailed);
+
+    assert!(!pd.exists());
+}
+
+#[test]
 fn rename_persists_and_preserves_id() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (state, _, _) = app(tmp.path());

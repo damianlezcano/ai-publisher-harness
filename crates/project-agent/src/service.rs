@@ -55,11 +55,14 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             Err(err) => return Err(err),
         }
 
-        let workspace_dir = self
+        let project_dir = self
             .projects_base
             .join("projects")
-            .join(&request.project_id)
-            .join("workspace");
+            .join(&request.project_id);
+        let project_json = project_dir.join("project.json");
+        let project_existed_at_start = project_json.exists();
+
+        let workspace_dir = project_dir.join("workspace");
         fs::create_dir_all(&workspace_dir)
             .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
 
@@ -85,6 +88,9 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
 
         let task = self.engine.send(&session, &prompt)?;
         if task.status != crate::model::TaskStatus::Completed {
+            if project_existed_at_start && !project_json.exists() {
+                let _ = fs::remove_dir_all(&project_dir);
+            }
             return Err(AgentError::TaskFailed("task did not complete".into()));
         }
 
@@ -94,9 +100,18 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
                 continue;
             }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
-            let id = self
+            let id = match self
                 .registrar
-                .register(&request.project_id, artifact, bytes)?;
+                .register(&request.project_id, artifact, bytes)
+            {
+                Ok(id) => id,
+                Err(err) => {
+                    if project_existed_at_start && !project_json.exists() {
+                        let _ = fs::remove_dir_all(&project_dir);
+                    }
+                    return Err(err);
+                }
+            };
             registered.push(id);
         }
         Ok(AgentRunResult { task, registered })
@@ -131,7 +146,7 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         self.engine.shutdown()
     }
 
-    fn project_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
+    pub fn project_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
         let mut locks = self
             .locks
             .lock()

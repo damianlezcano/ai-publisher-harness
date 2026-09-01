@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { ProjectSummary } from "../types";
+import type { AgentPhase, ProjectSummary } from "../types";
 import { humanDate, messages } from "../messages";
 import ConfirmDialog from "./ConfirmDialog";
 
 interface ConversationsSidebarProps {
   conversations: ProjectSummary[];
   selectedId: string | null;
+  agentPhase?: AgentPhase;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
   onDelete?: (id: string) => Promise<void>;
@@ -15,6 +16,7 @@ interface ConversationsSidebarProps {
 export default function ConversationsSidebar({
   conversations,
   selectedId,
+  agentPhase,
   onSelect,
   onRefresh,
   onDelete,
@@ -159,6 +161,7 @@ export default function ConversationsSidebar({
           const isSelected = conversation.id === selectedId;
           const isEditing = editingId === conversation.id;
           const isMenuOpen = menuOpenId === conversation.id;
+          const isGenerating = isSelected && agentPhase === "working";
 
           return (
             <li key={conversation.id} className="conversation-item">
@@ -256,6 +259,12 @@ export default function ConversationsSidebar({
                           type="button"
                           role="menuitem"
                           className="danger"
+                          disabled={isGenerating}
+                          title={
+                            isGenerating
+                              ? messages.conversations.deleteDisabledGenerating
+                              : undefined
+                          }
                           onClick={() => startDelete(conversation)}
                         >
                           {messages.conversations.deleteAction}

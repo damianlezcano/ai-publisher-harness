@@ -67,11 +67,12 @@ export const messages = {
     sharedLabel: "Compartido",
     menuAriaLabel: "Opciones de conversación",
     renameLabel: "Renombrar conversación",
-    renameAriaLabel: "Renombrar",
     renameAction: "Renombrar",
     deleteAction: "Eliminar conversación",
+    deleteDisabledGenerating: "No se puede eliminar mientras se genera una respuesta.",
     deleteConfirmTitle: "¿Eliminar esta conversación?",
     deleteConfirmBody: "Se eliminarán los mensajes y los recursos asociados a esta conversación.",
+    emptyTitle: "No hay conversaciones",
   },
 
   conversation: {
