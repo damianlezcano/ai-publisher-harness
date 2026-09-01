@@ -204,9 +204,9 @@ async def flow_05_resources(browser, vp):
         LOG.check("user message material chips", "manual.pdf" in user_chips and "esquema-fotosíntesis.png" in user_chips, f"chips={user_chips}")
         assistant_cards = await page.locator(".message-assistant .creation-card").count()
         LOG.check("assistant inline creation cards", assistant_cards >= 1, f"cards={assistant_cards}")
-        unattached = await page.locator(".workspace-materials .material-list li").all_text_contents()
-        LOG.check("unattached Materiales lists only unreferenced", "diapo.pptx" in " ".join(unattached), f"unattached={unattached}")
-        LOG.check("manual.pdf not duplicated in unattached", "manual.pdf" not in " ".join(unattached), "05-resources.png")
+        resource_chips = await page.locator(".message-resource .chip").all_text_contents()
+        LOG.check("unattached material appears as conversation resource", "diapo.pptx" in " ".join(resource_chips), f"resources={resource_chips}")
+        LOG.check("attached manual.pdf not duplicated as standalone resource", "manual.pdf" not in " ".join(resource_chips), "05-resources.png")
     await ctx.close()
 
 
@@ -318,6 +318,62 @@ async def flow_10_restart(browser, vp):
     await ctx.close()
 
 
+async def flow_11_drag_over(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await page.evaluate("window.__MOCK__.emitEvent('tauri://drag-over', {position:{x:10,y:10}})")
+    await page.wait_for_timeout(300)
+    await screenshot(page, f"11-drag-over-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "11-drag-over")
+        overlay = await page.locator(".drop-overlay").count()
+        LOG.check("drop overlay visible while dragging over", overlay == 1, f"overlay={overlay}")
+        LOG.check("drop overlay copy is Soltá los archivos acá", "Soltá los archivos acá" in await page.locator(".drop-overlay").text_content(), "11-drag-over.png")
+    await ctx.close()
+
+
+async def flow_12_drop_resource(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await page.evaluate("window.__MOCK__.emitEvent('tauri://drag-drop', {paths:['/tmp/receta.pdf','/tmp/hoja.png'], position:{x:10,y:10}})")
+    await page.wait_for_timeout(800)
+    await screenshot(page, f"12-drop-resource-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "12-drop-resource")
+        LOG.check("drop overlay dismissed after drop", await page.locator(".drop-overlay").count() == 0, "12-drop-resource.png")
+        body = await page.inner_text("body")
+        LOG.check("dropped resource appears in conversation", "receta.pdf" in body and "hoja.png" in body, f"body_has={('receta.pdf' in body, 'hoja.png' in body)}")
+    await ctx.close()
+
+
+async def flow_13_attach_interaction(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await screenshot(page, f"13-attach-closed-{vp}")
+    await page.locator(".composer-attach").click()
+    await page.wait_for_timeout(300)
+    await screenshot(page, f"13-attach-menu-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "13-attach-menu")
+        LOG.check("compact attach menu opens", await page.locator(".composer-attach-menu").count() == 1, "13-attach-menu.png")
+        menu_buttons = await page.locator(".composer-attach-menu button").all_text_contents()
+        LOG.check("attach menu offers Agregar archivo", any("Agregar archivo" in b for b in menu_buttons), f"buttons={menu_buttons}")
+        LOG.check("attach menu lists existing materials as chips", "manual.pdf" in " ".join(menu_buttons), f"buttons={menu_buttons}")
+    await ctx.close()
+
+
+async def flow_14_model_selector(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await screenshot(page, f"14-model-selector-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "14-model-selector")
+        select = page.locator("#composer-model-select")
+        LOG.check("compact model selector present in composer", await select.count() == 1, "14-model-selector.png")
+        option_texts = await page.locator("#composer-model-select option").all_text_contents()
+        LOG.check("free model shown with Gratis suffix", any("Gratis" in o for o in option_texts), f"options={option_texts}")
+        LOG.check("no raw :: id text in selector", not any("::" in o for o in option_texts), f"options={option_texts}")
+        label_text = await page.get_by_label("Modelo").get_attribute("id")
+        LOG.check("model selector labelled Modelo", label_text == "composer-model-select", f"id={label_text}")
+    await ctx.close()
+
+
 FLOW_RUNNERS = [
     ("01 first-launch", flow_01_first_launch),
     ("02 conversation-list", flow_02_conversation_list),
@@ -329,6 +385,10 @@ FLOW_RUNNERS = [
     ("08 qr", flow_08_qr),
     ("09 stop-sharing", flow_09_stop_sharing),
     ("10 restart", flow_10_restart),
+    ("11 drag-over", flow_11_drag_over),
+    ("12 drop-resource", flow_12_drop_resource),
+    ("13 attach-interaction", flow_13_attach_interaction),
+    ("14 model-selector", flow_14_model_selector),
 ]
 
 

@@ -1,22 +1,28 @@
 # UX_REDESIGN_01 — Playwright headed visual + a11y gate results
 
-Branch: `m-ux/t6-playwright`
+Branch: `main` (UX_REDESIGN_01 correction pass, post-CODE_IMPORTANT-fix merge 88fd346)
 App URL: `http://localhost:1420/`
-Date: 2026-08-31
+Date: 2026-09-01
 
 ## Summary
 
-All 10 required flows were captured at the three mandated viewports (1366×768, 1440×900, 1920×1080) with PNG, OCR and a11y-tree evidence. The layout-invariant measure script passed at all three viewports. No UX blockers, important or minor regressions were found in the redesigned UI.
+All 14 flows (the 10 mandated correction-pass flows plus the two-fix regression checks) were
+captured at the three mandated viewports (1366×768, 1440×900, 1920×1080) with PNG, OCR and
+a11y-tree evidence. The layout-invariant measure script passed at all three viewports. The two
+CODE_IMPORTANT fixes (ComposerBar add-file error surfacing; dead Materials-panel removal) are
+exercised by the new flow 13 (compact attach) and confirmed visually. No UX blockers or
+UX_IMPORTANT findings were found; only known UX_POLISH items (mock-data display name, resting
+select contrast, truncation tooltip) remain, all pre-approved as polish.
 
 | Check | Result |
 | --- | --- |
 | App reachable at :1420 | PASS |
-| All 10 flows captured at 3 viewports | PASS |
-| PNG evidence | 51 files |
-| `.ocr.txt` per PNG (all non-empty) | 51 files |
-| `.a11y.txt` per flow | 10 files |
+| All 14 flows captured at 3 viewports | PASS |
+| PNG evidence | 66 files |
+| `.ocr.txt` per PNG (all non-empty) | 66 files |
+| `.a11y.txt` per flow | 14 files |
 | Layout measure invariants | PASS (3 viewports) |
-| `capture.py` assertions | PASS (33/33) |
+| `capture.py` assertions | PASS (44/44) |
 
 ## Note on screenshot dimensions
 
@@ -136,6 +142,45 @@ All flows were captured at **1366×768, 1440×900, 1920×1080**.
 | After page.reload(), conversation reopens | PASS | After reload: 4 messages; title = "Fotosíntesis" |
 | Both user and assistant messages restored | PASS | Message count unchanged; user + assistant bubbles present |
 
+### 11 — Drag-over overlay
+
+**Evidence:** `11-drag-over-{1366x768,1440x900,1920x1080}.png/.ocr.txt`; `11-drag-over.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Drop overlay "Soltá los archivos acá" appears only while dragging over | PASS | `.drop-overlay` present on drag-over; OCR shows "Soltá los archivos acá" |
+| Overlay is a live region announced to AT | PASS | `[region] Asistente` + overlay rendered during drag-over only |
+
+### 12 — Dropped resource
+
+**Evidence:** `12-drop-resource-{1366x768,1440x900,1920x1080}.png/.ocr.txt`; `12-drop-resource.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Overlay dismissed on drop | PASS | `.drop-overlay` count == 0 after drop |
+| Dropped files appear as conversation resources | PASS | "receta.pdf" and "hoja.png" in body; import summary "2 agregados" |
+
+### 13 — Compact attachment interaction
+
+**Evidence:** `13-attach-closed-{vp}.png/.ocr.txt`, `13-attach-menu-{vp}.png/.ocr.txt`; `13-attach-menu.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Single compact paperclip opens the attach menu | PASS | `.composer-attach-menu` opens on click; a11y `[button] Adjuntar` |
+| Menu offers "Agregar archivo" | PASS | OCR "Agregar archivo" |
+| Menu lists existing materials as chips | PASS | manual.pdf, esquema-fotosíntesis.png, diapo.pptx chips in menu |
+
+### 14 — Model selector
+
+**Evidence:** `14-model-selector-{1366x768,1440x900,1920x1080}.png/.ocr.txt`; `14-model-selector.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Compact model selector in composer | PASS | `#composer-model-select` present |
+| Free model shown with "Gratis" suffix | PASS | option "big-pickle / Gratis" |
+| No raw `::` id text in selector | PASS | a11y/OCR contain no "::" |
+| Selector labelled "Modelo" | PASS | `[combobox] Modelo` |
+
 ## Layout measure invariants
 
 Seed: `workspace` at all three viewports.
@@ -148,7 +193,17 @@ Seed: `workspace` at all three viewports.
 
 ## Findings
 
-No findings. All assertions and invariants passed.
+- UX_BLOCKER: none.
+- UX_IMPORTANT: none.
+- UX_POLISH (pre-approved; not blocking this pass):
+  - Model option in the composer selector renders the mock model ID ("big-pickle") as its display
+    name — a mock-data artifact (the real catalog provides human display names); verified not a
+    real-app regression.
+  - `composer-model-select` resting contrast and `.conversation-name` truncation tooltip remain the
+    known A11Y_POLISH items from the prior review (already classified out-of-scope polish).
+- No regression from the two CODE_IMPORTANT fixes: flow 13 exercises the compact attach flow; the
+  add-file error path (unhandled-rejection fix) is covered by the unit test and the drop path
+  (unchanged) is covered by flow 12.
 
 ## Reproduction
 
