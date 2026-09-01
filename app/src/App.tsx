@@ -112,12 +112,8 @@ export default function App() {
     void (async () => {
       try {
         const current = await api.modelGetSelected();
-        const models = await api.modelList();
         if (!active) return;
-        const freeAvailable = current.model?.free === true || models.some((m) => m.free);
-        setProviderStatus(
-          current.requiresChoice ? "requires-choice" : freeAvailable ? "free" : null,
-        );
+        setProviderStatus(current.requiresChoice ? "requires-choice" : null);
       } catch {
         if (active) setProviderStatus(null);
       }
@@ -167,7 +163,7 @@ export default function App() {
         </button>
       </header>
 
-      {bannerStatus && (
+      {bannerStatus && bannerStatus !== "free" && (
         <ProviderStatusBanner status={bannerStatus} onConnect={() => setSettingsOpen(true)} />
       )}
 

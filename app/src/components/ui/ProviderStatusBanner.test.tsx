@@ -4,12 +4,12 @@ import userEvent from "@testing-library/user-event";
 import ProviderStatusBanner from "./ProviderStatusBanner";
 
 describe("ProviderStatusBanner", () => {
-  it("free shows the free-model badge and never claims no AI is connected", () => {
-    render(<ProviderStatusBanner status="free" />);
-    expect(screen.getByText("Modelo gratuito")).toHaveClass("badge ok");
+  it("free does not render a banner; free-model state lives in the selector", () => {
+    const { container } = render(<ProviderStatusBanner status="free" />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("Modelo gratuito")).not.toBeInTheDocument();
     expect(screen.queryByText("Conectar IA")).not.toBeInTheDocument();
     expect(screen.queryByText(/No hay una IA conectada/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/volver a conectar/)).not.toBeInTheDocument();
   });
 
   it("requires-choice shows the guidance and a connect action", async () => {

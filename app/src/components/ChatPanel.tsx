@@ -21,6 +21,57 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return sortedA.every((value, index) => value === sortedB[index]);
 }
 
+function referencedMaterialIds(
+  messageList: MessageView[],
+  pendingUser?: { materialIds: string[] } | null,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messageList) {
+    for (const id of message.materialIds) {
+      ids.add(id);
+    }
+  }
+  if (pendingUser) {
+    for (const id of pendingUser.materialIds) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+type TimelineItem =
+  | { kind: "message"; key: string; at: string; message: MessageView }
+  | { kind: "material"; key: string; at: string; material: MaterialView };
+
+function buildTimeline(
+  messageList: MessageView[],
+  materials: MaterialView[],
+  pendingUser?: { materialIds: string[] } | null,
+): TimelineItem[] {
+  const attached = referencedMaterialIds(messageList, pendingUser);
+  const items: TimelineItem[] = [
+    ...messageList.map((message) => ({
+      kind: "message" as const,
+      key: message.id,
+      at: message.createdAt,
+      message,
+    })),
+    ...materials
+      .filter((material) => !attached.has(material.id))
+      .map((material) => ({
+        kind: "material" as const,
+        key: material.id,
+        at: material.createdAt,
+        material,
+      })),
+  ];
+  items.sort((a, b) => {
+    const byTime = a.at.localeCompare(b.at);
+    return byTime !== 0 ? byTime : a.key.localeCompare(b.key);
+  });
+  return items;
+}
+
 function MessageBubble({
   message,
   materialById,
@@ -109,6 +160,8 @@ export default function ChatPanel({
 }: ChatPanelProps) {
   const materialById = new Map(materials.map((m) => [m.id, m]));
   const creationById = new Map(creations.map((c) => [c.id, c]));
+  const timeline = buildTimeline(messageList, materials, pendingUser);
+  const unattachedCount = timeline.filter((item) => item.kind === "material").length;
 
   const hasPending =
     pendingUser != null &&
@@ -119,22 +172,32 @@ export default function ChatPanel({
         arraysEqual(m.materialIds, pendingUser.materialIds),
     );
 
+  const isEmpty =
+    messageList.length === 0 && !hasPending && agentPhase === "idle" && unattachedCount === 0;
+
   return (
     <section className="panel chat" aria-label={messages.assistant.panelLabel}>
       <div className="chat-log" aria-live="polite">
-        {messageList.length === 0 && !hasPending && agentPhase === "idle" && (
-          <p className="muted">{messages.assistant.emptyHint}</p>
+        {isEmpty && <p className="muted chat-empty">{messages.assistant.emptyHint}</p>}
+        {timeline.map((item) =>
+          item.kind === "message" ? (
+            <MessageBubble
+              key={item.key}
+              message={item.message}
+              materialById={materialById}
+              creationById={creationById}
+              projectId={projectId}
+              onRefresh={onRefresh}
+            />
+          ) : (
+            <div key={item.key} className="message message-resource">
+              <div className="message-header">
+                <span className="message-role">{messages.timeline.resourceLabel}</span>
+              </div>
+              <MaterialChip projectId={projectId} material={item.material} />
+            </div>
+          ),
         )}
-        {messageList.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            materialById={materialById}
-            creationById={creationById}
-            projectId={projectId}
-            onRefresh={onRefresh}
-          />
-        ))}
         {hasPending && pendingUser && (
           <div className="message message-user">
             <div className="message-header">

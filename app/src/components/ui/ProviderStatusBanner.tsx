@@ -1,4 +1,3 @@
-import Badge from "./Badge";
 import { messages } from "../../messages";
 
 export type ProviderStatus = "free" | "requires-choice" | "needs-reconnect";
@@ -10,11 +9,7 @@ interface ProviderStatusBannerProps {
 
 export default function ProviderStatusBanner({ status, onConnect }: ProviderStatusBannerProps) {
   if (status === "free") {
-    return (
-      <div className="provider-status-banner">
-        <Badge tone="ok">{messages.provider.banner.freeModel}</Badge>
-      </div>
-    );
+    return null;
   }
 
   return (

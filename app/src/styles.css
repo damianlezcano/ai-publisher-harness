@@ -899,22 +899,25 @@ select {
   max-width: none;
   padding: 0;
   overflow: hidden;
-  min-width: 1024px;
+  min-width: 800px;
+  background: var(--bg);
 }
 
 .app-shell-header {
   flex: 0 0 auto;
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   justify-content: space-between;
 }
 
 .app-settings-button {
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   line-height: 1;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  min-width: 36px;
+  min-height: 36px;
 }
 
 .app-body {
@@ -926,9 +929,9 @@ select {
 
 .conversations-sidebar {
   flex: 0 0 auto;
-  width: 280px;
-  min-width: 260px;
-  max-width: 320px;
+  width: 240px;
+  min-width: 200px;
+  max-width: 280px;
   border-right: 1px solid var(--border);
   background: var(--surface);
   display: flex;
@@ -940,27 +943,35 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
 .conversations-sidebar-title {
-  font-size: var(--font-size-panel);
+  font-size: 1rem;
+  font-weight: 700;
   margin: 0;
 }
 
 .conversations-new-button {
-  white-space: nowrap;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .conversations-list {
   list-style: none;
   margin: 0;
-  padding: var(--space-2);
+  padding: var(--space-1);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
@@ -969,37 +980,45 @@ select {
 .conversation-item {
   display: flex;
   align-items: stretch;
-  gap: var(--space-1);
+  gap: 0;
   min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.conversation-item:hover,
+.conversation-item:focus-within {
+  background: var(--bg);
 }
 
 .conversation-select {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   align-items: flex-start;
   justify-content: center;
   text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
+  padding: var(--space-2) var(--space-2);
+  border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   min-width: 0;
 }
 
 .conversation-select:hover:not(:disabled) {
-  background: var(--bg);
+  background: transparent;
 }
 
 .conversation-select.selected {
   background: #eef0ff;
-  border-color: var(--primary);
 }
 
 .conversation-name {
   font-weight: 600;
-  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   width: 100%;
 }
 
@@ -1007,9 +1026,10 @@ select {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--font-size-meta);
+  font-size: 0.75rem;
   color: var(--muted);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: 100%;
 }
 
 .conversation-shared-badge {
@@ -1017,34 +1037,55 @@ select {
 }
 
 .conversation-timestamp {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-rename-button {
   flex: 0 0 auto;
   align-self: center;
-  padding: var(--space-2);
+  padding: var(--space-1);
+  min-width: 28px;
+  min-height: 28px;
+  opacity: 0;
+  font-size: 0.85rem;
+}
+
+.conversation-item:hover .conversation-rename-button,
+.conversation-item:focus-within .conversation-rename-button {
+  opacity: 1;
 }
 
 .conversation-rename-form {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
   align-items: center;
   flex: 1 1 auto;
-  padding: var(--space-1) 0;
+  padding: var(--space-1);
   min-width: 0;
 }
 
 .conversation-rename-form input {
   flex: 1 1 auto;
   min-width: 0;
+  padding: var(--space-1) var(--space-2);
+}
+
+.conversation-rename-form button {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.85rem;
 }
 
 .conversation-main {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: auto;
-  padding: var(--space-4);
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
 }
 
 .conversation-placeholder {
@@ -1059,8 +1100,7 @@ select {
 
 .composer-bar {
   background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4) var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1072,12 +1112,55 @@ select {
   gap: var(--space-2);
 }
 
-.composer-textarea {
-  resize: none;
-  min-height: 44px;
+.composer-primary {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
 }
 
-.composer-actions-row {
+.composer-attach {
+  flex: 0 0 auto;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer-textarea {
+  flex: 1 1 auto;
+  resize: none;
+  min-height: 40px;
+  max-height: 150px;
+  border-radius: 20px;
+  padding: 8px 14px;
+  background: var(--bg);
+}
+
+.composer-send {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+
+.composer-attach-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 0;
+}
+
+.composer-add-file {
+  align-self: flex-start;
+  font-size: 0.9rem;
+  padding: var(--space-1) var(--space-2);
+}
+
+.composer-secondary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1095,13 +1178,19 @@ select {
 
 .composer-model-select {
   width: auto;
-  max-width: 260px;
+  max-width: 240px;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
 }
 
-.composer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+.composer-model-select:hover:not(:disabled),
+.composer-model-select:focus-visible {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .composer-share-slot {
@@ -1114,15 +1203,15 @@ select {
   margin: 0;
 }
 
-/* -- T5c: chat-first timeline + resources-in-context ------------------------- */
-
-.conversation-main {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
+.composer-import-status,
+.composer-import-details {
+  margin: 0 var(--space-4) var(--space-2);
 }
 
+/* -- T5c: chat-first timeline + resources-in-context ------------------------- */
+
 .workspace-chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1132,16 +1221,21 @@ select {
 .workspace-header {
   flex: 0 0 auto;
   margin: 0;
-  padding: var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+.workspace-header h1 {
+  font-size: 1.05rem;
+  font-weight: 600;
 }
 
 .workspace-timeline {
   flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-5);
 }
 
 .workspace-timeline .panel.chat {
@@ -1150,32 +1244,36 @@ select {
   padding: 0;
 }
 
-.workspace-materials {
-  flex: 0 0 auto;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.workspace-materials summary {
-  padding: var(--space-3) var(--space-4);
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}
-
-.workspace-materials summary:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: -2px;
-}
-
-.workspace-materials-body {
-  padding: 0 var(--space-4) var(--space-4);
-}
-
 .workspace-composer {
   flex: 0 0 auto;
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(79, 70, 229, 0.1);
+  border: 2px dashed var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 1.1rem;
+  pointer-events: none;
+}
+
+.chat-log {
+  gap: var(--space-3);
+  margin-bottom: 0;
+}
+
+.chat-empty {
+  text-align: center;
+  margin: var(--space-6) auto;
+  max-width: 28rem;
 }
 
 /* Message timeline */
@@ -1184,39 +1282,49 @@ select {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  max-width: 80%;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
+  max-width: 72%;
+  padding: 8px 12px 10px;
+  border-radius: 18px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 0;
+  box-shadow: 0 1px 2px rgba(26, 26, 46, 0.06);
 }
 
 .message-user {
   align-self: flex-end;
-  background: #eef0ff;
+  background: #e8eafc;
+  border-bottom-right-radius: 6px;
 }
 
 .message-assistant {
   align-self: flex-start;
-  background: #f7f7fb;
+  background: var(--surface);
+  border-bottom-left-radius: 6px;
+}
+
+.message-resource {
+  align-self: flex-start;
+  background: transparent;
+  box-shadow: none;
+  padding: var(--space-1) 0;
+  max-width: 100%;
 }
 
 .message-error {
   background: #fce8e6;
-  border-color: #f5c2c0;
 }
 
 .message-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--font-size-meta);
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
 .message-role {
-  font-weight: 700;
-  color: var(--text);
+  font-weight: 600;
+  color: var(--muted);
 }
 
 .message-text {
@@ -1233,7 +1341,9 @@ select {
 }
 
 .message-creations .creation-card {
-  background: var(--surface);
+  background: var(--bg);
+  box-shadow: none;
+  padding: var(--space-2) var(--space-3);
 }
 
 /* -- T5d: compact share control + settings close X ---------------------------- */
@@ -1250,11 +1360,23 @@ select {
   align-items: center;
   gap: var(--space-1);
   white-space: nowrap;
+  font-size: 0.85rem;
+  padding: 4px 10px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.share-control-trigger:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
 }
 
 .share-control-menu {
   position: absolute;
-  top: calc(100% + var(--space-1));
+  bottom: calc(100% + var(--space-1));
+  top: auto;
   right: 0;
   z-index: 20;
   min-width: 220px;
@@ -1286,4 +1408,19 @@ select {
   color: var(--muted);
   font-size: var(--font-size-meta);
   line-height: 1.4;
+}
+
+@media (max-width: 960px) {
+  .conversations-sidebar {
+    width: 200px;
+    min-width: 180px;
+  }
+
+  .workspace-timeline {
+    padding: var(--space-3);
+  }
+
+  .message {
+    max-width: 88%;
+  }
 }

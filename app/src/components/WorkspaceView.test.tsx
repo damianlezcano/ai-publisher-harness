@@ -1,14 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import WorkspaceView from "./WorkspaceView";
 import { messages } from "../messages";
 import type { CreationView, MaterialView, MessageView, ProjectView } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: vi.fn(),
+}));
 
 const invokeMock = vi.mocked(invoke);
+const getCurrentWebviewMock = vi.mocked(getCurrentWebview);
+
+function mockDragDrop(): {
+  dropHandler: (event: { payload: { type: string; paths?: string[] } }) => void;
+} {
+  let dropHandler: ((event: { payload: { type: string; paths?: string[] } }) => void) | undefined;
+  getCurrentWebviewMock.mockReturnValue({
+    onDragDropEvent: vi.fn().mockImplementation((handler) => {
+      dropHandler = handler;
+      return Promise.resolve(() => {});
+    }),
+  } as never);
+  return {
+    dropHandler: (event) => dropHandler?.(event),
+  };
+}
 
 const projectId = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
 
@@ -138,6 +158,10 @@ beforeEach(() => {
   baseProps.onOpenProvider.mockReset();
   baseProps.onProviderError.mockReset();
   baseProps.onBack.mockReset();
+  getCurrentWebviewMock.mockReset();
+  getCurrentWebviewMock.mockReturnValue({
+    onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
+  } as never);
 });
 
 describe("WorkspaceView", () => {
@@ -234,13 +258,36 @@ describe("WorkspaceView", () => {
     expect(baseProps.onRefresh).toHaveBeenCalled();
   });
 
-  it("lists unattached materials and excludes attached materials", () => {
+  it("lists unattached materials in the timeline and excludes attached materials from a second copy", () => {
     const project = makeProject();
     render(<WorkspaceView project={project} {...baseProps} />);
+    expect(screen.getByText(messages.timeline.resourceLabel)).toBeInTheDocument();
     expect(screen.getByText(materials[1].displayName)).toBeInTheDocument();
     expect(
       screen.queryAllByRole("button", { name: `Abrir ${materials[0].displayName}` }).length,
     ).toBe(1);
+    expect(screen.queryByText(messages.timeline.unattachedTitle)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: messages.material.addFile }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a lightweight drop overlay only while dragging over the conversation", async () => {
+    const { dropHandler } = mockDragDrop();
+    setupApi();
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+    expect(screen.queryByText(messages.material.dropOverlay)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    act(() => {
+      dropHandler({ payload: { type: "over" } });
+    });
+    expect(await screen.findByText(messages.material.dropOverlay)).toBeInTheDocument();
+    act(() => {
+      dropHandler({ payload: { type: "leave" } });
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(messages.material.dropOverlay)).not.toBeInTheDocument(),
+    );
   });
 
   it("shows the creating status while the agent is working", () => {

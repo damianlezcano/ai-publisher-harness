@@ -169,7 +169,7 @@ describe("ComposerBar", () => {
     setupApiMock({ selected: selectedFreeModel });
     render(<ComposerBar {...base} />);
     expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Adjuntar material" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adjuntar" }));
     const materialButton = screen.getByRole("button", { name: "diagrama.png" });
     expect(materialButton).toHaveAttribute("aria-pressed", "false");
     await userEvent.click(materialButton);
@@ -220,8 +220,8 @@ describe("ComposerBar", () => {
     render(<ComposerBar {...base} />);
     await waitFor(() => {
       const options = screen.getAllByRole("option");
-      expect(options.map((o) => o.textContent)).toContain("Big Pickle (Gratis)");
-      expect(options.map((o) => o.textContent)).toContain("GPT-4 (De pago)");
+      expect(options.map((o) => o.textContent)).toContain("Big Pickle / Gratis");
+      expect(options.map((o) => o.textContent)).toContain("GPT-4 / De pago");
     });
     expect(screen.queryByText("opencode")).not.toBeInTheDocument();
     expect(screen.queryByText("big-pickle")).not.toBeInTheDocument();

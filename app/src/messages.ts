@@ -52,7 +52,7 @@ export const messages = {
   },
 
   conversations: {
-    title: "Conversaciones",
+    title: "Chat",
     listAriaLabel: "Conversaciones",
     newButton: "Nueva conversación",
     sharedLabel: "Compartido",
@@ -61,7 +61,7 @@ export const messages = {
   },
 
   conversation: {
-    defaultName: "Nueva conversación",
+    defaultName: "Conversación nueva",
   },
 
   common: {
@@ -117,11 +117,11 @@ export const messages = {
   assistant: {
     panelLabel: "Asistente",
     heading: "Asistente",
-    emptyHint: "Describí qué recurso querés crear.",
+    emptyHint: "Escribí un mensaje o pedí algo.",
     promptLabel: "Pedido a la IA",
-    placeholder: "Ej.: Creá una actividad interactiva sobre la fotosíntesis",
+    placeholder: "Escribí un mensaje o pedí algo...",
     attachmentsAriaLabel: "Archivos adjuntos",
-    attachMaterial: "Adjuntar material",
+    attachMaterial: "Adjuntar",
     attachmentFallback: "Archivo adjunto",
     removeAttachment(name: string): string {
       return `Quitar ${name}`;
@@ -131,6 +131,7 @@ export const messages = {
   timeline: {
     userLabel: "Vos",
     assistantLabel: "Asistente",
+    resourceLabel: "Material",
     unattachedTitle: "Materiales",
     collapse: "Ocultar",
     expand: "Mostrar",
@@ -148,6 +149,7 @@ export const messages = {
     heading: "Materiales",
     kindFallback: KIND_FALLBACK,
     addFile: "Agregar archivo",
+    dropOverlay: "Soltá los archivos acá",
     empty: {
       title: "Agregá material para darle contexto a la IA",
       pasteHint: "o pegá una imagen con Ctrl+V",
@@ -276,8 +278,9 @@ export const messages = {
     choose: "Elegí un modelo",
     free: "Gratis",
     paid: "De pago",
-    freeSuffix: " (Gratis)",
-    paidSuffix: " (De pago)",
+    freeSuffix: " / Gratis",
+    paidSuffix: " / De pago",
+    automaticFree: "Modelo automático · Gratis",
     groupRecommended: "Recomendado",
     groupFree: "Gratis",
     unavailableChoice: "Este modelo ya no está disponible. Elegí otro.",

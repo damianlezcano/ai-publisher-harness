@@ -33,6 +33,10 @@ function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null
   return null;
 }
 
+function modelOptionLabel(model: ModelSummary): string {
+  return `${model.name}${model.free ? messages.model.freeSuffix : messages.model.paidSuffix}`;
+}
+
 export default function ComposerBar({
   projectId,
   materials,
@@ -66,8 +70,8 @@ export default function ComposerBar({
           api.modelGetSelected(),
         ]);
         if (!active) return;
-        setModels(modelList);
-        setProviders(providerList);
+        setModels(modelList ?? []);
+        setProviders(providerList ?? []);
         setSelected(current);
       } finally {
         if (active) setModelLoading(false);
@@ -101,6 +105,25 @@ export default function ComposerBar({
     setAttachmentIds((prev) =>
       prev.includes(materialId) ? prev.filter((id) => id !== materialId) : [...prev, materialId],
     );
+  }
+
+  async function pickFile() {
+    if (composerDisabled) return;
+    const path = await api.pickFile();
+    if (!path) return;
+    const material = await api.materialAddFromPath(projectId, path);
+    await onMaterialsChanged?.();
+    setAttachmentIds((prev) => (prev.includes(material.id) ? prev : [...prev, material.id]));
+    setShowMaterialPicker(false);
+  }
+
+  async function handleAttachClick() {
+    if (composerDisabled) return;
+    if (materials.length === 0) {
+      await pickFile();
+      return;
+    }
+    setShowMaterialPicker((open) => !open);
   }
 
   async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -170,6 +193,8 @@ export default function ComposerBar({
     }
   }
 
+  const selectedIsFree = selected?.model?.free === true && !selected.requiresChoice;
+
   return (
     <div className="composer-bar" role="region" aria-label={messages.assistant.panelLabel}>
       {attachmentIds.length > 0 && (
@@ -202,44 +227,83 @@ export default function ComposerBar({
           void send();
         }}
       >
-        <label className="sr-only" htmlFor="composer-prompt">
-          {messages.assistant.promptLabel}
-        </label>
-        <textarea
-          ref={textareaRef}
-          id="composer-prompt"
-          className="composer-textarea"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={handlePromptKeyDown}
-          onPaste={(e) => void handlePaste(e)}
-          placeholder={messages.assistant.placeholder}
-          rows={1}
-          disabled={composerDisabled}
-        />
+        <div className="composer-primary">
+          {aiUsable && (
+            <button
+              type="button"
+              className="ghost composer-attach"
+              aria-label={messages.assistant.attachMaterial}
+              aria-expanded={showMaterialPicker}
+              disabled={composerDisabled}
+              onClick={() => void handleAttachClick()}
+            >
+              <span aria-hidden="true">📎</span>
+            </button>
+          )}
+          <label className="sr-only" htmlFor="composer-prompt">
+            {messages.assistant.promptLabel}
+          </label>
+          <textarea
+            ref={textareaRef}
+            id="composer-prompt"
+            className="composer-textarea"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={handlePromptKeyDown}
+            onPaste={(e) => void handlePaste(e)}
+            placeholder={messages.assistant.placeholder}
+            rows={1}
+            disabled={composerDisabled}
+          />
+          {working ? (
+            <button type="button" className="danger" onClick={() => void onCancel()}>
+              {messages.common.cancel}
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="primary composer-send"
+              disabled={prompt.trim() === "" || composerDisabled}
+            >
+              {messages.common.send}
+            </button>
+          )}
+        </div>
 
         {showMaterialPicker && aiUsable && (
-          <ul className="chip-list composer-material-picker">
-            {materials.map((material) => {
-              const isSelected = attachmentIds.includes(material.id);
-              return (
-                <li key={material.id}>
-                  <button
-                    type="button"
-                    className="chip"
-                    aria-pressed={isSelected}
-                    disabled={composerDisabled}
-                    onClick={() => toggleMaterial(material.id)}
-                  >
-                    {material.displayName}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="composer-attach-menu">
+            <button
+              type="button"
+              className="ghost composer-add-file"
+              disabled={composerDisabled}
+              onClick={() => void pickFile()}
+            >
+              {messages.material.addFile}
+            </button>
+            {materials.length > 0 && (
+              <ul className="chip-list composer-material-picker">
+                {materials.map((material) => {
+                  const isSelected = attachmentIds.includes(material.id);
+                  return (
+                    <li key={material.id}>
+                      <button
+                        type="button"
+                        className="chip"
+                        aria-pressed={isSelected}
+                        disabled={composerDisabled}
+                        onClick={() => toggleMaterial(material.id)}
+                      >
+                        {material.displayName}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         )}
 
-        <div className="composer-actions-row">
+        <div className="composer-secondary">
           <div className="composer-model">
             <label className="sr-only" htmlFor="composer-model-select">
               {messages.model.label}
@@ -262,7 +326,7 @@ export default function ComposerBar({
               )}
               {!modelLoading && visibleModels.length > 0 && !valueInVisible && (
                 <option value="" disabled>
-                  {messages.model.choose}
+                  {selectedIsFree ? messages.model.automaticFree : messages.model.choose}
                 </option>
               )}
               {visibleModels.map((m) => (
@@ -270,45 +334,10 @@ export default function ComposerBar({
                   key={`${m.providerId}::${m.modelId}`}
                   value={`${m.providerId}::${m.modelId}`}
                 >
-                  {m.name}
-                  {m.free ? messages.model.freeSuffix : messages.model.paidSuffix}
+                  {modelOptionLabel(m)}
                 </option>
               ))}
             </select>
-            {selected?.model && !selected.requiresChoice && (
-              <span className={`model-badge ${selected.model.free ? "free" : "paid"}`}>
-                {selected.model.free ? messages.model.free : messages.model.paid}
-              </span>
-            )}
-          </div>
-
-          <div className="composer-actions">
-            {working ? (
-              <button type="button" className="danger" onClick={() => void onCancel()}>
-                {messages.common.cancel}
-              </button>
-            ) : (
-              <>
-                {aiUsable && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    aria-expanded={showMaterialPicker}
-                    disabled={composerDisabled}
-                    onClick={() => setShowMaterialPicker((open) => !open)}
-                  >
-                    {messages.assistant.attachMaterial}
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  className="primary"
-                  disabled={prompt.trim() === "" || composerDisabled}
-                >
-                  {messages.common.send}
-                </button>
-              </>
-            )}
           </div>
 
           {shareAction && <div className="composer-share-slot">{shareAction}</div>}

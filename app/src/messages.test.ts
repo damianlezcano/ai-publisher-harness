@@ -58,9 +58,10 @@ describe("messages catalog", () => {
   });
 
   it("uses canonical conversation vocabulary", () => {
-    expect(messages.conversations.title).toBe("Conversaciones");
+    expect(messages.conversations.title).toBe("Chat");
+    expect(messages.conversations.listAriaLabel).toBe("Conversaciones");
     expect(messages.conversations.newButton).toBe("Nueva conversación");
-    expect(messages.conversation.defaultName).toBe("Nueva conversación");
+    expect(messages.conversation.defaultName).toBe("Conversación nueva");
   });
 
   it("uses canonical assistant terminology", () => {
