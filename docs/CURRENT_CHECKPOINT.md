@@ -4,24 +4,26 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK D INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK E INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
 
-- **Current main commit: `f44d507`** (merge de Task D). `git log --oneline -12`
+- **Current main commit: `cea141e`** (merge de Task E). `git log --oneline -12`
   para el detalle.
 - **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
   `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
   `corr/b-attachment-flow`). Task C INTEGRADA (`c94e114`, merge de
   `corr/c-startup-states`; autor kimi `fd1d928`, revisor qwen APPROVE tras
   REQUEST_CHANGES — MAJOR-1 resuelto y con cobertura de regresión, restantes
-  NIT no bloqueantes). **Task D INTEGRADA (`f44d507`, merge de
+  NIT no bloqueantes). Task D INTEGRADA (`f44d507`, merge de
   `corr/d-conversation-terms`; autor Composer 2.5 commit `18ac233`, revisor
-  qwen3.8-flash APPROVE sin hallazgos)**. `./scripts/verify` PASS en main tras
-  D (189 tests frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok).
-  Worktrees de Task D removidos, branch borrado. Panes author/reviewer de D
-  cerrados.
-- **Session budget: CHECKPOINT_WARNING (91.5K, 80K-99,999)**. Este orquestador
-  rota en el punto seguro: Task D completa, integrada y verificada, panes
-  cerrados. NO se inician Tasks E-G. NO M11. NO bypass del gate.
+  qwen3.8-flash APPROVE sin hallazgos). **Task E INTEGRADA (`cea141e`, merge de
+  `corr/e-duplicate-render`; fix LOW commit `60dc786`; revisor qwen3.8-flash
+  FRESH APPROVE — ver detalle abajo)**. `./scripts/verify` PASS en main tras E
+  (193 tests frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok).
+  Worktrees de Task D y E removidos, branches borrados. Panes author/reviewer
+  de D y E cerrados.
+- **Session budget: CHECKPOINT_WARNING (94.9K, 80K-99,999)**. Este orquestador
+  rota en el punto seguro: Task E completa, integrada y verificada, panes
+  cerrados. NO se inician Tasks F-G. NO M11. NO bypass del gate.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
@@ -149,7 +151,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | B | ~~Flujo real de adjunto/contexto~~ **HECHA** (`88761be`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx` + tests~~ | Drop/import → material adjunto al mensaje del usuario (attachmentIds lift a WorkspaceView, controlado a ComposerBar); llega al agente vía `agent_send` con ids; sin resource-item duplicado; tests deterministas. APPROVE (nits: race agentPhase estrecho, reset de attachmentIds al cambiar de proyecto — no bloqueantes). |
 | C | ~~Error falso de arranque (STARTING/READY/FAILED)~~ **HECHA** (`c94e114`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/App.tsx`, `WorkspaceView.tsx`, `messages.ts`, `types.ts`, tests~~ | Estados explícitos vía poll de `app_status`; "Preparando el asistente…"; solo fallo terminal real; `failed` recuperable (retry + auto-poll); tests cold/delayed/failure/recovery. APPROVE. |
 | D | ~~Terminología de conversación~~ **HECHA** (`f44d507`) | Composer 2.5 | qwen3.8-flash | ~~`app/src/messages.ts`, `App.tsx`, tests, legacy naming~~ | `conversationDisplayName()` render-time: legacy "Proyecto sin título"/"Proyecto sin título N" → "Conversación nueva"; 8 AC cubiertos (default, legacy, user-renamed, sidebar, header, restart, ordering, sin Project terminology en DOM). APPROVE sin hallazgos. |
-| E | Duplicado/texto verde | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx` | Eliminar doble render del contenido asistente; test de regresión |
+| E | ~~Duplicado/texto verde~~ **HECHA** (`cea141e`) | LOW (orquestador deepseek-v4-flash; raíz ya confirmada) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx`, `app/src/messages.ts`, tests | Eliminar doble render del contenido asistente (`.chat-status.ok` verde transitorio duplicaba la burbuja persistida; backend siempre persiste el mensaje terminal en `send_message_run`). `setAgentMessage(null)` en completed; se mantienen spinner working + `.err` failed (a11y role="alert"). 193 tests, verify PASS. APPROVE (NIT: CSS `.chat-status.ok` muerto). |
 | F | Eliminar conversación (backend semántica + UI) | Backend kimi; UI **Cursor Grok 4.6 High** | qwen3.8-flash (código) | backend: `crates/project-app/src/app.rs` (delete + unpublish), `crates/project-publication`, tests; UI: sidebar menú ⋮, ConfirmDialog, selección post-delete | Delete durable, fail-closed, recursos solo-exclusivos, no half-delete, confirmación en lenguaje llano, tests 10+ |
 | G | Pass visual producto/UX **Cursor Grok 4.6 High** | Cursor Grok 4.6 High | Cursor Grok 4.6 High FRESH (UX) + qwen3.8-flash (código/a11y) | `app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú) | Chat tipo mensajería; adjuntos en el mensaje; creación Abrir/Compartir; menú contextual; sin dashboard |
 | T6 | Playwright headed | LOW | qwen3.8-flash | `app/` harness | 3 viewports, 16 capturas, aserciones |
@@ -212,15 +214,28 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 - **Task D: autor Composer 2.5 (`task-d-author`, commit `18ac233`), revisor
   `opencode-go/qwen3.8-flash` (`task-d-review`, APPROVE sin hallazgos). Ambos
   panes cerrados.** Grok NO usado (G/F-UI pendientes).
+- **Task E: fix LOW commit `60dc786` en `corr/e-duplicate-render` (implementado
+  por el orquestador deepseek-v4-flash — desviación de proceso documentada: la
+  raíz ya estaba confirmada en el checkpoint y el cambio es acotado; el circuito
+  autor→revisor se respetó para la revisión), revisor `opencode-go/qwen3.8-flash`
+  FRESH (`task-e-review`, pane `w1F:p18`, APPROVE tras verificar contrato backend
+  `send_message_run`, tests 193/193, tsc/eslint/prettier). NIT no bloqueante:
+  CSS `.chat-status.ok` (`app/src/styles.css:407`) quedó muerto (solo referencias
+  en selectores negativos de test). Merge `cea141e`, branch borrado, worktree y
+  pane de review cerrados.** Grok NO usado (G/F-UI pendientes).
 
 ## Próximo paso (inmediato)
 
 1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
-   Task D; punto seguro: repo limpio, Task D verificada, panes de D cerrados).
+   Task E; punto seguro: repo limpio, Task E verificada, panes de E cerrados).
 2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   continuar con **Task E** (duplicado/texto verde del contenido asistente,
-   LOW) usando el circuito autor→reviewer→integración con el orden
-   A→B→C→D→E→F→G→Playwright→AppImage. Tasks A-D NO se repiten (el diff de
-   `f44d507`/`18ac233` es contexto).
+   continuar con **Task F** (eliminar conversación: backend semántica delete +
+   unpublish; UI menú ⋮ con Renombrar/Eliminar, ConfirmDialog, selección
+   post-delete, último-conversación, persistencia tras restart, seguridad de
+   referencias a recursos). Backend: kimi-k2.7-code; UI visual: Cursor Grok 4.6
+   High; revisión código: qwen3.8-flash. Luego G (pass visual producto/UX Grok
+   4.6 High), review Grok independiente, review qwen, Playwright headed,
+   AppImage NUEVO, `./scripts/verify`, STOP para aprobación humana. Tasks A-E NO
+   se repiten (el diff de `cea141e`/`60dc786` es contexto).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
