@@ -4,102 +4,144 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (UX_REDESIGN_01 CLOSED — fin de sesión de orquestación, 2026-08-31)
+## Estado actual (UX_REDESIGN_01 — PRODUCT CORRECTION PASS, PARADA POR ROTACIÓN, 2026-08-31)
 
-- Current main commit: `9424e47` (merge T7). `git log --oneline -15` para el detalle.
-- **M1-M10: CLOSED.** **UX_REDESIGN_01: COMPLETO y CERRADO** (T1-T7 integrados,
-  `./scripts/verify` verde, gate Playwright headed PASS). **M11 NO iniciado.**
-- **`./scripts/verify` → PASS** (M0/M1 contracts, cargo fmt/clippy/test, frontend
-  format/lint/typecheck/test, M10 alignment, **UX_REDESIGN_01 contract passed**).
-  `git diff --check` clean, `git status` clean.
-- **Toolchain:** rustup en user scope pinea 1.97.1 y es honrado; el Rust de
-  Fedora no fue alterado. (Drift de §28 del diseño resuelto.)
-- **Gate visual final:** `docs/ux-redesign-01/RESULTS.md` — 10 flujos × 3
-  viewports (1366×768, 1440×900, 1920×1080), 51 PNG + 51 OCR (no vacíos) + 10
-  a11y trees + harness reproducible (`docs/ux-redesign-01/harness/`). 33/33
-  aserciones PASS. **Sin UX_BLOCKER ni UX_IMPORTANT.** B1/B2/D1/D3 cerrados.
-- **Política de modelos persistida (directiva del owner 2026-08-31):** Qwen3.8
-  Flash = revisor por defecto; Qwen3.8 Max = escalación-only; Kimi K2.7 Code =
-  worker de código primario; Composer/MiMo = LOW; sesiones descartables por tarea;
-  cierre inmediato de panes; rotación de orquestador ~80K/100K/130K; sin Big
-  Pickle; sin GPT/Grok vía OpenCode Go. Persistida en `docs/AGENT_POLICY.md`,
-  `config/agent-models.env`, `scripts/agent-launch`, `scripts/test-agent-launch`.
+- **Current main commit: `3bd9bac`.** `git log --oneline -6` para el detalle.
+- **UX_REDESIGN_01 correction pass: INICIADO y DETENIDO por ROTATE_SESSION_REQUIRED.**
+  No se lanzó NINGÚN worker; no se integró ningún cambio del pass. La orquestadora
+  (DeepSeek V4 Flash) agotó el presupuesto de contexto (~112K) en bootstrap +
+  preservación + harness + exploración, antes de poder lanzar las dos tareas
+  acotadas (funcional + visual). El gate `scripts/agent-launch` falló cerrado
+  (ROTATE_SESSION_REQUIRED) al intentar lanzar el primer worker.
+- **M11 NO iniciado.** `./scripts/verify` aún NO corrido en esta sesión (estado de
+  `main` = commits previos cerrados; ver sección "Integrado en esta sesión").
+- **Problema A (modelo gratis no funciona) — hipótesis de causa raíz documentada
+  por la orquestadora, NO aún corregida.** Ver sección siguiente.
+- **Tarea visual — inventario y especificación del frontend documentados, NO aún
+  implementados.** Ver sección siguiente.
 
-## Tareas integradas en `main` (UX_REDESIGN_01)
+## Integrado en esta sesión (3 commits, todo preservado en `main`)
 
-| Tarea | Rama (branch) | Commits | Estado |
-| --- | --- | --- | --- |
-| T1 message domain + schema v3 + migración | `m-ux/t1-message-core` | `04082a2`+`2f5912c` | MERGED (sesión previa) |
-| T2 fs rehidratación + tests | `m-ux/t2-fs-migration` | `ccf1b22` | MERGED (sesión previa) |
-| T3 facade `send_message` + DTOs + commands | `m-ux/t3-service-facade` | `7964b16` | MERGED (sesión previa) |
-| T4 ranking determinista free-model (ADR-0015) | `m-ux/t4-free-model` | `3c9c61b` | MERGED (sesión previa) |
-| T5a App shell chat-first + sidebar + first-launch | `m-ux/t5a-app-shell` | `5b4d751`+fix `004d871` | MERGED, review APPROVED |
-| T5b ComposerBar bottom (prompt + Modelo + share slot) | `m-ux/t5b-composer-bar` | `c64d3b0` | MERGED, review APPROVED |
-| T5c timeline + resources-in-context (chips/cards) | `m-ux/t5c-timeline` | `7a7d12a`+`6fa2e7a`+`d549336` | MERGED, review APPROVED |
-| T5d Settings Configuración (X) + single Compartir | `m-ux/t5d-settings-share` | `39d8f99` | MERGED, review APPROVED |
-| T5e copy catalog (vocabulario Conversación + dead keys) | `m-ux/t5e-copy` | `e8a85aa` | MERGED, review APPROVED |
-| T6 Playwright headed visual + a11y gate | `m-ux/t6-playwright` | `51f105c`+rework `3c3cda9` | MERGED, review APPROVED |
-| T7 verify UX gate (fail-closed) + status del diseño | `m-ux/t7-verify-gate` | `e1b3ad6`+`3829dad` | MERGED, review APPROVED |
+| Commit | Contenido |
+| --- | --- |
+| `72da998` | **fix(packaging): preservar los fixes validados del AppImage real** (trabajo sin commitear de la sesión previa de validación real). `OpenCodeBackend::ensure_ready` serializa el spawn con `startup_lock` (evita que un caller concurrente mate el sidecar arrancando lento en AppImage-FUSE); `project-provider/adapter.rs` acepta el catálogo real 1.18.25: envelope `{"data":[...]}`, `cost` como array de tiers (`cost_is_zero`), y retry de catálogo vacío por hasta 3 s; `fake-opencode-server` + `fake_process serve_http` reflejan la forma real y la ventana de boot; tests de regresión (14 agente + 20 provider) PASS. |
+| `a6caecf` | **fix(harness): check-session-budget** — capturar el export de la sesión vía temp file. `$(opencode export ...)` truncaba el export grande (~64 KB) en el shell real y el gate fallaba cerrado (exit 4) en TODA corrida viva, lo que habría bloqueado cualquier lanzamiento de worker. Ahora redirige a temp file. `scripts/test-session-budget` PASS. |
+| `3bd9bac` | **harness(agent-launch): rol high-visual → Cursor Grok 4.6 High** — asignación explícita del owner para la tarea visual. `HIGH_VISUAL_CURSOR_MODEL=cursor-grok-4.6-high` en `config/agent-models.env` + matcher de display en `scripts/agent-launch`. `scripts/test-agent-launch` PASS. |
 
-Merge commits en `main`: `cee9ed7` (T4), `85705e7` (T1), `db6680d` (T2), `9019b33`
-(T3), `a4a7749`+`6ed219d` (T5a), `cc3eed8` (T5b), `a2ddb03` (T5c), `0e089bd`
-(T5d), `c7cdc17` (T5e), `d711ca8` (T6), `9424e47` (T7), `760e05f` (hardening
-test) y `7069b53` (política de modelos).
+Validación de `72da998`: `cargo test -p project-provider` (19+20), `-p project-agent`
+(14), `cargo fmt --all -- --check`, `git diff --check`. Los 6 archivos preservados
+corresponden exactamente a los fixes validados de empaquetado/runtime (revisados
+uno a uno contra el árbol de trabajo antes de commitear).
 
-## Detalle técnico integrado (chat-first)
+## PROBLEMA A — MODELO GRATIS NO FUNCIONA (BLOQUEANTE, no corregido)
 
-1. **Shell chat-first:** `App.tsx` = header (título + gear Configuración), sidebar
-   `ConversationsSidebar` (nav, newest-first, aria-current, rename inline, badge
-   Compartido, timestamp), main = `WorkspaceView`. First-launch: lista vacía →
-   crea y abre conversación por defecto; si no, abre la primera (newest).
-   Sin 2×2, sin strip técnico en el header, sin "Mis proyectos" como pantalla.
-2. **Timeline:** `ChatPanel` renderiza `ProjectView.messages` (user bubbles con
-   chips de material; assistant bubbles con `CreationCard`s inline; failed/
-   cancelled como error `role=alert`). Reconcilia vía refresh en cada evento
-   `agent://task` (App ya refresca). Echo optimista `pendingUser` dedup.
-   Materiales: en el timeline si están referenciados, o en la sección
-   colapsable "Materiales" si no — nunca en ambos.
-3. **ComposerBar (bottom):** prompt (Ctrl/Cmd+Enter), attach chips, paste de
-   imagen, selector de modelo compacto (solo `name` + badge Gratis; nunca
-   provider_id/model_id crudo; sin caveat en la vista por defecto), slot
-   `shareAction`.
-4. **Settings:** gear → ProviderPanel con título "Configuración", X con
-   `aria-label="Cerrar"`, Esc (useFocusTrap), backdrop; restaura la conversación
-   exacta (App no desmonta el estado).
-5. **Compartir único (D3):** `ShareControl` en el composer: "Compartir" →
-   "Compartido" → menú (Copiar enlace / Abrir enlace / Mostrar QR / Dejar de
-   compartir + confirmación + nota de honestidad temporal). Sin panel Compartir
-   permanente y sin switch `Se compartirá` por creación.
-6. **Gate Playwright:** harness con shim `__TAURI_INTERNALS__` (DTOs nuevos,
-   persistencia de mensajes, eventos `agent://task`, persistencia localStorage
-   para el flujo restart). 10 flujos × 3 viewports, OCR + a11y. Resultados en
-   `docs/ux-redesign-01/RESULTS.md`.
+**Síntoma real:** el AppImage descubre y muestra un modelo gratis (p. ej. "Big
+Pickle (Gratis)"), pero enviar un mensaje devuelve "No se pudo iniciar el
+asistente de IA."
 
-## Model allocation usada (sesión cerrada)
+**Causa raíz documentada por la orquestadora (exploración de la ruta real):**
 
-- Orchestrator/integración/checkpoints: `opencode-go/deepseek-v4-flash`.
-- Autores T5a-T5d: `opencode-go/kimi-k2.7-code` (4 tareas + fixes en-sesión).
-- Autores T5e/T7 (LOW): `opencode-go/mimo-v2.5` (Composer 2.5 no disponible vía
-  cursor-agent; fallback según política).
-- Autor T6 (harness Playwright, tests significativos): `opencode-go/kimi-k2.7-code`.
-- Revisores T5a-T7: `opencode-go/qwen3.8-flash` (6 revisiones). **Cero
-  escalaciones a Qwen3.8 Max ni DeepSeek V4 Pro.**
-- `MODEL_ACTUAL == MODEL_REQUESTED` verificado por `scripts/agent-launch` en
-  todos los workers (6 autores + 6 revisores).
-- AUTHOR != REVIEWER cumplido; cross-family (Kimi/MiMo → Qwen3.8 Flash).
+El flujo `agent_send` → `AppState::send_message_run` → `AgentService::run`
+(`crates/project-agent/src/service.rs:48-103`) → `OpenCodeAgentEngine`:
+- `ensure_ready()` OK (fix ya integrado).
+- `open_session` (`crates/project-agent/src/opencode.rs:138-179`): `POST /session`
+  → OK con el sidecar real 1.18.25.
+- `send` (`opencode.rs:181-217`): `POST /session/{id}/prompt_async` → HTTP 204 OK.
+- **`poll_session` (`opencode.rs:84-112`) — ROMPIDO:** parsea `GET /session/{id}`
+  con `session_phase` (`opencode.rs:270-289`, duplicado en
+  `crates/project-provider/src/adapter.rs:774-793`) esperando `status` top-level,
+  `status.type/name`, o `time.completed`.
+  - El sidecar real 1.18.25 **NO** produce ninguno de esos: el schema `Session`
+    no tiene `status`; `time` es `{created,updated,compacting,archived}` con
+    `additionalProperties:false` (sin `completed`).
+  - La señal real de completado vive en **`GET /session/status`** →
+    `{"<sessionID>":{"type":"busy"}}` → `{"type":"idle"}`, endpoint que la app
+    NUNCA consulta.
+  - Resultado: `session_phase` siempre devuelve `"working"`, el loop agota el
+    deadline (120 s, `opencode.rs:20,107-108`) → `AgentError::Timeout` →
+    `crates/project-app/src/error.rs:173-177` → "No se pudo iniciar el asistente
+    de IA."
+- **Forma de fake ≠ real:** `crates/fake-opencode-server/src/lib.rs:697-728` sirve
+  `GET /session/{id}` como `{"id":"…","status":"idle","messages":[…]}` — la forma
+  top-level-string que el parser espera pero el servidor real NO produce. Todos
+  los tests pasan contra el fake mientras producción hace timeout.
+- **Síntoma secundario (misma raíz):** `poll_test_session` / "Probar conexión"
+  (`adapter.rs:405-438`) usa el mismo `session_phase` → también daría timeout.
+- **Autenticación NO es la causa:** el tier gratis no requiere credencial
+  (el provider opencode trae `apiKey:"public"`; sin `auth.json` en un arranque
+  aislado; `big-pickle` devuelve HTTP 429 rate-limit, no 401). El `modelID` del
+  payload coincide con el id del catálogo (verificado contra el sidecar real).
 
-## Próximo paso
+**Fix pendiente (tarea funcional acotada, autor `opencode-go/kimi-k2.7-code`):**
+corregir `poll_session`/`session_phase` para consultar `GET /session/status` (o
+la señal real de completado) contra el sidecar 1.18.25, y alinear
+`fake-opencode-server` a la forma real. NO enmascarar el error con copy de UI.
 
-- **M11 NO iniciado.** Pendientes de release B1/B2 (UX_RELEASE_GATE_01) resueltos
-  por UX_REDESIGN_01 (B1/B2 cerrados, D1 y D3 verificados por Playwright).
-- Siguiente milestone: planificar según `docs/PRODUCT.md` / `docs/UX.md`.
-- `docs/ux-redesign-01/harness/run.sh` reproduce el gate (requiere vite en :1420).
+## TAREA VISUAL (no implementada) — inventario del frontend
 
-## Worktrees (limpios al cierre del milestone)
+Estado actual del frontend (`app/`), mapeado por la orquestadora:
+- `App.tsx:57` crea la primera conversación con `"Nueva conversación"`
+  (`messages.conversation.defaultName`, `messages.ts:64`).
+- **Banner "Modelo gratuito"** full-width aún presente: `App.tsx:170-172` +
+  `ui/ProviderStatusBanner.tsx:12-17` (`messages.provider.banner.freeModel`).
+- **Panel "Materiales"** (`<details>` abierto) en `WorkspaceView.tsx:135-168`
+  (`messages.timeline.unattachedTitle` = "Materiales", `messages.ts:134`), con
+  `MaterialItem` card grande y botón "Agregar archivo"
+  (`messages.material.addFile`, `messages.ts:150`). Coexiste con el botón
+  "Adjuntar material" del composer (`ComposerBar.tsx:292-302`,
+  `messages.assistant.attachMaterial`, `messages.ts:124`).
+- **Botón permanente "Renombrar"** en cada fila del sidebar:
+  `ConversationsSidebar.tsx:157-164` (`messages.project.rename`).
+- **Sin drag&drop activo:** el único handler DnD está en el componente huérfano
+  `MaterialsPanel.tsx:189-211` (no montado en la app). Sin handlers React
+  onDrop/onDragOver. Zona de scroll candidata: `div.workspace-timeline`
+  (`WorkspaceView.tsx:122`, `.workspace-timeline` en `styles.css:1140-1145`).
+- **Composer:** placeholder `"Ej.: Creá una actividad interactiva sobre la
+  fotosíntesis"` (`messages.ts:122`); Enviar; modelo `(Gratis)/(De pago)`;
+  Compartir (`ShareControl` en `PublishPanel.tsx:108-176`).
+- **No existe** "Soltá los archivos acá", no hay icono paperclip, no hay
+  "Escribí lo que querés crear...", no hay "Conversación nueva".
+- CSS: `app/src/styles.css` global único. Serve: Vite :1420
+  (`vite.config.ts:10-14`). Harness Playwright: `docs/ux-redesign-01/harness/`.
 
-`git worktree list` (los worktrees de T1-T7 fueron removidos al cierre; las ramas
-mergeadas permanecen). Checkout principal: `main` (`9424e47`), integración-only.
+Tarea visual acotada: autor `Cursor Grok 4.6 High` (rol `high-visual/cursor`),
+solo frontend (`app/src/*`, `messages.ts`, `styles.css`), reglas de producto del
+design brief (sin panel Materiales, drag&drop con overlay temporal, un único
+adjunto compacto, sin banner full-width, terminología "Conversación nueva",
+rename secundario, Compartir secundario, composer como ancla).
+
+## Próximo paso (sesión de orquestación siguiente)
+
+1. Confirmar el presupuesto de la sesión nueva con `scripts/check-session-budget`
+   (CONTINUE < 80K).
+2. Lanzar las DOS tareas acotadas (functional author Kimi K2.7 Code → Block A;
+   visual author Cursor Grok 4.6 High), cada una en un worktree:
+   `git worktree add -b uxfix/functional <sibling>` y
+   `git worktree add -b uxfix/visual <sibling>` (worktrees de esta sesión fueron
+   creados y removidos vacíos).
+3. Revisores `opencode-go/qwen3.8-flash` por tarea. AUTHOR ≠ REVIEWER.
+4. Integrar commits revisados a `main`, correr `./scripts/verify`.
+5. Build de AppImage real por el camino M10 aprobado, lanzar en Fedora, y
+   aceptación real (incluye: "Hola" → respuesta LLM real con modelo gratis
+   auto-descubierto; sin panel Materiales; drag&drop; sin banner duplicado;
+   terminología Conversación; rename compacto; Settings X; Compartir).
+6. Capturas Playwright headed + reporte final (formato de 25 puntos del brief).
+
+## Worktrees (limpios al cierre)
+
+`git worktree list` → solo `main` (`3bd9bac`), integración-only. Los worktrees
+`uxfix-functional`/`uxfix-visual` fueron creados y removidos sin commits.
 
 ## Pines de sidecar (M10, `config/components.json` / ADR-0013)
 
 - `opencode` 1.18.25, `cloudflared` 2026.8.3 (SHA-256 commiteados). Sin cambios.
+- Binarios presentes: `sidecars/opencode-x86_64-unknown-linux-gnu` (1.18.25),
+  `sidecars/cloudflared-x86_64-unknown-linux-gnu`.
+
+## Model allocation (sesión cerrada por rotación)
+
+- Orquestadora: `opencode-go/deepseek-v4-flash`. **Cero escalaciones a Qwen3.8
+  Max ni DeepSeek V4 Pro.** Ningún worker lanzado en esta sesión.
+- Gate de presupuesto `scripts/check-session-budget` funcional tras `a6caecf`
+  (temp-file capture); midió CONTINUE (~76K) y luego ROTATE_SESSION_REQUIRED
+  (~112K) al cierre.
