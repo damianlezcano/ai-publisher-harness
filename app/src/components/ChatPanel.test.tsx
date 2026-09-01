@@ -366,7 +366,8 @@ describe("ChatPanel timeline", () => {
     expect(screen.getAllByText("Acá tenés la actividad")).toHaveLength(1);
   });
 
-  it("keeps failure status human-readable as an alert alongside a persisted failed bubble", () => {
+  it("does not duplicate a persisted failed assistant message as raw error text", () => {
+    const failure = "No se pudo iniciar el asistente de IA.";
     render(
       <ChatPanel
         {...base}
@@ -374,7 +375,7 @@ describe("ChatPanel timeline", () => {
           {
             id: "msg-3",
             role: "assistant",
-            text: "No se pudo completar.",
+            text: failure,
             status: "failed",
             createdAt: "2026-08-28T15:02:00Z",
             materialIds: [],
@@ -382,15 +383,12 @@ describe("ChatPanel timeline", () => {
           },
         ]}
         agentPhase="failed"
-        agentMessage="No se pudo completar la creación."
+        agentMessage={failure}
       />,
     );
-    const errStatus = screen.getByText("No se pudo completar la creación.", {
-      selector: ".chat-status.err",
-    });
-    expect(errStatus).toHaveAttribute("role", "alert");
-    // The persisted failed bubble is still present and readable.
-    expect(screen.getByText("No se pudo completar.")).toBeInTheDocument();
+    expect(screen.getAllByText(failure)).toHaveLength(1);
+    expect(screen.queryByText(failure, { selector: ".chat-status.err" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(failure);
   });
 
   it("keeps the polite live region on the chat log for accessibility", () => {

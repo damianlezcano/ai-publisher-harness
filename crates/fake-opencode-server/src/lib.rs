@@ -465,12 +465,16 @@ fn enveloped(array_bytes: &[u8]) -> Vec<u8> {
 }
 
 fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
-    let Some((method, path, body)) = read_request(&mut stream) else {
+    let Some((method, full_path, body)) = read_request(&mut stream) else {
         return;
     };
     // Strip query string so handlers can match routes with parameters (e.g.
-    // `/session/{id}/message?limit=...`).
-    let path = path.split('?').next().unwrap_or(&path).to_owned();
+    // `/session/{id}/message?limit=...`). Keep the query for POST /session,
+    // where OpenCode 1.18.25 takes `directory` as a query parameter.
+    let (path, query) = match full_path.split_once('?') {
+        Some((path, query)) => (path.to_owned(), Some(query.to_owned())),
+        None => (full_path, None),
+    };
     let mut state = script
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -739,10 +743,8 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     }
 
     if method == "POST" && path == "/session" {
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body)
-            && let Some(dir) = value.get("directory").and_then(|v| v.as_str())
-        {
-            state.last_directory = Some(dir.to_owned());
+        if let Some(dir) = query.as_deref().and_then(query_param_directory) {
+            state.last_directory = Some(dir);
         }
         let status = state.session_status;
         let body = state.session_body.clone();
@@ -848,6 +850,51 @@ fn append_connection(state: &mut Script, provider_id: &str, label: Option<String
     }
     state.credentials.insert(cred_id);
     true
+}
+
+fn query_param_directory(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next()?;
+        if key != "directory" {
+            continue;
+        }
+        let value = parts.next().unwrap_or("");
+        return Some(percent_decode(value));
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn read_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {

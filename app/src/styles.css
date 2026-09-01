@@ -1101,7 +1101,7 @@ select {
   top: calc(100% + var(--space-1));
   right: 0;
   z-index: 20;
-  min-width: 180px;
+  min-width: max-content;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1109,7 +1109,7 @@ select {
   padding: var(--space-1);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
 }
 
 .conversation-menu-dropdown button {
@@ -1118,10 +1118,28 @@ select {
   width: 100%;
   border-color: transparent;
   background: transparent;
+  color: var(--text);
+  white-space: nowrap;
+  padding: var(--space-2) var(--space-3);
 }
 
 .conversation-menu-dropdown button:hover:not(:disabled) {
   background: var(--bg);
+}
+
+.conversation-menu-dropdown button.danger {
+  background: transparent;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.conversation-menu-dropdown button.danger:hover:not(:disabled) {
+  background: #fdecea;
+  color: var(--danger);
+}
+
+.conversation-menu-dropdown button.danger:disabled {
+  color: var(--muted);
 }
 
 .conversation-rename-form {

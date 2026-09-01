@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use project_opencode::{BackendError, BackendStatus, OpenCodeBackend};
+use project_opencode::{BackendError, BackendStatus, OpenCodeBackend, with_directory_query};
 use serde_json::{Value, json};
 
 use crate::AgentResult;
@@ -192,11 +192,17 @@ impl AgentEngine for OpenCodeAgentEngine {
             }
         }
         let directory = project.directory.to_string_lossy().replace('\\', "/");
-        let body = json!({ "directory": directory });
-        let (status, text) = self
-            .backend
-            .post("/session", &body)
-            .map_err(map_backend_error)?;
+        // OpenCode 1.18.25 reads the working directory from the query string,
+        // not from a JSON `directory` field (`additionalProperties: false`).
+        let path = with_directory_query("/session", &directory);
+        let body = json!({
+            "permission": [{
+                "permission": "external_directory",
+                "pattern": "*",
+                "action": "deny",
+            }],
+        });
+        let (status, text) = self.backend.post(&path, &body).map_err(map_backend_error)?;
         if !(200..300).contains(&status) {
             return Err(AgentError::SessionCreationFailed(format!(
                 "status {status}"
@@ -257,6 +263,12 @@ impl AgentEngine for OpenCodeAgentEngine {
             Err(err @ AgentError::TaskFailed(_)) => {
                 log_event("task failed");
                 Err(err)
+            }
+            Err(AgentError::Timeout) => {
+                // A task that started but never completed is not a backend
+                // startup failure; keep Timeout for ensure_ready only.
+                log_event("task failed");
+                Err(AgentError::TaskFailed("timed out".into()))
             }
             Err(err) => Err(err),
         }

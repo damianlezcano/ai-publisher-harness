@@ -168,7 +168,10 @@ fn send_never_idle_times_out() {
         Err(err) => err,
         Ok(_) => panic!("timeout"),
     };
-    assert_eq!(err, AgentError::Timeout);
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -274,7 +277,10 @@ fn send_idle_without_new_assistant_message_times_out() {
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let err = engine.send(&session, &prompt()).expect_err("timeout");
-    assert_eq!(err, AgentError::Timeout);
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        "{err:?}"
+    );
 }
 
 #[test]

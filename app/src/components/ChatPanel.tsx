@@ -180,6 +180,12 @@ export default function ChatPanel({
   const isEmpty =
     messageList.length === 0 && !hasPending && agentPhase === "idle" && unattachedCount === 0;
 
+  const hasPersistedFailure = messageList.some(
+    (message) =>
+      message.role === "assistant" &&
+      (message.status === "failed" || message.status === "cancelled"),
+  );
+
   return (
     <section className="panel chat" aria-label={messages.assistant.panelLabel}>
       <div className="chat-log" aria-live="polite">
@@ -231,7 +237,7 @@ export default function ChatPanel({
             {messages.agent.creating}
           </p>
         )}
-        {agentPhase === "failed" && agentMessage && (
+        {agentPhase === "failed" && agentMessage && !hasPersistedFailure && (
           <p className="chat-status err" role="alert">
             {agentMessage}
           </p>
