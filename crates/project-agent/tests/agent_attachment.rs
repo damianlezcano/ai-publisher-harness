@@ -195,6 +195,10 @@ fn prompt_augmentation_is_deterministic_and_sanitized() {
         .expect("run");
 
     let text = calls.last_prompt_text().expect("prompt recorded");
+    assert!(
+        text.contains("Respondé siempre en el mismo idioma que el usuario"),
+        "prompt must contain the plain-language instruction: {text}"
+    );
     let expected = concat!(
         "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
         "- Gu-a-de-clase.pdf (pdf)\n",
@@ -202,17 +206,23 @@ fn prompt_augmentation_is_deterministic_and_sanitized() {
         "\n",
         "create an activity"
     );
-    assert_eq!(text, expected);
-    assert!(!text.contains('/'), "prompt must not contain paths: {text}");
     assert!(
-        !text.contains('\\'),
-        "prompt must not contain paths: {text}"
+        text.ends_with(expected),
+        "materials block and original prompt must follow the instruction: {text}"
+    );
+    assert!(
+        !expected.contains('/'),
+        "materials block and original prompt must not contain paths: {expected}"
+    );
+    assert!(
+        !expected.contains('\\'),
+        "materials block and original prompt must not contain paths: {expected}"
     );
     assert!(!text.contains("%PDF"), "prompt must not contain bytes");
     assert!(!text.contains("not-a-real-kind"));
     assert_eq!(
         calls.last_prompt_text().as_deref(),
-        Some(expected),
+        Some(text.as_str()),
         "augmentation must be deterministic"
     );
 }
@@ -267,7 +277,7 @@ fn empty_attachment_bytes_are_rejected() {
 }
 
 #[test]
-fn empty_attachments_leave_prompt_unchanged() {
+fn empty_attachments_still_include_instruction() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let engine = FakeAgentEngine::new();
     engine.set_artifacts(vec![]);
@@ -280,8 +290,10 @@ fn empty_attachments_leave_prompt_unchanged() {
             attachments: Vec::new(),
         })
         .expect("run");
-    assert_eq!(
-        calls.last_prompt_text().as_deref(),
-        Some("create an activity")
+    let text = calls.last_prompt_text().expect("prompt recorded");
+    assert!(
+        text.contains("Respondé siempre en el mismo idioma que el usuario"),
+        "prompt must contain the plain-language instruction even without attachments: {text}"
     );
+    assert!(text.ends_with("create an activity"));
 }

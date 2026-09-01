@@ -295,8 +295,9 @@ describe("WorkspaceView", () => {
     expect(screen.getByText(messages.agent.creating)).toBeInTheDocument();
   });
 
-  it("renders the single Compartir control in the composer bar", () => {
+  it("renders Compartir controls in the composer bar and on each creation card", () => {
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
-    expect(screen.getByRole("button", { name: messages.sharing.shareAction })).toBeInTheDocument();
+    const shareButtons = screen.getAllByRole("button", { name: messages.sharing.shareAction });
+    expect(shareButtons.length).toBe(2);
   });
 });

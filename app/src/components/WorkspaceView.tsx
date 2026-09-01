@@ -7,6 +7,7 @@ import type { AgentPhase, MaterialImportResult, ProjectView } from "../types";
 import ChatPanel from "./ChatPanel";
 import ComposerBar from "./ComposerBar";
 import ShareControl from "./PublishPanel";
+import { useShareControl } from "./useShareControl";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
 
@@ -62,6 +63,12 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     () => `view workspace workspace-chat${dragging ? " is-dropping" : ""}`,
     [dragging],
   );
+
+  const share = useShareControl({
+    projectId: project.id,
+    publication: project.publication,
+    onRefresh,
+  });
 
   useEffect(() => {
     importRef.current = async (paths: string[]) => {
@@ -175,6 +182,11 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           agentMessage={agentMessage}
           pendingUser={pendingUser}
           onRefresh={onRefresh}
+          onShare={() => {
+            if (!share.shared) {
+              void share.publish();
+            }
+          }}
         />
       </div>
 

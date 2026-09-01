@@ -205,10 +205,21 @@ fn attachments_augment_the_prompt_deterministically() {
     let prompts = recorded.lock().unwrap();
     assert_eq!(prompts.len(), 1);
     let text = &prompts[0];
-    assert!(text.starts_with(
-        "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n- manual.pdf (pdf)\n- diagrama.png (image)\n\n"
-    ));
-    assert!(text.ends_with("Creá una actividad"));
+    assert!(
+        text.contains("Respondé siempre en el mismo idioma que el usuario"),
+        "prompt must contain the plain-language instruction: {text}"
+    );
+    let expected = concat!(
+        "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
+        "- manual.pdf (pdf)\n",
+        "- diagrama.png (image)\n",
+        "\n",
+        "Creá una actividad"
+    );
+    assert!(
+        text.ends_with(expected),
+        "materials block and original prompt must follow the instruction: {text}"
+    );
 }
 
 #[test]
@@ -246,9 +257,18 @@ fn hostile_material_names_are_sanitized_never_injected_raw() {
     assert!(!prompts[0].contains("<script>"));
     assert!(!prompts[0].contains("alert(1)"));
     assert!(!prompts[0].contains('\u{3c}') && !prompts[0].contains('\u{3e}'));
-    assert!(!prompts[0].contains('/') && !prompts[0].contains('\\'));
     assert!(!prompts[0].contains("..\n") && !prompts[0].contains("\n.."));
     assert!(prompts[0].contains("m8--script-alert-1-..png"));
+    // Path separators must not appear in the materials block or user prompt.
+    // The instruction block intentionally mentions /tmp as a forbidden example.
+    let materials_onward = prompts[0]
+        .split("Materiales adjuntos")
+        .nth(1)
+        .expect("materials block present");
+    assert!(
+        !materials_onward.contains('/') && !materials_onward.contains('\\'),
+        "materials block must not contain path separators: {materials_onward}"
+    );
     // The agent still completed; the creation exists.
     assert_eq!(state.open_project(&p.id).unwrap().creations.len(), 1);
 }

@@ -11,12 +11,14 @@ interface CreationsPanelProps {
   projectId: string;
   creations: CreationView[];
   onRefresh: () => void | Promise<void>;
+  onShare?: () => void;
 }
 
 interface CreationCardProps {
   projectId: string;
   creation: CreationView;
   onRefresh: () => void | Promise<void>;
+  onShare?: () => void;
 }
 
 function supportsInAppPreview(kind: string): boolean {
@@ -28,7 +30,7 @@ function isWebKind(kind: string): boolean {
 }
 
 export function CreationCard(props: CreationCardProps) {
-  const { projectId, creation } = props;
+  const { projectId, creation, onShare } = props;
   const [error, setError] = useState<unknown>(null);
   const [previewAnnouncement, setPreviewAnnouncement] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ creation: CreationView; data: PreviewData } | null>(
@@ -72,11 +74,13 @@ export function CreationCard(props: CreationCardProps) {
         {previewAnnouncement ?? ""}
       </p>
       {error != null ? <ErrorNotice error={error} /> : null}
-      <span className="item-name">{creation.displayName}</span>
-      <span className="item-meta">
-        {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
-        {humanDate(creation.createdAt)}
-      </span>
+      <div className="creation-card-main">
+        <span className="item-name">{creation.displayName}</span>
+        <span className="item-meta">
+          {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
+          {humanDate(creation.createdAt)}
+        </span>
+      </div>
       <span className="row-actions wrap">
         {(supportsInAppPreview(creation.kind) || isWebKind(creation.kind)) && (
           <button type="button" className="secondary" onClick={() => void showPreview()}>
@@ -84,8 +88,13 @@ export function CreationCard(props: CreationCardProps) {
           </button>
         )}
         <button type="button" className="primary" onClick={() => void open()}>
-          {isWebKind(creation.kind) ? messages.creation.openInBrowser : messages.common.open}
+          {messages.common.open}
         </button>
+        {onShare != null && (
+          <button type="button" className="primary" onClick={() => void onShare()}>
+            {messages.sharing.shareAction}
+          </button>
+        )}
       </span>
       {preview && (
         <PreviewModal
@@ -98,7 +107,12 @@ export function CreationCard(props: CreationCardProps) {
   );
 }
 
-export default function CreationsPanel({ projectId, creations, onRefresh }: CreationsPanelProps) {
+export default function CreationsPanel({
+  projectId,
+  creations,
+  onRefresh,
+  onShare,
+}: CreationsPanelProps) {
   return (
     <section className="panel" aria-label={messages.creation.panelLabel}>
       <h2>{messages.creation.heading}</h2>
@@ -108,7 +122,12 @@ export default function CreationsPanel({ projectId, creations, onRefresh }: Crea
         <ul className="item-list">
           {creations.map((creation) => (
             <li key={creation.id}>
-              <CreationCard projectId={projectId} creation={creation} onRefresh={onRefresh} />
+              <CreationCard
+                projectId={projectId}
+                creation={creation}
+                onRefresh={onRefresh}
+                onShare={onShare}
+              />
             </li>
           ))}
         </ul>
