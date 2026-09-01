@@ -173,16 +173,31 @@ fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentR
     })
 }
 
+/// Spanish plain-language instruction injected into every agent run.
+///
+/// It keeps the assistant reply human-facing for non-technical teachers and
+/// forbids leaking implementation details such as paths, shell commands,
+/// Node/npm, /tmp, localhost, ports, file extensions, or internal names.
+fn build_instruction() -> &'static str {
+    "Respondé siempre en el mismo idioma que el usuario (español), con un tono simple y amigable para una docente sin conocimientos técnicos.\n\
+     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el juego de Pasapalabra.\" No describas cómo se construyó.\n\
+     NUNCA mencionés: rutas de archivos, comandos de shell o terminal, Node/npm, /tmp, localhost, puertos, extensiones de archivo como detalle de implementación, nombres internos de herramientas/proveedores/modelos, ni ningún detalle de implementación o construcción.\n\
+     Cuando uses un archivo adjunto, referilo únicamente como \"el archivo que adjuntaste\".\n\
+     Mantené las respuestas breves."
+}
+
 fn augment_prompt(original: &str, lines: &[String]) -> String {
-    if lines.is_empty() {
-        return original.to_owned();
+    let mut block = String::from(build_instruction());
+    block.push('\n');
+    block.push('\n');
+    if !lines.is_empty() {
+        block.push_str(
+            "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
+        );
+        block.push_str(&lines.join("\n"));
+        block.push('\n');
+        block.push('\n');
     }
-    let mut block = String::from(
-        "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
-    );
-    block.push_str(&lines.join("\n"));
-    block.push('\n');
-    block.push('\n');
     block.push_str(original);
     block
 }
@@ -258,4 +273,62 @@ fn read_workspace_artifact(workspace_dir: &Path, artifact_path: &str) -> AgentRe
         ));
     }
     fs::read(&candidate).map_err(|err| AgentError::RegistrationFailed(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instruction_block_is_spanish_human_facing() {
+        let instruction = build_instruction();
+        assert!(instruction.contains("español"));
+        assert!(instruction.contains("docente"));
+        assert!(instruction.contains("Listo. Creé el juego de Pasapalabra."));
+        assert!(instruction.contains("el archivo que adjuntaste"));
+        assert!(instruction.contains("NUNCA mencionés"));
+    }
+
+    #[test]
+    fn instruction_block_forbids_technical_leakage() {
+        let instruction = build_instruction();
+        let forbidden = [
+            "rutas de archivos",
+            "comandos de shell",
+            "Node/npm",
+            "/tmp",
+            "localhost",
+            "puertos",
+            "extensiones de archivo",
+            "implementación",
+        ];
+        for term in &forbidden {
+            assert!(
+                instruction.contains(term),
+                "instruction must mention forbidden term {term}"
+            );
+        }
+    }
+
+    #[test]
+    fn augment_prompt_always_includes_instruction() {
+        let text = augment_prompt("create an activity", &[]);
+        assert!(text.starts_with(build_instruction()));
+        assert!(text.contains("create an activity"));
+    }
+
+    #[test]
+    fn augment_prompt_keeps_materials_block_after_instruction() {
+        let lines = vec!["- manual.pdf (pdf)".to_owned()];
+        let text = augment_prompt("create an activity", &lines);
+        let instruction = build_instruction();
+        let inst_end = text.find(instruction).unwrap() + instruction.len();
+        let materials_start = text.find("Materiales adjuntos").unwrap();
+        assert!(
+            inst_end < materials_start,
+            "instruction must precede materials block"
+        );
+        assert!(text.contains("- manual.pdf (pdf)"));
+        assert!(text.ends_with("create an activity"));
+    }
 }

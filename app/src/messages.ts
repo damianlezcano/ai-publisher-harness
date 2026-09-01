@@ -185,7 +185,6 @@ export const messages = {
     panelLabel: "Creaciones",
     heading: "Creaciones",
     preview: "Vista previa",
-    openInBrowser: "Abrir en navegador",
     empty: {
       title: "Pedile a la IA que cree algo",
       hint: "Escribí en el asistente",

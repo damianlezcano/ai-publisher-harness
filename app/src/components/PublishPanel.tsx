@@ -1,36 +1,45 @@
-import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
-import type { PublicationView } from "../types";
+import { useEffect, useRef } from "react";
 import QrDialog from "./QrDialog";
 import Dialog from "./ui/Dialog";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
+import {
+  useShareControl,
+  type ShareControlState,
+  type UseShareControlInput,
+} from "./useShareControl";
 
-interface ShareControlProps {
-  projectId: string;
+export type ShareControlProps = UseShareControlInput & {
   projectName: string;
-  publication: PublicationView;
-  onRefresh: () => void | Promise<void>;
-}
-
-type Busy = "publishing" | "unpublishing" | null;
+  share?: ShareControlState;
+};
 
 export default function ShareControl({
   projectId,
   projectName,
   publication,
   onRefresh,
+  share: externalShare,
 }: ShareControlProps) {
-  const [busy, setBusy] = useState<Busy>(null);
-  const [error, setError] = useState<unknown | null>(null);
-  const [copyFailed, setCopyFailed] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [showQr, setShowQr] = useState(false);
-  const [confirmStop, setConfirmStop] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const internalShare = useShareControl({ projectId, publication, onRefresh });
+  const {
+    busy,
+    error,
+    copyFailed,
+    copied,
+    showQr,
+    setShowQr,
+    confirmStop,
+    setConfirmStop,
+    menuOpen,
+    setMenuOpen,
+    shared,
+    publish,
+    unpublish,
+    copy,
+    open,
+  } = externalShare ?? internalShare;
   const controlRef = useRef<HTMLDivElement>(null);
-
-  const shared = publication.state === "published" && publication.publicUrl !== null;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -48,54 +57,7 @@ export default function ShareControl({
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("mousedown", handleClick);
     };
-  }, [menuOpen]);
-
-  async function publish() {
-    setBusy("publishing");
-    setError(null);
-    try {
-      await api.publish(projectId);
-      await onRefresh();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function unpublish() {
-    setConfirmStop(false);
-    setBusy("unpublishing");
-    setError(null);
-    try {
-      await api.unpublish(projectId);
-      await onRefresh();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function copy() {
-    if (!publication.publicUrl) return;
-    setCopyFailed(false);
-    try {
-      await navigator.clipboard.writeText(publication.publicUrl);
-      setCopied(true);
-    } catch {
-      setCopyFailed(true);
-    }
-  }
-
-  async function open() {
-    setError(null);
-    try {
-      await api.openPublicUrl(projectId);
-    } catch (err) {
-      setError(err);
-    }
-  }
+  }, [menuOpen, setMenuOpen]);
 
   const triggerLabel = shared
     ? busy === "unpublishing"
@@ -115,7 +77,7 @@ export default function ShareControl({
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             disabled={busy === "unpublishing"}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => setMenuOpen((isOpen) => !isOpen)}
           >
             {triggerLabel}
             <span aria-hidden="true"> ▼</span>
