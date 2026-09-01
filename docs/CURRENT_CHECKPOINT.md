@@ -4,11 +4,34 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK G INTEGRADA, ORQUESTADOR SESSION HEALTHY, 2026-09-01)
+## Estado actual (FINAL VALIDATION — T6 PLAYWRIGHT HEADED PASS, T7 PENDIENTE EN SESIÓN FRESH, ORQUESTADOR ROTADO, 2026-09-01)
 
 - **Current main commit: `2451c50`** (merge de Task G). La corrección A-G sigue
   INTEGRADA y verificada (ver detalle abajo). `git log --oneline -14` para el
   detalle.
+- **T6 PLAYWRIGHT HEADED = PASS (sesión fresh, deepseek-v4-flash).** Ejecutado
+  contra main `2451c50` (Task G integrada) con el harness canónico
+  `docs/ux-redesign-01/harness/run.sh` (capture.py headed + measure.py + ocr.py,
+  Vite dev server en :1420, boundary Tauri mockeado via `mock-inject.js`).
+  **57/57 aserciones PASS**, MEASURE PASS (3 viewports), OCR 78/78 imágenes,
+  EXIT=0. 17 flows × 3 viewports (1366×768, 1440×900, 1920×1080): PNG 78, `.ocr.txt`
+  78, `.a11y.txt` 17. Flows 15-17 nuevos específicos de Task G/F: (15) Creation
+  card Abrir/Compartir + Abrir sin error; (16) delete confirm type-name-to-confirm
+  con copy llano (titulo/body/Eliminar habilitado tras teclear nombre/item
+  removido); (17) asistente renderiza UNA vez (sin `.chat-status.ok` verde, texto
+  llano). Flows 01-14 actualizados al DOM Task G (rename via menú "…",
+  attachments `attachment-chip` con Abrir, share menu auto-open post-publish) y
+  `mock-inject.js` `app_status → agent:"ready"` (contrato Task C; composer habilitado
+  solo con backend ready). Sin hallazgos UX_BLOCKER/UX_IMPORTANT; solo POLISH
+  pre-aprobado (nombre display del mock, contraste, tooltip truncation). Evidencia
+  durable en `docs/ux-redesign-01/` (RESULTS.md actualizado). Verificación
+  EXIT=0. **Budget al cierre de T6: ROTATE_SESSION_REQUIRED (111K) → la sesión
+  checkpointea T6 y SE DETIENE; T7 NO inicia en esta sesión.**
+- **T7 PENDIENTE (próxima sesión FRESH):** AppImage NUEVO real desde main
+  `2451c50`, sidecars pineados (opencode 1.18.25, cloudflared 2026.8.3, SIN
+  cambiarlos), `./scripts/verify` PASS contra artefacto fresco, y luego STOP para
+  aprobación humana del product owner. M11 NO iniciar. Gate siguiente y único:
+  HUMAN PRODUCT-OWNER ACCEPTANCE.
 - **TASK G INTEGRADA (`2451c50`).** Autor `cursor-grok-4.6-high` (HIGH_VISUAL,
   `corr/g-product-ux-pass`, commit `e345520`, pane `w1M:p1`), revisor UX
   independiente `cursor-grok-4.6-high` FRESH (`corr/g-product-ux-review`, pane
@@ -59,8 +82,8 @@
   arriba)**. **Task G INTEGRADA (`2451c50`; autor Cursor Grok 4.6 High
   `e345520`, revisor UX Cursor Grok 4.6 High APPROVE, revisor código/a11y qwen
   APPROVE — ver detalle arriba)**. `./scripts/verify` PASS en main tras G.
-  Tasks A-G hechas; **resta la validación final (T6 Playwright headed, T7
-  AppImage NUEVO real, aprobación humana)**.
+  Tasks A-G hechas; **T6 Playwright headed PASS (57/57); resta T7 AppImage
+  NUEVO real (sesión fresh) y aprobación humana**.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
@@ -200,7 +223,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | E | ~~Duplicado/texto verde~~ **HECHA** (`cea141e`) | LOW (orquestador deepseek-v4-flash; raíz ya confirmada) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx`, `app/src/messages.ts`, tests | Eliminar doble render del contenido asistente (`.chat-status.ok` verde transitorio duplicaba la burbuja persistida; backend siempre persiste el mensaje terminal en `send_message_run`). `setAgentMessage(null)` en completed; se mantienen spinner working + `.err` failed (a11y role="alert"). 193 tests, verify PASS. APPROVE (NIT: CSS `.chat-status.ok` muerto). |
 | F | ~~Eliminar conversación (backend semántica + UI)~~ **HECHA** (`6ea0e67`) | kimi-k2.7-code (`26411f1` + fixes `14365c0`) | qwen3.8-flash | ~~`crates/project-app/src/app.rs` (delete + unpublish + serialización agente), `crates/project-agent/src/service.rs` (cleanup huérfanos), `app/src/{App,components/ConversationsSidebar}.tsx`, `messages.ts`, `styles.css`, tests~~ | Menú "…" contextual (Renombrar/Eliminar), ConfirmDialog type-name, delete durable + fail-closed + unpublish primero, sin huérfanos (serialización/cancel contra agente + cleanup mid-run), selección post-delete correcta, última → estado vacío, renombrar preserva id/orden/activa, tests 13 AC. REQUEST_CHANGES→APPROVE (MAJOR-1 resuelto). |
 | G | ~~Pass visual producto/UX~~ **HECHA** (`2451c50`) | Cursor Grok 4.6 High (`e345520`) | Cursor Grok 4.6 High FRESH (UX, APPROVE) + qwen3.8-flash (código/a11y, APPROVE) | ~~`app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú)~~ | Chat tipo mensajería; adjuntos en el mensaje (📄 nombre [Abrir]); creación card icon+kind+Abrir/Compartir (EducAI decide el opener); URL de compartir visible; Settings con X en título (vuelve a la misma conversación); selector de modelo sin raw ids / sin hardcode de modelo gratis; sidebar "Conversaciones"; sin dashboard; sin fuga técnica. APPROVE (UX: 5 nits no bloqueantes NIT-1..5; código/a11y: LOW/NIT). |
-| T6 | Playwright headed | LOW | qwen3.8-flash | `app/` harness | 3 viewports, 16 capturas, aserciones |
+| T6 | ~~Playwright headed~~ **HECHA (PASS, 57/57)** | LOW (deepseek-v4-flash) | qwen3.8-flash | `docs/ux-redesign-01/harness/` | 3 viewports, 17 flows, 57 aserciones, 78 PNG + 78 OCR + 17 a11y; flows 15-17 Task G/F (creación Abrir/Compartir, delete confirm, no-duplicado asistente); measure + ocr PASS. EXIT=0. |
 | T7 | AppImage real + `./scripts/verify` | LOW/Composer | qwen3.8-flash | packaging M10 | AppImage con sidecars, lanzamiento real, verificación completa |
 
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
@@ -364,20 +387,20 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
 
-Task G queda CERRADA e integrada en `2451c50` con `./scripts/verify` PASS
-(EXIT=0) y budget CONTINUE. **NO ampliar el trabajo automáticamente en esta
-sesión.**
+**T6 queda HECHA (PASS) e integrada en el checkpoint. Orquestador ROTADO en
+111K al cierre de T6 (ROTATE_SESSION_REQUIRED).** La sesión siguiente FRESH
+debe continuar la VALIDACIÓN FINAL con **T7 AppImage NUEVO real**, NO con M11.
 
-1. **Checkpointear Task G limpio y detenerse** (preferido): este orquestador ya
-   capturó el handoff durable; la validación final es un gate separado, no parte
-   de Task G. M11 NO debe iniciar.
-2. Sesión FRESH para la **VALIDACIÓN FINAL**: leer este checkpoint, correr
-   `scripts/check-session-budget` (esperar CONTINUE), ejecutar **T6 Playwright
-   headed** (3 viewports, 16 capturas, aserciones; revisor qwen3.8-flash),
-   luego **T7 AppImage NUEVO real** con sidecars + `./scripts/verify`, y STOP
-   para **aprobación humana del product owner** (solo el humano acepta el
-   AppImage final). NO es M11.
-3. **Seguimiento recomendado NO bloqueante (de las reviews de G):**
+1. Sesión FRESH (leer este checkpoint, correr `scripts/check-session-budget`,
+   esperar CONTINUE) para ejecutar **T7**: construir un AppImage NUEVO real desde
+   main `2451c50` (packaging M10 existente, sidecars pineados opencode 1.18.25 +
+   cloudflared 2026.8.3 SIN cambiarlos), verificación técnica real del artefacto
+   (lanzamiento, UI usable, sin falso error de arranque, sin dependencia de
+   opencode/cloudflared en PATH, frontend correspondiente a Task G, suite
+   `./scripts/verify` PASS contra artefacto fresco), capturar commit/source/build
+   exit/path/size/SHA-256, y STOP para **aprobación humana del product owner**
+   (solo el humano acepta el AppImage final). NO es M11.
+2. **Seguimiento recomendado NO bloqueante (de las reviews de G):**
    - (UX NIT-1 / qwen LOW) `PublishPanel.tsx`: la URL pública es `<p>` dentro de
      `role="menu"`; envolver en `role="group"` (o mover los `<p>` al contenedor
      del popover) para no saltar el texto en lectores de pantalla.
@@ -391,5 +414,5 @@ sesión.**
      `humanSize` (export sin uso) quedaron muertos; cleanup de catálogo/CSS.
    - (F review) chequeo de existencia de proyecto autoritativo DENTRO del lock
      del agente en `AgentService::run` + test single-instance delete↔agent.
-4. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
+3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.

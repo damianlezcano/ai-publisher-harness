@@ -1,0 +1,25 @@
+[RootWebArea] EducAI
+[navigation] Conversaciones
+[button] Configuración
+[heading] Conversaciones
+[button] Nueva conversación
+[dialog] ¿Eliminar esta conversación?
+[region] Asistente
+[region] Asistente
+[heading] ¿Eliminar esta conversación?
+[textbox] Nombre para confirmar
+[button] Cancelar
+[button] Eliminar
+[heading] Fracciones
+[button] Fracciones 1/9/26, 5:24 p. m.
+[button] Sistema solar 1/9/26, 4:24 p. m.
+[button] Fotosíntesis Compartido 1/9/26, 3:24 p. m.
+[button] Adjuntar
+[textbox] Pedido a la IA
+[button] Enviar
+[combobox] Modelo
+[button] Opciones de conversación
+[button] Opciones de conversación
+[button] Opciones de conversación
+[button] Compartir
+[option] Modelo automático · Gratis

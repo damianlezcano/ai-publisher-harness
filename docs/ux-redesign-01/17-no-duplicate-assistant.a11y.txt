@@ -1,0 +1,26 @@
+[RootWebArea] EducAI
+[navigation] Conversaciones
+[button] Configuración
+[heading] Conversaciones
+[button] Nueva conversación
+[region] Asistente
+[region] Asistente
+[heading] Fotosíntesis
+[button] Fotosíntesis 1/9/26, 5:25 p. m.
+[button] Sistema solar 1/9/26, 4:25 p. m.
+[button] Fracciones 1/9/26, 3:25 p. m.
+[button] Abrir diapo.pptx
+[list] Archivos adjuntos
+[button] Abrir
+[button] Compartir
+[button] Adjuntar
+[textbox] Pedido a la IA
+[button] Enviar
+[combobox] Modelo
+[button] Opciones de conversación
+[button] Opciones de conversación
+[button] Opciones de conversación
+[button] Compartir
+[button] Abrir manual.pdf
+[button] Abrir esquema-fotosíntesis.png
+[option] Modelo automático · Gratis

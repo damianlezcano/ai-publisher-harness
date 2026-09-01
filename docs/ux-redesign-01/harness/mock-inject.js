@@ -318,7 +318,7 @@
       case "plugin:dialog|save":
         return null;
       case "app_status":
-        return { version: "0.1.0", agent: "opencode" };
+        return { version: "0.1.0", agent: "ready" };
       case "project_list":
         return projects
           .slice()

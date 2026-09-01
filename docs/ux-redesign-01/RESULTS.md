@@ -1,28 +1,31 @@
 # UX_REDESIGN_01 — Playwright headed visual + a11y gate results
 
-Branch: `main` (UX_REDESIGN_01 correction pass, post-CODE_IMPORTANT-fix merge 88fd346)
+Branch: `main` (Task G integrated, merge `2451c50`; fresh T6 validation run)
 App URL: `http://localhost:1420/`
 Date: 2026-09-01
 
 ## Summary
 
-All 14 flows (the 10 mandated correction-pass flows plus the two-fix regression checks) were
-captured at the three mandated viewports (1366×768, 1440×900, 1920×1080) with PNG, OCR and
-a11y-tree evidence. The layout-invariant measure script passed at all three viewports. The two
-CODE_IMPORTANT fixes (ComposerBar add-file error surfacing; dead Materials-panel removal) are
-exercised by the new flow 13 (compact attach) and confirmed visually. No UX blockers or
-UX_IMPORTANT findings were found; only known UX_POLISH items (mock-data display name, resting
-select contrast, truncation tooltip) remain, all pre-approved as polish.
+Fresh T6 run against **current main `2451c50`** (Task G integrated). All 17 flows were captured at
+the three mandated viewports (1366×768, 1440×900, 1920×1080) with PNG, OCR and a11y-tree evidence.
+The layout-invariant measure script passed at all three viewports. The 14 original UX_REDESIGN_01
+flows were updated where Task G/F changed the DOM (rename via the "…" conversation menu;
+attachments as `attachment-chip` with `Abrir`; share menu auto-opens after publish) and three new
+Task G/F-focused flows were added: **15 creation-actions** (Creation card shows Abrir/Compartir and
+Abrir opens without error), **16 delete-confirm** (type-name-to-confirm delete flow with plain
+language), **17 no-duplicate-assistant** (assistant content renders exactly once, no raw green
+duplicate). No UX blockers or UX_IMPORTANT findings were found. This is the T6 headed validation
+gate evidence; the AppImage (T7) and human acceptance remain pending.
 
 | Check | Result |
 | --- | --- |
 | App reachable at :1420 | PASS |
-| All 14 flows captured at 3 viewports | PASS |
-| PNG evidence | 66 files |
-| `.ocr.txt` per PNG (all non-empty) | 66 files |
-| `.a11y.txt` per flow | 14 files |
+| All 17 flows captured at 3 viewports | PASS |
+| PNG evidence | 78 files |
+| `.ocr.txt` per PNG (all non-empty) | 78 files |
+| `.a11y.txt` per flow | 17 files |
 | Layout measure invariants | PASS (3 viewports) |
-| `capture.py` assertions | PASS (44/44) |
+| `capture.py` assertions | PASS (57/57) |
 
 ## Note on screenshot dimensions
 
@@ -181,6 +184,41 @@ All flows were captured at **1366×768, 1440×900, 1920×1080**.
 | No raw `::` id text in selector | PASS | a11y/OCR contain no "::" |
 | Selector labelled "Modelo" | PASS | `[combobox] Modelo` |
 
+### 15 — Creation card actions (Task G)
+
+**Evidence:** `15-creation-actions-{vp}.png/.ocr.txt`; `15-creation-actions.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Assistant message shows an inline creation card | PASS | `.message-assistant .creation-card` ≥ 1 |
+| Creation card has "Abrir" | PASS | card text contains Abrir |
+| Creation card has "Compartir" | PASS | card text contains Compartir |
+| Abrir on a web creation surfaces no error | PASS | no `.error` in card after click |
+
+### 16 — Delete conversation confirmation (Task F)
+
+**Evidence:** `16-delete-confirm-{vp}.png/.ocr.txt`, `16-delete-confirmed-{vp}.png/.ocr.txt`; `16-delete-confirm.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| "…" menu → "Eliminar conversación" opens confirmation | PASS | dialog rendered |
+| Confirm title "¿Eliminar esta conversación?" | PASS | `.dialog h2` |
+| Confirm body is plain language (mensajes + recursos) | PASS | `.dialog p` |
+| Eliminar disabled before typing the name | PASS | button disabled |
+| Eliminar enabled after typing the conversation name | PASS | button enabled |
+| Deleted conversation removed from sidebar | PASS | name absent from list |
+
+### 17 — No duplicate assistant rendering (Task E)
+
+**Evidence:** `17-no-duplicate-assistant-{vp}.png/.ocr.txt`; `17-no-duplicate-assistant.a11y.txt`
+
+| Assertion | Result | Evidence |
+| --- | --- | --- |
+| Assistant content renders in one bubble | PASS | `.message-assistant` == 1 |
+| Assistant text renders exactly once | PASS | `.message-assistant .message-text` == 1 |
+| No raw green duplicate status | PASS | `.chat-status.ok` == 0 |
+| Assistant text is plain (no raw tooling output) | PASS | text = "Listo." |
+
 ## Layout measure invariants
 
 Seed: `workspace` at all three viewports.
@@ -201,9 +239,17 @@ Seed: `workspace` at all three viewports.
     real-app regression.
   - `composer-model-select` resting contrast and `.conversation-name` truncation tooltip remain the
     known A11Y_POLISH items from the prior review (already classified out-of-scope polish).
-- No regression from the two CODE_IMPORTANT fixes: flow 13 exercises the compact attach flow; the
-  add-file error path (unhandled-rejection fix) is covered by the unit test and the drop path
-  (unchanged) is covered by flow 12.
+- Harness-only notes (no product change):
+  - Flows 03/05/07 selectors were updated to the Task G/F DOM (menu-based rename,
+    `attachment-chip`, share menu auto-opens after publish). `mock-inject.js` `app_status`
+    returns `agent: "ready"` to match the Task C readiness contract (composer enabled only when
+    backend is ready).
+- T6 headed validation of Task G behavior: chat-first layout, sidebar, composer primary, rename
+  via "…" menu, delete confirmation UX, Creation card Abrir/Compartir, share/QR/stop, attachment
+  presentation, settings X return, restart persistence, drag/drop, no duplicate assistant render —
+  all PASS. This gate does NOT exercise a real AI/network path (mocked Tauri IPC boundary); the
+  real-provider assistant response and the full human acceptance scenario remain for the product
+  owner / T7.
 
 ## Reproduction
 

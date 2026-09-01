@@ -2,31 +2,31 @@
 [navigation] Conversaciones
 [dialog] Configuración
 [button] Configuración
-[heading] Chat
+[heading] Conversaciones
 [button] Nueva conversación
 [region] Asistente
 [region] Asistente
 [heading] Configuración
-[heading] Fotosíntesis
 [button] Cerrar
+[heading] Fotosíntesis
 [heading] Recomendados
 [button] Otros proveedores (0)
-[button] Fotosíntesis 1/9/26, 9:07 a. m.
-[button] Renombrar
-[button] Sistema solar 1/9/26, 8:07 a. m.
-[button] Renombrar
-[button] Fracciones 1/9/26, 7:07 a. m.
-[button] Renombrar
+[button] Fotosíntesis 1/9/26, 5:23 p. m.
+[button] Sistema solar 1/9/26, 4:23 p. m.
+[button] Fracciones 1/9/26, 3:23 p. m.
 [button] Abrir diapo.pptx
 [list] Archivos adjuntos
-[button] Vista previa
-[button] Abrir en navegador
+[button] Abrir
+[button] Compartir
 [button] Adjuntar
 [textbox] Pedido a la IA
 [button] Enviar
 [combobox] Modelo
 [button] Conectar
+[button] Opciones de conversación
+[button] Opciones de conversación
+[button] Opciones de conversación
 [button] Compartir
 [button] Abrir manual.pdf
 [button] Abrir esquema-fotosíntesis.png
-[option] big-pickle / Gratis
+[option] Modelo automático · Gratis

@@ -142,10 +142,13 @@ async def flow_02_conversation_list(browser, vp):
 
 
 async def flow_03_rename(browser, vp):
+    # Task G: rename is triggered from the "…" conversation menu (Renombrar).
     # Save rename
     ctx, page = await new_page(browser, "list", vp)
     row = page.locator(".conversation-item", has_text="Sistema solar")
-    await row.locator(".conversation-rename-button").click()
+    await row.locator(".conversation-menu-button").click()
+    await page.wait_for_timeout(300)
+    await page.get_by_role("menuitem", name="Renombrar").click()
     await page.wait_for_timeout(300)
     await page.fill('input[id^="rename-"]', "El sistema solar")
     await page.get_by_role("button", name="Guardar").click()
@@ -160,7 +163,9 @@ async def flow_03_rename(browser, vp):
     # Cancel rename with Esc
     ctx, page = await new_page(browser, "list", vp)
     row = page.locator(".conversation-item", has_text="Sistema solar")
-    await row.locator(".conversation-rename-button").click()
+    await row.locator(".conversation-menu-button").click()
+    await page.wait_for_timeout(300)
+    await page.get_by_role("menuitem", name="Renombrar").click()
     await page.wait_for_timeout(300)
     await page.fill('input[id^="rename-"]', "Cancelado")
     await page.keyboard.press("Escape")
@@ -200,11 +205,11 @@ async def flow_05_resources(browser, vp):
     await screenshot(page, f"05-resources-{vp}")
     if vp == DEFAULT_VP:
         await a11y_tree(page, "05-resources")
-        user_chips = await page.locator(".message-user .chip").all_text_contents()
-        LOG.check("user message material chips", "manual.pdf" in user_chips and "esquema-fotosíntesis.png" in user_chips, f"chips={user_chips}")
+        user_chips = await page.locator(".message-user:has(.message-text) .attachment-chip").all_text_contents()
+        LOG.check("user message material chips", "manual.pdf" in " ".join(user_chips) and "esquema-fotosíntesis.png" in " ".join(user_chips), f"chips={user_chips}")
         assistant_cards = await page.locator(".message-assistant .creation-card").count()
         LOG.check("assistant inline creation cards", assistant_cards >= 1, f"cards={assistant_cards}")
-        resource_chips = await page.locator(".message-resource .chip").all_text_contents()
+        resource_chips = await page.locator(".message-attachment-only .attachment-chip").all_text_contents()
         LOG.check("unattached material appears as conversation resource", "diapo.pptx" in " ".join(resource_chips), f"resources={resource_chips}")
         LOG.check("attached manual.pdf not duplicated as standalone resource", "manual.pdf" not in " ".join(resource_chips), "05-resources.png")
     await ctx.close()
@@ -243,8 +248,8 @@ async def flow_07_share(browser, vp):
     shared_text = await page.locator(".share-control-trigger").text_content()
     if vp == DEFAULT_VP:
         LOG.check("share shared state", "Compartido" in shared_text, f"text={shared_text}")
-    await page.locator(".share-control-trigger").click()
-    await page.wait_for_timeout(300)
+    # After publish resolves, ShareControl auto-opens the menu (publish sets menuOpen=true).
+    await page.wait_for_timeout(400)
     await screenshot(page, f"07-share-menu-{vp}")
     if vp == DEFAULT_VP:
         await a11y_tree(page, "07-share-menu")
@@ -374,6 +379,72 @@ async def flow_14_model_selector(browser, vp):
     await ctx.close()
 
 
+async def flow_15_creation_actions(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await screenshot(page, f"15-creation-actions-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "15-creation-actions")
+        cards = page.locator(".message-assistant .creation-card")
+        LOG.check("assistant creation card present", await cards.count() >= 1, "15-creation-actions.png")
+        card = cards.first
+        card_text = await card.inner_text()
+        LOG.check("creation card has Abrir", "Abrir" in card_text, f"card={card_text}")
+        LOG.check("creation card has Compartir", "Compartir" in card_text, f"card={card_text}")
+        open_btn = card.get_by_role("button", name="Abrir")
+        await open_btn.click()
+        await page.wait_for_timeout(500)
+        err_count = await card.locator(".error").count()
+        LOG.check("Abrir on web creation does not surface an error", err_count == 0, f"errors={err_count}")
+    await ctx.close()
+
+
+async def flow_16_delete_confirm(browser, vp):
+    ctx, page = await new_page(browser, "list", vp)
+    row = page.locator(".conversation-item", has_text="Sistema solar")
+    await row.locator(".conversation-menu-button").click()
+    await page.wait_for_timeout(300)
+    await page.get_by_role("menuitem", name="Eliminar conversación").click()
+    await page.wait_for_selector(".dialog", timeout=10000)
+    await page.wait_for_timeout(300)
+    await screenshot(page, f"16-delete-confirm-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "16-delete-confirm")
+        dlg_title = await page.locator(".dialog h2").text_content()
+        LOG.check("delete confirm title", "¿Eliminar esta conversación?" in (dlg_title or ""), f"title={dlg_title}")
+        dlg_body = await page.locator(".dialog p").first.text_content()
+        LOG.check("delete confirm body plain-language", "mensajes" in (dlg_body or "") and "recursos" in (dlg_body or ""), f"body={dlg_body}")
+    del_btn = page.get_by_role("button", name="Eliminar")
+    if vp == DEFAULT_VP:
+        LOG.check("delete confirm button disabled before typing name", await del_btn.is_disabled(), "16-delete-confirm.png")
+    await page.fill("#confirm-input", "Sistema solar")
+    await page.wait_for_timeout(200)
+    if vp == DEFAULT_VP:
+        LOG.check("delete confirm enabled after typing name", await del_btn.is_enabled(), "16-delete-confirm.png")
+    await page.get_by_role("button", name="Eliminar").click()
+    await page.wait_for_timeout(600)
+    await screenshot(page, f"16-delete-confirmed-{vp}")
+    if vp == DEFAULT_VP:
+        names = await page.locator(".conversation-select .conversation-name").all_text_contents()
+        LOG.check("deleted conversation removed from sidebar", "Sistema solar" not in names, f"names={names}")
+    await ctx.close()
+
+
+async def flow_17_no_duplicate_assistant(browser, vp):
+    ctx, page = await new_page(browser, "workspace", vp)
+    await screenshot(page, f"17-no-duplicate-assistant-{vp}")
+    if vp == DEFAULT_VP:
+        await a11y_tree(page, "17-no-duplicate-assistant")
+        assistant_msgs = await page.locator(".message-assistant").count()
+        LOG.check("assistant content renders in one bubble", assistant_msgs == 1, f"assistant_messages={assistant_msgs}")
+        text_els = await page.locator(".message-assistant .message-text").count()
+        LOG.check("assistant text renders exactly once", text_els == 1, f"text_elements={text_els}")
+        ok_status = await page.locator(".chat-status.ok").count()
+        LOG.check("no raw green duplicate status", ok_status == 0, f"green_status={ok_status}")
+        assistant_text = await page.locator(".message-assistant .message-text").first.text_content()
+        LOG.check("assistant text is plain (Listo)", (assistant_text or "").strip() in ("Listo.", ""), f"text={assistant_text}")
+    await ctx.close()
+
+
 FLOW_RUNNERS = [
     ("01 first-launch", flow_01_first_launch),
     ("02 conversation-list", flow_02_conversation_list),
@@ -389,6 +460,9 @@ FLOW_RUNNERS = [
     ("12 drop-resource", flow_12_drop_resource),
     ("13 attach-interaction", flow_13_attach_interaction),
     ("14 model-selector", flow_14_model_selector),
+    ("15 creation-actions", flow_15_creation_actions),
+    ("16 delete-confirm", flow_16_delete_confirm),
+    ("17 no-duplicate-assistant", flow_17_no_duplicate_assistant),
 ]
 
 
