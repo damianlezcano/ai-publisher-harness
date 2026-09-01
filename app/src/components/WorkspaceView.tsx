@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api } from "../api";
+import { api, isAppError } from "../api";
 import { guidanceFromError } from "../guidance";
 import type { GuidanceActionKind } from "../guidance";
-import type { AgentPhase, MaterialImportResult, ProjectView } from "../types";
+import type { AgentPhase, BackendReadiness, MaterialImportResult, ProjectView } from "../types";
 import ChatPanel from "./ChatPanel";
 import ComposerBar from "./ComposerBar";
 import ShareControl from "./PublishPanel";
@@ -18,6 +18,8 @@ interface WorkspaceViewProps {
   onBack: () => void;
   onRefresh: () => void | Promise<void>;
   aiUsable: boolean;
+  backendStatus?: BackendReadiness;
+  onRetryBackend?: () => void;
   onOpenProvider: () => void;
   onProviderError: () => void;
 }
@@ -40,6 +42,8 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     agentMessage,
     onRefresh,
     aiUsable,
+    backendStatus = "starting",
+    onRetryBackend,
     onOpenProvider,
     onProviderError,
   } = props;
@@ -139,10 +143,19 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       await api.agentSend(project.id, text, attachmentIds);
       await onRefresh();
     } catch (err) {
-      setPendingUser(null);
-      setSendError(err);
-      if (guidanceFromError(err).actions.includes("connect-ai")) {
-        onProviderError();
+      const transient =
+        isAppError(err) && err.code === "ai_unavailable" && backendStatus === "starting";
+      if (transient) {
+        // Defensive: the composer is gated while the backend is starting, so this
+        // branch is only reachable in a narrow race. Keeping the optimistic bubble
+        // avoids a false terminal error; if gating changes, restore the text to the
+        // composer or auto-retry once the backend becomes ready.
+      } else {
+        setPendingUser(null);
+        setSendError(err);
+        if (guidanceFromError(err).actions.includes("connect-ai")) {
+          onProviderError();
+        }
       }
     }
   }
@@ -222,7 +235,23 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
         </ul>
       )}
 
-      {sendError !== null && <ErrorNotice error={sendError} onAction={handleSendErrorAction} />}
+      {backendStatus === "starting" && (
+        <p className="notice composer-import-status" role="status">
+          <span className="spinner" aria-hidden="true" />
+          {messages.assistant.starting}
+        </p>
+      )}
+      {sendError !== null && backendStatus !== "failed" && (
+        <ErrorNotice error={sendError} onAction={handleSendErrorAction} />
+      )}
+      {backendStatus === "failed" && (
+        <ErrorNotice
+          error={{ code: "ai_unavailable", message: messages.error.aiUnavailable.message }}
+          onAction={(kind) => {
+            if (kind === "retry") onRetryBackend?.();
+          }}
+        />
+      )}
 
       <div className="workspace-composer">
         <ComposerBar

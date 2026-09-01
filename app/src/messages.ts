@@ -123,6 +123,7 @@ export const messages = {
     attachmentsAriaLabel: "Archivos adjuntos",
     attachMaterial: "Adjuntar",
     attachmentFallback: "Archivo adjunto",
+    starting: "Preparando el asistente…",
     removeAttachment(name: string): string {
       return `Quitar ${name}`;
     },

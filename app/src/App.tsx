@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-import type { AgentPhase, ProjectSummary, ProjectView } from "./types";
+import type { AgentPhase, BackendReadiness, ProjectSummary, ProjectView } from "./types";
 import { guidanceFromError } from "./guidance";
 import WorkspaceView from "./components/WorkspaceView";
 import ConversationsSidebar from "./components/ConversationsSidebar";
@@ -22,6 +22,7 @@ export default function App() {
   const [providerRefreshKey, setProviderRefreshKey] = useState(0);
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<BackendReadiness>("starting");
   const { toasts, show } = useToast();
 
   const refreshConversations = useCallback(async () => {
@@ -123,6 +124,31 @@ export default function App() {
     };
   }, [providerRefreshKey]);
 
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function check() {
+      try {
+        const status = await api.appStatus();
+        if (!active) return;
+        const next: BackendReadiness =
+          status.agent === "ready" ? "ready" : status.agent === "failed" ? "failed" : "starting";
+        setBackendStatus(next);
+      } catch {
+        if (active) setBackendStatus("failed");
+      } finally {
+        if (active) {
+          timer = setTimeout(() => void check(), 500);
+        }
+      }
+    }
+    void check();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
   const handleBack = useCallback(() => {
     setAgentPhase("idle");
     setAgentMessage(null);
@@ -183,7 +209,9 @@ export default function App() {
               agentMessage={agentMessage}
               onBack={handleBack}
               onRefresh={() => void refreshConversation(selectedId)}
-              aiUsable={providerStatus !== "requires-choice"}
+              aiUsable={providerStatus !== "requires-choice" && backendStatus === "ready"}
+              backendStatus={backendStatus}
+              onRetryBackend={() => setBackendStatus("starting")}
               onOpenProvider={() => setSettingsOpen(true)}
               onProviderError={handleProviderError}
             />
