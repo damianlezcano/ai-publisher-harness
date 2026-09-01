@@ -4,10 +4,25 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK E INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK F NO INICIADA, ORQUESTADOR ROTADO EN ROTATE_SESSION_REQUIRED, 2026-09-01)
 
-- **Current main commit: `cea141e`** (merge de Task E). `git log --oneline -12`
-  para el detalle.
+- **Current main commit: `57e01d4`** (docs del checkpoint tras Task E). La
+  corrección A-E sigue INTEGRADA y verificada (ver detalle abajo). `git log
+  --oneline -12` para el detalle.
+- **TASK F NO INICIADA.** La sesión anterior (deepseek-v4-flash) solo hizo el
+  bootstrap de Task F: leyó el contrato (checkpoint, AGENT_POLICY, WORKTREES,
+  MULTI_AGENT_WORKFLOW, AGENT-POLICY budget), inspeccionó el estado, creó
+  worktree `corr/f-conversation-delete` (`../ai-publisher-corr-01-f`) y pane
+  `w1F:p19`, y recopiló el contexto de dominio (ver "Mapa de Task F" abajo).
+  **NO se escribió código. NO se lanzó autor.** El orquestador llegó a
+  **ROTATE_SESSION_REQUIRED (105K, 100K-129,999)** mientras recopilaba el
+  contexto → `scripts/agent-launch --launch` falló cerrado (exit 10) → se
+  respetó el gate: sin Task F en esta sesión. Worktree removido, branch
+  `corr/f-conversation-delete` borrado (era `57e01d4`), pane `w1F:p19` cerrado.
+  `git status --short` limpio, `main` intacto.
+- **Session budget: ROTATE_SESSION_REQUIRED (105K)**. NO iniciar Tasks F/G.
+  NO M11. NO bypass del gate. La sesión siguiente arranca en Task F desde un
+  orquestador FRESH y low-context.
 - **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
   `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
   `corr/b-attachment-flow`). Task C INTEGRADA (`c94e114`, merge de
@@ -224,18 +239,78 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
   en selectores negativos de test). Merge `cea141e`, branch borrado, worktree y
   pane de review cerrados.** Grok NO usado (G/F-UI pendientes).
 
+## Mapa de Task F (contexto recopilado, sin escribir código)
+
+Backend delete ya existe end-to-end pero NO des-publica (bug hallazgo 16):
+
+- `project_delete` Tauri: `app/src-tauri/src/commands.rs:80-89`.
+- `AppState::delete_project`: `crates/project-app/src/app.rs:310-317` — solo
+  `self.projects.lock().delete_project(&pid)`, NO llama `self.unpublish` →
+  entrada stale en `PublicationManager.published` (proyecto "shared" hasta
+  restart). **Fix Task F: delete debe unpublish antes/consistente.**
+- `ProjectService::delete_project`: `crates/project-core/src/lib.rs:807-811`:
+  `get` → `repository.delete` (metadata) → `content.remove_project_tree`.
+  `FilesystemProjectRepository::delete` borra el dir del proyecto
+  (`project-fs/src/lib.rs:495-505`); `remove_project_tree` borra el árbol si
+  existe (`project-fs/src/lib.rs:754-760`). Owner del árbol = proyecto (única
+  duración; sin recursos compartidos entre proyectos: materials/creations son
+  por-proyecto, `inputs/<id>` y `outputs/<id>` bajo `projects/<pid>/`).
+- `AppState::unpublish`: `app.rs:1183-1189` → `PublicationManager::unpublish`
+  (`crates/project-publication/src/manager.rs:306-340`, AlreadyLocal si no
+  publicada, idempotente). Tauri `unpublish`: `commands.rs:349-353`.
+- List ordenado por `updated_at` desc (`project-fs/src/lib.rs:438-442`);
+  `rename_project` actualiza `updated_at` (`project-core/lib.rs:798-806`) →
+  renombrar mueve al tope. Requisito F "order semantics unchanged": preservar
+  esta regla (updated_at desc), no reintroducir otra.
+- Rename UI ya existe: inline ✎ en `ConversationsSidebar.tsx:24-52,172-180`
+  (usa `api.projectRename`, `api.ts:29-30`). Delete NO está cableado en la UI.
+
+Frontend conversación:
+
+- `app/src/App.tsx`: `conversations/selectedId/conversation` state;
+  `refreshConversations` (28-33), `openConversation` (40-54), efecto inicial
+  auto-crea default si lista vacía (56-86). Selection post-delete debe vivir
+  aquí (refrescar lista, elegir activa, limpiar si última).
+- `ConversationsSidebar.tsx` (189 líneas): props `conversations/selectedId/
+  onSelect/onRefresh`; rename inline + ✎; NO delete. Agregar menú ⋮ contextual
+  (Renombrar / Eliminar conversación) + ConfirmDialog. Copy catálogo en
+  `app/src/messages.ts` (conversations.* / common.*); NO ProjectId/paths/términos
+  técnicos en UX.
+- `ConfirmDialog.tsx` (type-name-to-confirm, 15-48) existe y está testado
+  (`ConfirmDialog.test.tsx`) pero NO cableado en conversaciones. UX F pide
+  confirmación humana simple: "¿Eliminar esta conversación?" / "Se eliminarán
+  los mensajes y los recursos asociados a esta conversación." / [Cancelar]
+  [Eliminar]; visualmente destructivo; sin delete silencioso.
+- `api.projectDelete`: `app/src/api.ts:31`. `AppError`/`errorMessage`:
+  `api.ts:103-115`.
+- Tests frontend: patrón `App.test.tsx` (mock invoke/listen), vitest + testing
+  library; 193 tests verdes en main. Backend tests: `crates/project-app/tests/
+  app_facade.rs` (delete ya en `project_lifecycle`), `project-fs/tests/
+  project_lifecycle.rs` (delete: 1138, 1157, 1173), `project-publication/tests/`
+  (unpublish idempotente).
+
+Decisión ownership recursos: en la arquitectura actual NO hay recursos
+compartidos entre conversaciones (cada proyecto es dueño exclusivo de su árbol);
+el único estado cruzado durable es `PublicationManager.published` (manejar con
+unpublish). Por lo tanto NO se requiere ARCHITECTURE_ESCALATION por ownership:
+delete del proyecto borra su árbol completo (mensajes+materials+creations) y
+debe unpublish primero para no dejar entrada stale. Si el autor encontrara una
+referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
+
 ## Próximo paso (inmediato)
 
-1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
-   Task E; punto seguro: repo limpio, Task E verificada, panes de E cerrados).
-2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   continuar con **Task F** (eliminar conversación: backend semántica delete +
-   unpublish; UI menú ⋮ con Renombrar/Eliminar, ConfirmDialog, selección
-   post-delete, último-conversación, persistencia tras restart, seguridad de
-   referencias a recursos). Backend: kimi-k2.7-code; UI visual: Cursor Grok 4.6
-   High; revisión código: qwen3.8-flash. Luego G (pass visual producto/UX Grok
-   4.6 High), review Grok independiente, review qwen, Playwright headed,
-   AppImage NUEVO, `./scripts/verify`, STOP para aprobación humana. Tasks A-E NO
-   se repiten (el diff de `cea141e`/`60dc786` es contexto).
+1. **Rotar orquestador AHORA** (ROTATE_SESSION_REQUIRED 105K alcanzado durante
+   el bootstrap/contexto de Task F, antes de lanzar autor; punto seguro: repo
+   limpio, main intacto, sin código nuevo, worktree/pane de F removidos).
+2. Sesión FRESH low-context: leer este checkpoint, correr
+   `scripts/check-session-budget` (esperar CONTINUE), crear worktree
+   `corr/f-conversation-delete` en `../ai-publisher-corr-01-f`, y ejecutar
+   **Task F** con el contrato de arriba: backend kimi-k2.7-code (delete +
+   unpublish fail-closed en `app.rs`, tests en `app_facade.rs`), revisión código
+   qwen3.8-flash, UI menú ⋮ + ConfirmDialog + selección post-delete + última
+   conversación + persistencia restart (tests deterministas 14 AC del contrato
+   original). Luego G (pass visual Grok 4.6 High), review Grok independiente,
+   review qwen, Playwright headed, AppImage NUEVO, `./scripts/verify`, STOP para
+   aprobación humana. Tasks A-E NO se repiten (`cea141e`/`60dc786` es contexto).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
