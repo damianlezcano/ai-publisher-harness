@@ -4,25 +4,27 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK B INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK C INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
 
-- **Current main commit: `88761be`** (merge de Task B). `git log --oneline -12`
+- **Current main commit: `c94e114`** (merge de Task C). `git log --oneline -12`
   para el detalle.
 - **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
   `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
-  `corr/b-attachment-flow`; autor kimi `a16a07c`, revisor qwen APPROVE —
-  solo nits no bloqueantes). `./scripts/verify` PASS en main tras B
-  (175 tests frontend, cargo verde, M10 contract ok). Worktree de Task B
-  removido, branch borrado. Panes author/reviewer de A y B cerrados.
-- **Session budget: CHECKPOINT_WARNING (89.5K, 80K-99,999)**. Este orquestador
-  rota en un punto seguro: Task B completa, integrada y verificada. NO se
-  inició Task C. NO M11. NO bypaseo del gate.
+  `corr/b-attachment-flow`). Task C INTEGRADA (`c94e114`, merge de
+  `corr/c-startup-states`; autor kimi `fd1d928`, revisor qwen APPROVE tras
+  REQUEST_CHANGES — MAJOR-1 resuelto y con cobertura de regresión, restantes
+  NIT no bloqueantes). `./scripts/verify` PASS en main tras C (182 tests
+  frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok). Worktree de Task C
+  removido, branch borrado. Panes author/reviewer de C cerrados.
+- **Session budget: ROTATE_SESSION_REQUIRED (103.6K, 100K-129,999)**. Este
+  orquestador rota en un punto seguro: Task C completa, integrada y verificada,
+  panes cerrados. NO se iniciaron Tasks D-G. NO M11. NO bypaseo del gate.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
   AppImage real construido y verificado (detalles al final). NO reiniciar.
 - **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
-  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-G: A y B done, C-G pendientes.
+  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-C done, D-G pendientes.
 
 ## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
@@ -142,7 +144,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | --- | --- | --- | --- | --- | --- |
 | A | ~~Contrato de CREACIÓN user-facing + fin de fuga técnica~~ **HECHA** (`e6389ea`) | kimi-k2.7-code | qwen3.8-flash | ~~`crates/project-agent`, `crates/project-app/src/app.rs`, dtos, `app/src/components/CreationsPanel.tsx`~~ | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano (build_instruction en service.rs); sin paths/comandos en UX normal. APPROVE. |
 | B | ~~Flujo real de adjunto/contexto~~ **HECHA** (`88761be`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx` + tests~~ | Drop/import → material adjunto al mensaje del usuario (attachmentIds lift a WorkspaceView, controlado a ComposerBar); llega al agente vía `agent_send` con ids; sin resource-item duplicado; tests deterministas. APPROVE (nits: race agentPhase estrecho, reset de attachmentIds al cambiar de proyecto — no bloqueantes). |
-| C | Error falso de arranque (STARTING/READY/FAILED) | kimi-k2.7-code | qwen3.8-flash | `crates/project-opencode`, `crates/project-agent`, `crates/project-app` (app_status), `app/src/App.tsx` | Estados explícitos; "Preparando el asistente…"; solo fallo terminal real; tests cold/delayed/failure/recovery |
+| C | ~~Error falso de arranque (STARTING/READY/FAILED)~~ **HECHA** (`c94e114`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/App.tsx`, `WorkspaceView.tsx`, `messages.ts`, `types.ts`, tests~~ | Estados explícitos vía poll de `app_status`; "Preparando el asistente…"; solo fallo terminal real; `failed` recuperable (retry + auto-poll); tests cold/delayed/failure/recovery. APPROVE. |
 | D | Terminología de conversación | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/messages.ts`, tests, legacy naming | Default amigable; sin "Proyecto sin título" en UI activa; legacy schema ok |
 | E | Duplicado/texto verde | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx` | Eliminar doble render del contenido asistente; test de regresión |
 | F | Eliminar conversación (backend semántica + UI) | Backend kimi; UI **Cursor Grok 4.6 High** | qwen3.8-flash (código) | backend: `crates/project-app/src/app.rs` (delete + unpublish), `crates/project-publication`, tests; UI: sidebar menú ⋮, ConfirmDialog, selección post-delete | Delete durable, fail-closed, recursos solo-exclusivos, no half-delete, confirmación en lenguaje llano, tests 10+ |
@@ -153,20 +155,15 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
 D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
 Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
-**Task A YA integrada. La sesión siguiente empieza con Task B.**
+**A, B, C YA integradas. La sesión siguiente empieza con Task D.**
 
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `e6389ea`; NO es workspace de autor).
-- `uxfix/functional` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-functional`
-  (integrado `030d788`; puede removerse).
-- `uxfix/visual` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-visual`
-  (integrado `abd41bc`; puede removerse; quedó `app/package-lock.json` sin
-  trackear — higiene conocida).
-- Worktrees de Task A removidos tras integración.
-- Worktree de Task B (`../ai-publisher-corr-01-b`, `corr/b-attachment-flow`)
-  removido y branch borrado tras integración de `88761be`.
+  (integración, `c94e114`; NO es workspace de autor).
+- Worktrees de Task A y B removidos tras integración.
+- Worktree de Task C (`../ai-publisher-corr-01-c`, `corr/c-startup-states`)
+  removido y branch borrado tras integración de `c94e114`.
 - Nuevos worktrees de la corrección: crear en paths hermanos (ej.
   `../ai-publisher-corr-01-<task>`) por tarea.
 
@@ -195,7 +192,8 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 ## Model allocation (sesión anterior cerrada)
 
 - Orquestador previo: `opencode-go/deepseek-v4-flash` (cerrada en bootstrap
-  HARD). **Este pass:** deepseek-v4-flash (Task A integrada; rota en WARNING).
+  HARD). **Este pass:** deepseek-v4-flash (A/B/C integradas; rota en
+  ROTATE_SESSION_REQUIRED tras Task C).
 - **Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.** (seguir así;
   Qwen3.8 Max solo con ESCALATION_REASON explícito).
 - Task A: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
@@ -203,15 +201,19 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
   pendientes).
 - Task B: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
   (APPROVE, nits no bloqueantes). Commit `a16a07c`. Ambos panes cerrados.
+- Task C: autor `opencode-go/kimi-k2.7-code` (`fd1d928`), revisor
+  `opencode-go/qwen3.8-flash` (REQUEST_CHANGES → APPROVE; MAJOR-1 resuelto con
+  regresión; NIT-1 poll cadence + MINOR-1 transient resend anotados no
+  bloqueantes). Ambos panes cerrados. Backend sin cambios.
 
 ## Próximo paso (inmediato)
 
-1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
-   Task B; punto seguro: repo limpio, Task B verificada, panes de B cerrados).
+1. **Rotar orquestador** (budget ROTATE_SESSION_REQUIRED alcanzado tras
+   integrar Task C; punto seguro: repo limpio, Task C verificada, panes de C
+   cerrados).
 2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   continuar con **Task C** (estados STARTING/READY/FAILED y eliminación del
-   error falso de arranque) usando el circuito autor→reviewer→integración con
-   el orden A→B→C→D/E→F→G→Playwright→AppImage. Task B NO se repite (leer el
-   diff de `88761be` solo si hace falta contexto para C).
+   continuar con **Task D** (terminología de conversación, LOW) usando el
+   circuito autor→reviewer→integración con el orden A→B→C→D/E→F→G→Playwright→
+   AppImage. Task C NO se repite (el diff de `c94e114`/`fd1d928` es contexto).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
