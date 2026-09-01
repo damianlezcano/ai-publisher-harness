@@ -4,27 +4,30 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK C INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, TASK D INTEGRADA, ORQUESTADOR EN ROTACIÓN, 2026-09-01)
 
-- **Current main commit: `c94e114`** (merge de Task C). `git log --oneline -12`
+- **Current main commit: `f44d507`** (merge de Task D). `git log --oneline -12`
   para el detalle.
 - **Progreso del pass:** Task A INTEGRADA (`e6389ea`, merge de
   `corr/a-creation-contract`). Task B INTEGRADA (`88761be`, merge de
   `corr/b-attachment-flow`). Task C INTEGRADA (`c94e114`, merge de
   `corr/c-startup-states`; autor kimi `fd1d928`, revisor qwen APPROVE tras
   REQUEST_CHANGES — MAJOR-1 resuelto y con cobertura de regresión, restantes
-  NIT no bloqueantes). `./scripts/verify` PASS en main tras C (182 tests
-  frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok). Worktree de Task C
-  removido, branch borrado. Panes author/reviewer de C cerrados.
-- **Session budget: ROTATE_SESSION_REQUIRED (103.6K, 100K-129,999)**. Este
-  orquestador rota en un punto seguro: Task C completa, integrada y verificada,
-  panes cerrados. NO se iniciaron Tasks D-G. NO M11. NO bypaseo del gate.
+  NIT no bloqueantes). **Task D INTEGRADA (`f44d507`, merge de
+  `corr/d-conversation-terms`; autor Composer 2.5 commit `18ac233`, revisor
+  qwen3.8-flash APPROVE sin hallazgos)**. `./scripts/verify` PASS en main tras
+  D (189 tests frontend, cargo verde, M10 + UX_REDESIGN_01 contract ok).
+  Worktrees de Task D removidos, branch borrado. Panes author/reviewer de D
+  cerrados.
+- **Session budget: CHECKPOINT_WARNING (91.5K, 80K-99,999)**. Este orquestador
+  rota en el punto seguro: Task D completa, integrada y verificada, panes
+  cerrados. NO se inician Tasks E-G. NO M11. NO bypass del gate.
 - **M11 NO iniciado.** Nada de M11 en esta corrección.
 - **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
   gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
   AppImage real construido y verificado (detalles al final). NO reiniciar.
 - **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
-  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-C done, D-G pendientes.
+  (sección "Hallazgos humanos" abajo). Este pass los corrige. A-D done, E-G pendientes.
 
 ## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
@@ -145,7 +148,7 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 | A | ~~Contrato de CREACIÓN user-facing + fin de fuga técnica~~ **HECHA** (`e6389ea`) | kimi-k2.7-code | qwen3.8-flash | ~~`crates/project-agent`, `crates/project-app/src/app.rs`, dtos, `app/src/components/CreationsPanel.tsx`~~ | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano (build_instruction en service.rs); sin paths/comandos en UX normal. APPROVE. |
 | B | ~~Flujo real de adjunto/contexto~~ **HECHA** (`88761be`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx` + tests~~ | Drop/import → material adjunto al mensaje del usuario (attachmentIds lift a WorkspaceView, controlado a ComposerBar); llega al agente vía `agent_send` con ids; sin resource-item duplicado; tests deterministas. APPROVE (nits: race agentPhase estrecho, reset de attachmentIds al cambiar de proyecto — no bloqueantes). |
 | C | ~~Error falso de arranque (STARTING/READY/FAILED)~~ **HECHA** (`c94e114`) | kimi-k2.7-code | qwen3.8-flash | ~~`app/src/App.tsx`, `WorkspaceView.tsx`, `messages.ts`, `types.ts`, tests~~ | Estados explícitos vía poll de `app_status`; "Preparando el asistente…"; solo fallo terminal real; `failed` recuperable (retry + auto-poll); tests cold/delayed/failure/recovery. APPROVE. |
-| D | Terminología de conversación | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/messages.ts`, tests, legacy naming | Default amigable; sin "Proyecto sin título" en UI activa; legacy schema ok |
+| D | ~~Terminología de conversación~~ **HECHA** (`f44d507`) | Composer 2.5 | qwen3.8-flash | ~~`app/src/messages.ts`, `App.tsx`, tests, legacy naming~~ | `conversationDisplayName()` render-time: legacy "Proyecto sin título"/"Proyecto sin título N" → "Conversación nueva"; 8 AC cubiertos (default, legacy, user-renamed, sidebar, header, restart, ordering, sin Project terminology en DOM). APPROVE sin hallazgos. |
 | E | Duplicado/texto verde | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx` | Eliminar doble render del contenido asistente; test de regresión |
 | F | Eliminar conversación (backend semántica + UI) | Backend kimi; UI **Cursor Grok 4.6 High** | qwen3.8-flash (código) | backend: `crates/project-app/src/app.rs` (delete + unpublish), `crates/project-publication`, tests; UI: sidebar menú ⋮, ConfirmDialog, selección post-delete | Delete durable, fail-closed, recursos solo-exclusivos, no half-delete, confirmación en lenguaje llano, tests 10+ |
 | G | Pass visual producto/UX **Cursor Grok 4.6 High** | Cursor Grok 4.6 High | Cursor Grok 4.6 High FRESH (UX) + qwen3.8-flash (código/a11y) | `app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú) | Chat tipo mensajería; adjuntos en el mensaje; creación Abrir/Compartir; menú contextual; sin dashboard |
@@ -155,15 +158,16 @@ compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
 D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
 Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
-**A, B, C YA integradas. La sesión siguiente empieza con Task D.**
+**A, B, C, D YA integradas. La sesión siguiente empieza con Task E.**
 
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `c94e114`; NO es workspace de autor).
-- Worktrees de Task A y B removidos tras integración.
-- Worktree de Task C (`../ai-publisher-corr-01-c`, `corr/c-startup-states`)
-  removido y branch borrado tras integración de `c94e114`.
+  (integración, `f44d507`; NO es workspace de autor).
+- Worktrees de Task A, B y C removidos tras integración.
+- Worktree de Task D (`../ai-publisher-corr-01-d`, `corr/d-conversation-terms`)
+  y worktree de review D (`../ai-publisher-corr-01-d-review`) removidos; branch
+  borrado tras integración de `f44d507`.
 - Nuevos worktrees de la corrección: crear en paths hermanos (ej.
   `../ai-publisher-corr-01-<task>`) por tarea.
 
@@ -192,8 +196,8 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 ## Model allocation (sesión anterior cerrada)
 
 - Orquestador previo: `opencode-go/deepseek-v4-flash` (cerrada en bootstrap
-  HARD). **Este pass:** deepseek-v4-flash (A/B/C integradas; rota en
-  ROTATE_SESSION_REQUIRED tras Task C).
+  HARD). **Este pass:** deepseek-v4-flash (A/B/C/D integradas; rota en
+  CHECKPOINT_WARNING tras Task D).
 - **Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.** (seguir así;
   Qwen3.8 Max solo con ESCALATION_REASON explícito).
 - Task A: autor `opencode-go/kimi-k2.7-code`, revisor `opencode-go/qwen3.8-flash`
@@ -205,15 +209,18 @@ Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
   `opencode-go/qwen3.8-flash` (REQUEST_CHANGES → APPROVE; MAJOR-1 resuelto con
   regresión; NIT-1 poll cadence + MINOR-1 transient resend anotados no
   bloqueantes). Ambos panes cerrados. Backend sin cambios.
+- **Task D: autor Composer 2.5 (`task-d-author`, commit `18ac233`), revisor
+  `opencode-go/qwen3.8-flash` (`task-d-review`, APPROVE sin hallazgos). Ambos
+  panes cerrados.** Grok NO usado (G/F-UI pendientes).
 
 ## Próximo paso (inmediato)
 
-1. **Rotar orquestador** (budget ROTATE_SESSION_REQUIRED alcanzado tras
-   integrar Task C; punto seguro: repo limpio, Task C verificada, panes de C
-   cerrados).
+1. **Rotar orquestador** (budget CHECKPOINT_WARNING alcanzado tras integrar
+   Task D; punto seguro: repo limpio, Task D verificada, panes de D cerrados).
 2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
-   continuar con **Task D** (terminología de conversación, LOW) usando el
-   circuito autor→reviewer→integración con el orden A→B→C→D/E→F→G→Playwright→
-   AppImage. Task C NO se repite (el diff de `c94e114`/`fd1d928` es contexto).
+   continuar con **Task E** (duplicado/texto verde del contenido asistente,
+   LOW) usando el circuito autor→reviewer→integración con el orden
+   A→B→C→D→E→F→G→Playwright→AppImage. Tasks A-D NO se repiten (el diff de
+   `f44d507`/`18ac233` es contexto).
 3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
    aprobación humana.
