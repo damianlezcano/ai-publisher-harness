@@ -4,158 +4,196 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (UX_REDESIGN_01 — PRODUCT CORRECTION PASS, INTEGRADO Y LISTO PARA REVISIÓN HUMANA, 2026-09-01)
+## Estado actual (HUMAN_PRODUCT_REVIEW — FRESH CORRECTION PASS, ROOT CAUSES MAPEADAS, ORQUESTADOR EN ROTACIÓN OBLIGATORIA, 2026-09-01)
 
-- **Current main commit: `32a069b`.** `git log --oneline -8` para el detalle.
-- **TASK A (modelo gratis real) — INTEGRADA, revisada, APPROVE.** Ver sección
-  "TASK A — INTEGRADO" abajo.
-- **TASK B (visual) — INTEGRADA en `main` tras resolver los 2 CODE_IMPORTANT**
-  del re-review Qwen Flash. La corrección (`abd41bc`) y la revisión
-  (`qwen-frontend-rereview-abd41bc.md` → **APPROVE**) están en `main`.
-- **Playwright headed — CORRIDO (14 flujos, 3 viewports, 44/44 aserciones
-  PASS).** Evidencia regenerada en `docs/ux-redesign-01/` (66 PNG + 66 OCR +
-  14 a11y).
-- **AppImage real — CONSTRUIDO y lanzado.** Respuesta real del modelo gratis
-  confirmada: "Hola" → "¡Hola! ¿Cómo puedo ayudarte?" con `big-pickle`
-  (opencode, cost 0), OpenCode 1.18.25 bundled.
-- **PENDIENTE: aprobación VISUAL HUMANA del producto.** El AppImage quedó
-  construido y lanzado; el owner debe inspeccionarlo. NO cerrar la aceptación
-  visual final automáticamente.
-- **M11 NO iniciado.**
+- **Current main commit: `5801cf6`.** `git log --oneline -12` para el detalle.
+- **Session budget: ROTATE_SESSION_REQUIRED_HARD (>= 130K) alcanzado en el
+  bootstrap** por el volumen de los reportes de exploración + lecturas. NO se
+  lanzó NINGÚN worker. No se integró ningún commit nuevo. El gate NO se
+  bypasea. **Rotar orquestador AHORA** (sesión siguiente: deepseek-v4-flash
+  fresh; leer solo este checkpoint + los archivos citados).
+- **M11 NO iniciado.** Nada de M11 en esta corrección.
+- **Trabajo previo integrado y conservado** (UX_REDESIGN_01): Task A modelo
+  gratis real (`a3ef122`), Task B visual (`88fd346`), Playwright 44/44,
+  AppImage real construido y verificado (detalles al final). NO reiniciar.
+- **Pendiente: la revisión humana real del AppImage generó 16 hallazgos UX**
+  (sección "Hallazgos humanos" abajo). Este pass los corrige.
 
-## Integración en `main` (esta sesión)
+## Hallazgos humanos (16) y causas raíz confirmadas (YA investigadas)
 
-| Commit | Contenido |
-| --- | --- |
-| `32a069b` | docs(ux): gate Playwright headed extendido a 14 flujos (drag-over, drop, attach, model selector) + evidencia regenerada; 44/44 PASS. |
-| `88fd346` | merge de `uxfix/visual` en `main` (Task B completa: `b7d75be` + fix `abd41bc`). |
-| `6dd3cec` | docs(ux): re-review Qwen3.8 Flash **APPROVE** de los 2 CODE_IMPORTANT (evidencia persistida). |
-| `abd41bc` | fix(ux): restaurar errores de add-file en ComposerBar + eliminar panel Materiales muerto (autor Cursor Grok 4.6 High). |
-| `66d15c4` | checkpoint previo (Task A integrada; Task B pendiente de fix). |
+1. Layout chat mucho más cercano al concepto. OK.
+2. Panel Materiales permanente eliminado. OK, correcto.
+3. Drag & drop funciona.
+4. **Recursos dropeados aparecen a la derecha y parecen producidos por el
+   asistente.** Causa: `WorkspaceView.importRef` (`app/src/components/WorkspaceView.tsx:66-91`)
+   importa materiales vía `materialsAddFromPaths` pero NO los adjunta al
+   mensaje pendiente (`ComposerBar` mantiene `attachmentIds` en estado local,
+   `app/src/components/ComposerBar.tsx:52`). Los materiales no adjuntos se
+   renderizan como `message-resource` en el timeline (`ChatPanel.tsx:193-198`),
+   fuera de la burbuja del usuario.
+5. **Sidebar/título muestra "Proyecto sin título 1".** Causa: el default
+   activo es `messages.conversation.defaultName = "Conversación nueva"`
+   (`app/src/messages.ts:64`) pero persisten proyectos de esquemas anteriores
+   con nombres legacy; además `messages.project.defaultName = "Proyecto sin
+   título"` (`messages.ts:92`) vive en el catálogo y `ProjectsView.tsx:33` lo
+   usa. Backend `create_project` exige nombre no vacío (no auto-nombra).
+6. **"No se pudo iniciar el asistente de IA." en primer arranque aunque luego
+   funciona.** Causa: el backend es lazy y `ensure_ready` tiene timeout de 30s
+   (`crates/project-opencode/src/backend.rs:16` DEFAULT_STARTUP). En arranque
+   frío del AppImage el sidecar tarda; el primer `agent_send`/`model_get_selected`
+   puede caer en `BackendNotReady`/`Timeout` → `AppError::from_agent`
+   (`crates/project-app/src/error.rs:164-185`) → `ErrorCode::AiUnavailable`
+   mensaje "No se pudo iniciar el asistente de IA." (línea 177). El frontend
+   NO expone estados STARTING/READY/FAILED (nunca llama a `appStatus`/`agent_status`;
+   solo escucha `agent://task`, `app/src/App.tsx:80-108`).
+7. El modelo gratis responde tras el arranque. OK.
+8. **Respuesta con `/tmp/opencode/...`, `node`, rutas `.js`, instrucciones
+   shell.** Causa: el texto del asistente ES la respuesta cruda del LLM
+   (`result.task.message` → `send_message_run` en `crates/project-app/src/app.rs:906-926`
+   lo persiste como mensaje de asistente). No hay system-prompt/instrucción
+   que fuerce lenguaje plano; `augment_prompt` solo agrega el bloque de
+   materiales (`crates/project-agent/src/service.rs:176-188`).
+9. **El usuario no identifica dónde quedó el juego.** Causa: la "creación"
+   existe como `Creation` (registrador `FilesystemCreationRegistrar`,
+   `crates/project-agent/src/registrar.rs:30-92`) y se renderiza como
+   `CreationCard` (`app/src/components/CreationsPanel.tsx:30-99`) DENTRO de la
+   burbuja del asistente (`ChatPanel.tsx:129-144`), pero sin botones
+   "Abrir"/"Compartir" en la tarjeta (solo "Vista previa"/"Abrir en
+   navegador") y sin una presentación clara de creación.
+10. **Se espera: creación visible con [Abrir] [Compartir].** Ver arriba.
+11. **Resultado renderizado dos veces: mensaje normal + texto verde crudo.**
+    Causa CONFIRMADA: `App.tsx:91` guarda `event.message` crudo del evento
+    `agent://task` en `agentMessage`; `ChatPanel.tsx:231-233` lo pinta como
+    `.chat-status.ok` verde, ADEMÁS de la burbuja del asistente persistida
+    (`ChatPanel.tsx:128`) que se refresca con `refreshConversation`
+    (`App.tsx:98`). Duplicado de contenido asistente.
+12. Usuario adjuntó archivo de texto con datos del rosco. OK (flujo existe).
+13. Usuario pidió usar esos datos. OK.
+14. **El flujo real de adjunto/contexto falló.** Causa: si el material se
+    agrega por drag&drop, NO se adjunta a `attachmentIds` del composer →
+    `agent_send(projectId, prompt, attachmentIds=[])` → el agente nunca ve el
+    archivo. El aprovisionamiento backend EXISTE y es correcto
+    (`resolve_attachments` `app.rs:781-829`, `provision_attachments`
+    `service.rs:146-174`, prompt "Materiales adjuntos… están en la carpeta
+    materials"). El eslabón roto es FRONTEND: drop → adjuntar al mensaje.
+15. Los recursos deben seguir entendibles sin dashboard Materiales.
+16. **No hay forma contextual de eliminar conversaciones.** `project_delete`
+    existe end-to-end (commando `commands.rs:80-89`, `AppState::delete_project`
+    `app.rs:310-317`, `ProjectService::delete_project` `project-core/src/lib.rs:807-811`,
+    `api.ts:31`) pero NINGÚN componente lo llama; `ConfirmDialog` existe
+    (type-name-to-confirm, `ConfirmDialog.tsx:15-48`) pero no está cableado.
+    **Bug adicional detectado:** `delete_project` NO hace `unpublish` → entrada
+    stale en `PublicationManager.published` y el proyecto aparece "shared"
+    hasta reiniciar.
 
-## TASK A — INTEGRADO (funcional, modelo gratis real)
+## Contratos clave actuales (para los workers)
 
-| Commit | Contenido |
-| --- | --- |
-| `a3ef122` | merge de `uxfix/functional` en `main` (Task A completa). |
-| `030d788` | fix(agent,provider,fake): señal terminal real `/session/status` + watermark + tests de scoping (rework de REQUEST_CHANGES). |
-| `6735bd3` | fix(agent,provider,fake): polling real `/session/status` + `/session/{id}/message`. |
+- **Message/Project:** `Project.messages: Vec<Message>` schema v3
+  (`crates/project-core/src/lib.rs:342-357, 400-420`); `Message { id, role,
+  text, status, createdAt, materialIds, creationIds }`. Validación: user msg
+  solo `material_ids`, assistant msg solo `creation_ids`.
+- **Creation:** `Creation { id, displayName, kind: Web|Document|Image|File,
+  visibility, relativePath, contentType?, byteSize, revision,
+  parentCreationId?, createdAt }` (`lib.rs:378-399`). UI capabilities
+  (open/preview/publish) se derivan en facade, no se almacenan.
+- **DTOs:** `ProjectSummary {id,name,createdAt,updatedAt,shared}`,
+  `ProjectView {id,name,materials,creations,messages,publication}`,
+  `MessageView`, `CreationView {id,displayName,kind,visibility,byteSize,
+  createdAt,revision}` (`crates/project-app/src/dtos.rs`, `app/src/types.ts`).
+- **Frontend estado:** `App.tsx` (conversations/selectedId/conversation/
+  agentPhase/agentMessage/settingsOpen), `WorkspaceView` (pendingUser/
+  sendError/drag-drop/import), `ChatPanel` (timeline derivada),
+  `ComposerBar` (prompt/attachmentIds/model selector), `ConversationsSidebar`
+  (lista, rename inline, NO delete). `PublishPanel` = ShareControl (single
+  Compartir en bottom bar).
+- **Agent:** `AgentService::run` (`service.rs:49-103`) ensure_ready →
+  open_session(workspace) → provision_attachments → send → registrar artifacts
+  (skip `materials/`). `agent://task` events desde `commands.rs:274-322`.
+  Backend status en `OpenCodeBackend.status()` → `BackendStatus` enum
+  (`crates/project-opencode/src/status.rs:1-7`): Stopped|Starting|Ready|Failed;
+  expuesto a UI solo vía `agent_status`/`app_status` (sin uso frontend).
+- **Attachments:** `resolve_attachments` autoriza contra materiales del
+  proyecto; copia a `workspace/materials/<n>-<name>`; augment_prompt lista.
+  Read path seguro (`project-fs` validate_read_path). Cleanup: sin cleanup
+  explícito de `workspace/materials/` tras run (aceptado).
+- **Publicación:** `publish/unpublish/publication_status`, túnel Cloudflare,
+  QR frontend. TEMPORAL; honestidad de enlace. Reusar tal cual.
+- **Pins sidecar:** opencode 1.18.25, cloudflared 2026.8.3 (M10, sin cambios).
+- **Copy catálogo:** `app/src/messages.ts` = catálogo ejecutable (ADR-0012);
+  tests verdes deben seguir.
 
-Causa raíz confirmada contra el sidecar real 1.18.25: `GET /session/status` es
-la señal real (mapa vacío `{}` = idle/completed); el texto del asistente se
-obtiene de `GET /session/{id}/message`. No se hardcodea ningún modelo
-(`big-pickle` solo en tests/fake/catálogo).
+## Plan de tareas de esta corrección (ejecución por la sesión siguiente)
 
-## TASK B — INTEGRADO (visual, chat-first compacto)
+Modelos (política activa, AGENT_POLICY.md): orquestador
+`opencode-go/deepseek-v4-flash`; funcional `opencode-go/kimi-k2.7-code`;
+revisión funcional/código `opencode-go/qwen3.8-flash`; producto/UX frontend
+**Cursor Grok 4.6 High** (solo vía Cursor, NUNCA OpenCode Go); revisión UX
+independiente: Cursor Grok 4.6 High FRESH; LOW mecánico: Composer 2.5 o
+`opencode-go/mimo-v2.5`. AUTHOR != REVIEWER. Una tarea = un worktree. Cada
+worker: verificar MODEL_REQUESTED == MODEL_ACTUAL antes del task; handoff
+compacto; cerrar panes tras PASS+APPROVE (CONTEXT_LEAK si queda idle).
 
-- Autor visual: **Cursor Grok 4.6 High** (`b7d75be` en `uxfix/visual`), revisión
-  visual Grok **APPROVE**.
-- Re-review de código/a11y: **`opencode-go/qwen3.8-flash` fresh** → inicialmente
-  **REQUEST_CHANGES** con 2 CODE_IMPORTANT; corregidos por un autor visual
-  FRESH (`cursor-grok-4.6-high`, commit `abd41bc`) y re-revisados por
-  `opencode-go/qwen3.8-flash` fresh → **APPROVE**
-  (`docs/ux-redesign-01/reviews/qwen-frontend-rereview-abd41bc.md`).
-- **Los 2 CODE_IMPORTANT y sus fixes:**
-  1. `ComposerBar.pickFile()` sin try/catch → unhandled rejection sin feedback.
-     Fix: try/catch + estado `pickError` + `<ErrorNotice>` visible (lenguaje
-     llano, sin código/ruta). Test nuevo en `ComposerBar.test.tsx`.
-  2. Código muerto tras quitar el panel Materiales: `MaterialsPanel` default +
-     `MaterialItem` (único caller de `api.materialRemove`) + `importDetailLabel`
-     duplicado. Fix: eliminar componente muerto (conservar `MaterialChip`),
-     borrar `MaterialsPanel.test.tsx`, conservar contrato `api.materialRemove`
-     y el import de `ChatPanel`.
+| # | Tarea | Autor | Revisor | Ownership | AC (resumen) |
+| --- | --- | --- | --- | --- | --- |
+| A | Contrato de CREACIÓN user-facing + fin de fuga técnica | kimi-k2.7-code | qwen3.8-flash | `crates/project-agent` (prompt/system instruction), `crates/project-app/src/app.rs`, dtos si hace falta, `app/src/components/CreationsPanel.tsx` | Creación con Abrir/Compartir; respuesta asistente en lenguaje plano; sin paths/comandos en UX normal |
+| B | Flujo real de adjunto/contexto | kimi-k2.7-code | qwen3.8-flash | `app/src/components/{WorkspaceView,ComposerBar,ChatPanel}.tsx`, `crates/project-agent` (tests E2E con fake) | Drop → material adjunto al mensaje del usuario; llega al agente; tests deterministas |
+| C | Error falso de arranque (STARTING/READY/FAILED) | kimi-k2.7-code | qwen3.8-flash | `crates/project-opencode`, `crates/project-agent`, `crates/project-app` (app_status), `app/src/App.tsx` | Estados explícitos; "Preparando el asistente…"; solo fallo terminal real; tests cold/delayed/failure/recovery |
+| D | Terminología de conversación | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/messages.ts`, tests, legacy naming | Default amigable; sin "Proyecto sin título" en UI activa; legacy schema ok |
+| E | Duplicado/texto verde | LOW (Composer 2.5 / mimo-v2.5) | qwen3.8-flash | `app/src/App.tsx`, `app/src/components/ChatPanel.tsx` | Eliminar doble render del contenido asistente; test de regresión |
+| F | Eliminar conversación (backend semántica + UI) | Backend kimi; UI **Cursor Grok 4.6 High** | qwen3.8-flash (código) | backend: `crates/project-app/src/app.rs` (delete + unpublish), `crates/project-publication`, tests; UI: sidebar menú ⋮, ConfirmDialog, selección post-delete | Delete durable, fail-closed, recursos solo-exclusivos, no half-delete, confirmación en lenguaje llano, tests 10+ |
+| G | Pass visual producto/UX **Cursor Grok 4.6 High** | Cursor Grok 4.6 High | Cursor Grok 4.6 High FRESH (UX) + qwen3.8-flash (código/a11y) | `app/src` (App shell, sidebar, timeline, composer, creación, adjuntos, settings X, menú) | Chat tipo mensajería; adjuntos en el mensaje; creación Abrir/Compartir; menú contextual; sin dashboard |
+| T6 | Playwright headed | LOW | qwen3.8-flash | `app/` harness | 3 viewports, 16 capturas, aserciones |
+| T7 | AppImage real + `./scripts/verify` | LOW/Composer | qwen3.8-flash | packaging M10 | AppImage con sidecars, lanzamiento real, verificación completa |
 
-## Playwright headed (14 flujos, 3 viewports)
-
-- 1366×768, 1440×900, 1920×1080. `capture.py` 44/44 aserciones, `measure.py`
-  PASS, `ocr.py` 66 imágenes.
-- Flujos requeridos validados: 01 first-launch, 02 conversación activa, 03
-  drag-over, 04 recurso dropeado, 05 interacción adjuntar compacto, 06 selector
-  de modelo, 07 Settings open, 08 Settings X restaura misma conversación, 09
-  sharing/QR, 10 respuesta exitosa del asistente (+ flujos de regresión 11-14
-  y rename/resources originales).
-- Clasificación UX: **UX_BLOCKER: ninguno. UX_IMPORTANT: ninguno. UX_POLISH:**
-  nombre de modelo en el selector con ID del mock (artefacto de datos), y los
-  polish A11Y ya conocidos (contraste resting de `composer-model-select`,
-  tooltip de truncación). Evidencia: `docs/ux-redesign-01/*.png/.ocr.txt/.a11y.txt`.
-
-## AppImage real (aceptación funcional real)
-
-- Build: `./scripts/smoke-package appimage` con el workaround M10 aprobado
-  (linuxdeploy de Fedora 44 falla → appimagetool directo). **PASS.**
-- Ruta exacta: `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`
-- Tamaño: 180.816.376 bytes (173M). SHA-256:
-  `423cdb2815f23a01fa5e421c3203f47aea647cce3c1ea716fad1732e172fc8e2`
-- Sidecars bundled verificados en el payload: `usr/bin/opencode` 1.18.25
-  (sha256 `d91e0d33...`) y `usr/bin/cloudflared` 2026.8.3 (sha256
-  `f29324fe...`, coincide con el manifest). `fetch-sidecars` reconciliado: los
-  checksums del manifest (`opencode` es checksum del tar.gz) son correctos y la
-  redescarga es determinista.
-- **PATH-independencia:** `resolve_sidecar` resuelve primero
-  `install_dir/<name>` y `install_dir/<name>-<triple>` (bundled en `usr/bin`
-  del AppImage) antes de caer a `PATH`; confirmado en
-  `crates/project-app/src/sidecar.rs` y `app/src-tauri/src/lib.rs`.
-- **Lanzamiento gráfico real:** el AppImage corre (procesos `educai` +
-  `WebKitNetworkProcess` + `WebKitWebProcess` estables; backend bundled
-  `opencode serve` en puerto efímero, log "[agent] backend ready"). La sesión
-  gráfica es headless (mutter sin superficie capturable): xdotool solo ve
-  "mutter guard window" y las capturas de pantalla devuelven superficie vacía.
-  El render del WebView no es capturable en esta sesión; la evidencia visual
-  completa queda cubierta por el gate Playwright headed en
-  `docs/ux-redesign-01/`.
-- **Conversación real del modelo gratis (aceptación final):**
-  - Sesión auto (sin modelo explícito): `POST /session` → `POST
-    /session/{id}/prompt_async` con `{"parts":[{"type":"text","text":"Hola"}]}`
-    → polling `GET /session/status` → `{}` → `GET /session/{id}/message`:
-    `[user] Hola` / `[assistant] ¡Hola! ¿Cómo puedo ayudarte?`
-  - Modelo usado: **`big-pickle` (providerID `opencode`)**, cost 0, OpenCode
-    1.18.25 bundled. Sin provider de pago configurado (`/api/integration`
-    `connections: []`; único provider OpenCode Zen `apiKey:"public"`).
-  - Modelo explícito `ling-3.0-flash-fin-free` también respondió ("¡Hola! How
-    can I help you today?", cost 0) tras un retry transitorio del upstream.
-
-## Verificación final (esta sesión)
-
-- `./scripts/verify` → **exit 0** (fmt, clippy, cargo test, frontend
-  format/lint/typecheck/test 163, sidecars, M10, UX_REDESIGN_01 gate, tauri
-  check). El drift preexistente de clippy (1.98.0 vs pin 1.97.1) NO se
-  manifestó en esta corrida.
-- `git diff --check` → limpio. `git status --short` → vacío (main limpio).
+Orden sugerido: A → B → C (backend funcional, cada una con su worktree) →
+D/E (LOW) → F-backend → F-UI + G (Grok) → review Grok → review qwen →
+Playwright → AppImage → verify. Integrar solo commits revisados. NO M11.
 
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, commit `32a069b`).
+  (integración, `5801cf6`; NO es workspace de autor).
 - `uxfix/functional` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-functional`
-  (commit `030d788`, integrado; worktree puede removerse).
+  (integrado `030d788`; puede removerse).
 - `uxfix/visual` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-uxfix-visual`
-  (commit `abd41bc` sobre `b7d75be`, integrado; worktree puede removerse).
-  Queda `app/package-lock.json` sin trackear en ese worktree (higiene conocida
-  del review; el proyecto usa pnpm y el lockfile no está en el commit).
+  (integrado `abd41bc`; puede removerse; quedó `app/package-lock.json` sin
+  trackear — higiene conocida).
+- Nuevos worktrees de la corrección: crear en paths hermanos (ej.
+  `../ai-publisher-corr-01-<task>`) por tarea.
 
-## Pines de sidecar (M10, `config/components.json` / ADR-0013)
+## Verificación y pruebas
 
-- `opencode` 1.18.25, `cloudflared` 2026.8.3 (SHA-256 commiteados). Sin cambios
-  de pin. Binarios presentes y reconciliados con el manifest.
+- Frontend: `cd app && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`.
+- Rust: `cargo fmt --check && cargo clippy --all-targets && cargo test`.
+  (Drift de toolchain: rustup no instalado; clippy 1.98.0 vs pin 1.97.1 — el
+  drift NO se manifestó en la corrida previa; si aparece, es preexistente.)
+- Gate completo: `./scripts/verify` (exit 0 al final del pass).
+- `git diff --check` limpio; `git status --short` limpio antes del handoff.
+- Budget: `scripts/check-session-budget` ANTES de cada lanzamiento de worker
+  (CONTINUE <80K; CHECKPOINT_WARNING 80K-99,999; ROTATE 100K-129,999; HARD >=130K).
 
-## Model allocation (sesión de corrección cerrada)
+## Aceptación final real (M9/M10 ya aprobados, no repetir)
 
-- Orquestadora: `opencode-go/deepseek-v4-flash` (esta sesión, pane `w1F:p1`).
-- TASK B fix author: `cursor-grok-4.6-high` (sesión `grok-visual-fix`, fresh,
-  MODEL_ACTUAL confirmado; cerrada tras handoff PASS).
-- TASK B fix reviewer: `opencode-go/qwen3.8-flash` (sesión
-  `qwen-visual-fix-review`, fresh, MODEL_ACTUAL confirmado; cerrada tras
-  APPROVE).
-- **Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.**
-- Budget: CONTINUE durante toda la sesión (18K al inicio, ~66K al lanzar
-  reviewer; sin rotación requerida).
+- AppImage previo: `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
+  180.816.376 bytes, SHA-256 `423cdb2815f23a01fa5e421c3203f47aea647cce3c1ea716fad1732e172fc8e2`.
+- Modelo gratis real confirmado: `big-pickle` (providerID `opencode`), cost 0,
+  respuesta "¡Hola! ¿Cómo puedo ayudarte?". `modelGetSelected`/`default_free_model`
+  determinista (ADR-0015); NO hardcodear nombres (solo tests/fake).
+- PATH-independencia y sidecars bundled ya verificados (M10).
+- **Este pass NO re-testea M1-M10; solo integra las correcciones A-G, corre el
+  Playwright headed y construye un AppImage NUEVO para revisión humana.**
 
-## Próximo paso (producto)
+## Model allocation (sesión anterior cerrada)
 
-1. **Revisión humana del AppImage** (`app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`):
-   lanzar y completar el flujo M9 (crear conversación → pedir a la IA → ver
-   respuesta real del modelo gratis → compartir/QR). Aprobación visual final NO
-   automática.
-2. Si la revisión humana encuentra UX_BLOCKER/UX_IMPORTANT: nueva sesión de
-   corrección con el mismo circuito (autor visual → reviewer qwen).
-3. M11 NO iniciado.
+- Orquestador previo: `opencode-go/deepseek-v4-flash` (cerrada).
+- **Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0 sesiones.** (seguir así;
+  Qwen3.8 Max solo con ESCALATION_REASON explícito).
+
+## Próximo paso (inmediato)
+
+1. **Rotar orquestador** (budget HARD alcanzado en bootstrap; no se lanzó
+   ningún worker; repositorio sin cambios de este pass).
+2. Sesión nueva: leer este checkpoint, correr `scripts/check-session-budget`,
+   ejecutar tareas A-G con el circuito autor→reviewer→integración.
+3. NO iniciar M11. Terminar en AppImage NUEVO + `./scripts/verify` + STOP para
+   aprobación humana.
