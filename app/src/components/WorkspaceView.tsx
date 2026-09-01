@@ -182,10 +182,14 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           agentMessage={agentMessage}
           pendingUser={pendingUser}
           onRefresh={onRefresh}
-          onShare={() => {
-            if (!share.shared) {
-              void share.publish();
-            }
+          share={{
+            onShare: () => {
+              if (!share.shared) {
+                void share.publish();
+              }
+            },
+            shared: share.shared,
+            busy: share.busy === "publishing",
           }}
         />
       </div>
@@ -226,6 +230,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
               projectName={project.name}
               publication={project.publication}
               onRefresh={onRefresh}
+              share={share}
             />
           }
         />

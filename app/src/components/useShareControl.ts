@@ -8,7 +8,7 @@ export interface UseShareControlInput {
   onRefresh: () => void | Promise<void>;
 }
 
-type Busy = "publishing" | "unpublishing" | null;
+export type Busy = "publishing" | "unpublishing" | null;
 
 export interface ShareControlState {
   busy: Busy;

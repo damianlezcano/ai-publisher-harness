@@ -105,7 +105,7 @@ describe("CreationsPanel", () => {
         projectId={projectId}
         creations={creations}
         onRefresh={() => {}}
-        onShare={onShare}
+        share={{ onShare, shared: false, busy: false }}
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
@@ -122,7 +122,7 @@ describe("CreationCard", () => {
         projectId={projectId}
         creation={creation}
         onRefresh={() => {}}
-        onShare={onShare}
+        share={{ onShare, shared: false, busy: false }}
       />,
     );
 
@@ -136,11 +136,37 @@ describe("CreationCard", () => {
     expect(onShare).toHaveBeenCalledTimes(1);
   });
 
-  it("omits Compartir when onShare is not provided", () => {
+  it("omits Compartir when share is not provided", () => {
     render(<CreationCard projectId={projectId} creation={creation} onRefresh={() => {}} />);
     expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: messages.sharing.shareAction }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows Compartiendo… and disables the button while busy", () => {
+    render(
+      <CreationCard
+        projectId={projectId}
+        creation={creation}
+        onRefresh={() => {}}
+        share={{ onShare: vi.fn(), shared: false, busy: true }}
+      />,
+    );
+    const button = screen.getByRole("button", { name: messages.sharing.sharing });
+    expect(button).toBeDisabled();
+  });
+
+  it("shows Compartido and disables the button once shared", () => {
+    render(
+      <CreationCard
+        projectId={projectId}
+        creation={creation}
+        onRefresh={() => {}}
+        share={{ onShare: vi.fn(), shared: true, busy: false }}
+      />,
+    );
+    const button = screen.getByRole("button", { name: messages.sharing.shared });
+    expect(button).toBeDisabled();
   });
 });

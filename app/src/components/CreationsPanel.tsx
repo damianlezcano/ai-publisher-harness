@@ -7,18 +7,24 @@ import { messages } from "../messages";
 import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
 
+export interface CreationCardShareProps {
+  onShare: () => void;
+  shared: boolean;
+  busy: boolean;
+}
+
 interface CreationsPanelProps {
   projectId: string;
   creations: CreationView[];
   onRefresh: () => void | Promise<void>;
-  onShare?: () => void;
+  share?: CreationCardShareProps;
 }
 
 interface CreationCardProps {
   projectId: string;
   creation: CreationView;
   onRefresh: () => void | Promise<void>;
-  onShare?: () => void;
+  share?: CreationCardShareProps;
 }
 
 function supportsInAppPreview(kind: string): boolean {
@@ -30,7 +36,7 @@ function isWebKind(kind: string): boolean {
 }
 
 export function CreationCard(props: CreationCardProps) {
-  const { projectId, creation, onShare } = props;
+  const { projectId, creation, share } = props;
   const [error, setError] = useState<unknown>(null);
   const [previewAnnouncement, setPreviewAnnouncement] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ creation: CreationView; data: PreviewData } | null>(
@@ -90,9 +96,18 @@ export function CreationCard(props: CreationCardProps) {
         <button type="button" className="primary" onClick={() => void open()}>
           {messages.common.open}
         </button>
-        {onShare != null && (
-          <button type="button" className="primary" onClick={() => void onShare()}>
-            {messages.sharing.shareAction}
+        {share != null && (
+          <button
+            type="button"
+            className="primary"
+            disabled={share.busy || share.shared}
+            onClick={() => void share.onShare()}
+          >
+            {share.shared
+              ? messages.sharing.shared
+              : share.busy
+                ? messages.sharing.sharing
+                : messages.sharing.shareAction}
           </button>
         )}
       </span>
@@ -111,7 +126,7 @@ export default function CreationsPanel({
   projectId,
   creations,
   onRefresh,
-  onShare,
+  share,
 }: CreationsPanelProps) {
   return (
     <section className="panel" aria-label={messages.creation.panelLabel}>
@@ -126,7 +141,7 @@ export default function CreationsPanel({
                 projectId={projectId}
                 creation={creation}
                 onRefresh={onRefresh}
-                onShare={onShare}
+                share={share}
               />
             </li>
           ))}

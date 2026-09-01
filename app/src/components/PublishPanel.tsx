@@ -3,10 +3,15 @@ import QrDialog from "./QrDialog";
 import Dialog from "./ui/Dialog";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
-import { useShareControl, type UseShareControlInput } from "./useShareControl";
+import {
+  useShareControl,
+  type ShareControlState,
+  type UseShareControlInput,
+} from "./useShareControl";
 
 export type ShareControlProps = UseShareControlInput & {
   projectName: string;
+  share?: ShareControlState;
 };
 
 export default function ShareControl({
@@ -14,7 +19,9 @@ export default function ShareControl({
   projectName,
   publication,
   onRefresh,
+  share: externalShare,
 }: ShareControlProps) {
+  const internalShare = useShareControl({ projectId, publication, onRefresh });
   const {
     busy,
     error,
@@ -31,7 +38,7 @@ export default function ShareControl({
     unpublish,
     copy,
     open,
-  } = useShareControl({ projectId, publication, onRefresh });
+  } = externalShare ?? internalShare;
   const controlRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,7 +77,7 @@ export default function ShareControl({
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             disabled={busy === "unpublishing"}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => setMenuOpen((isOpen) => !isOpen)}
           >
             {triggerLabel}
             <span aria-hidden="true"> ▼</span>

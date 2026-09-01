@@ -1,4 +1,4 @@
-import { CreationCard } from "./CreationsPanel";
+import { CreationCard, type CreationCardShareProps } from "./CreationsPanel";
 import { MaterialChip } from "./MaterialsPanel";
 import type { AgentPhase, CreationView, MaterialView, MessageView } from "../types";
 import { messages } from "../messages";
@@ -12,7 +12,7 @@ interface ChatPanelProps {
   agentMessage: string | null;
   pendingUser?: { text: string; materialIds: string[] } | null;
   onRefresh?: () => void | Promise<void>;
-  onShare?: () => void;
+  share?: CreationCardShareProps;
 }
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -79,14 +79,14 @@ function MessageBubble({
   creationById,
   projectId,
   onRefresh,
-  onShare,
+  share,
 }: {
   message: MessageView;
   materialById: Map<string, MaterialView>;
   creationById: Map<string, CreationView>;
   projectId: string;
   onRefresh?: () => void | Promise<void>;
-  onShare?: () => void;
+  share?: CreationCardShareProps;
 }) {
   if (message.role === "user") {
     return (
@@ -140,7 +140,7 @@ function MessageBubble({
                     projectId={projectId}
                     creation={creation}
                     onRefresh={onRefresh ?? (() => {})}
-                    onShare={onShare}
+                    share={share}
                   />
                 );
               })}
@@ -161,7 +161,7 @@ export default function ChatPanel({
   agentMessage,
   pendingUser,
   onRefresh,
-  onShare,
+  share,
 }: ChatPanelProps) {
   const materialById = new Map(materials.map((m) => [m.id, m]));
   const creationById = new Map(creations.map((c) => [c.id, c]));
@@ -193,7 +193,7 @@ export default function ChatPanel({
               creationById={creationById}
               projectId={projectId}
               onRefresh={onRefresh}
-              onShare={onShare}
+              share={share}
             />
           ) : (
             <div key={item.key} className="message message-resource">
