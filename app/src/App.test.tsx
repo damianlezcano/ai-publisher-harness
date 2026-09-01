@@ -185,6 +185,10 @@ describe("App", () => {
     const sharedButton = screen.getByRole("button", { name: new RegExp(otherSummary.name) });
     expect(sharedButton).not.toHaveAttribute("aria-current");
     expect(screen.getByText(messages.conversations.sharedLabel)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: messages.conversations.title })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: messages.conversations.newButton }),
+    ).toBeInTheDocument();
   });
 
   it("renames a conversation from the sidebar and refreshes the list", async () => {
@@ -229,6 +233,18 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: projectView.name })).toBeInTheDocument();
   });
 
+  it("creates a conversation with Ctrl+N", async () => {
+    mockBackend({ projects: [baseSummary] });
+    render(<App />);
+    await waitForWorkspace();
+    await userEvent.keyboard("{Control>}n{/Control}");
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_create", {
+        name: messages.conversation.defaultName,
+      }),
+    );
+  });
+
   it("renders a single polite toast region for announcements", async () => {
     mockBackend();
     render(<App />);
@@ -259,13 +275,20 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the free-model banner without claiming a blocked AI", async () => {
+  it("shows free-model state only in the compact selector, never as a banner", async () => {
     mockBackend();
     render(<App />);
-    await waitFor(() => expect(screen.getByText("Modelo gratuito")).toBeInTheDocument());
+    await waitForWorkspace();
+    expect(screen.queryByText("Modelo gratuito")).not.toBeInTheDocument();
     expect(screen.queryByText(/No hay una IA conectada/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Conectar IA" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText(messages.model.label)).toBeInTheDocument();
+    const modelSelect = screen.getByLabelText(messages.model.label) as HTMLSelectElement;
+    expect(modelSelect).toBeInTheDocument();
+    await waitFor(() =>
+      expect(Array.from(modelSelect.options).map((option) => option.textContent)).toContain(
+        "big-pickle / Gratis",
+      ),
+    );
     expect(screen.queryByText(/::/)).not.toBeInTheDocument();
   });
 

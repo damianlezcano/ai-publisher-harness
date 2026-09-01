@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
 import type { ProjectSummary } from "../types";
 import { humanDate, messages } from "../messages";
@@ -66,17 +66,31 @@ export default function ConversationsSidebar({
     }
   }, [busy, onRefresh, onSelect]);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "n" || !(event.ctrlKey || event.metaKey) || event.repeat) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [role='dialog']")) return;
+      event.preventDefault();
+      void createConversation();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [createConversation]);
+
   return (
     <nav className="conversations-sidebar" aria-label={messages.conversations.listAriaLabel}>
       <div className="conversations-sidebar-header">
         <h2 className="conversations-sidebar-title">{messages.conversations.title}</h2>
         <button
           type="button"
-          className="primary conversations-new-button"
+          className="ghost conversations-new-button"
           onClick={() => void createConversation()}
           disabled={busy}
+          aria-label={messages.conversations.newButton}
+          title={messages.conversations.newButton}
         >
-          {messages.conversations.newButton}
+          <span aria-hidden="true">+</span>
         </button>
       </div>
 
@@ -141,6 +155,7 @@ export default function ConversationsSidebar({
                     className={`conversation-select${isSelected ? " selected" : ""}`}
                     aria-current={isSelected ? "page" : undefined}
                     onClick={() => onSelect(conversation.id)}
+                    onDoubleClick={() => startRename(conversation)}
                   >
                     <span className="conversation-name">{conversation.name}</span>
                     <span className="conversation-meta">
@@ -156,11 +171,12 @@ export default function ConversationsSidebar({
                   </button>
                   <button
                     type="button"
-                    className="secondary conversation-rename-button"
+                    className="ghost conversation-rename-button"
                     aria-label={messages.conversations.renameAriaLabel}
+                    title={messages.conversations.renameAriaLabel}
                     onClick={() => startRename(conversation)}
                   >
-                    {messages.project.rename}
+                    <span aria-hidden="true">✎</span>
                   </button>
                 </>
               )}

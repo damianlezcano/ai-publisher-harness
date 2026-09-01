@@ -1,13 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
 import { guidanceFromError } from "../guidance";
 import type { GuidanceActionKind } from "../guidance";
-import type { AgentPhase, MaterialView, ProjectView } from "../types";
+import type { AgentPhase, MaterialImportResult, ProjectView } from "../types";
 import ChatPanel from "./ChatPanel";
 import ComposerBar from "./ComposerBar";
 import ShareControl from "./PublishPanel";
-import { MaterialItem } from "./MaterialsPanel";
-import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
 
@@ -22,14 +21,15 @@ interface WorkspaceViewProps {
   onProviderError: () => void;
 }
 
-function referencedMaterialIds(messagesList: { materialIds: string[] }[]): Set<string> {
-  const ids = new Set<string>();
-  for (const message of messagesList) {
-    for (const id of message.materialIds) {
-      ids.add(id);
-    }
+function importDetailLabel(item: MaterialImportResult): string {
+  switch (item.status) {
+    case "added":
+      return messages.material.perFileAdded(item.sourceName);
+    case "duplicate":
+      return messages.material.perFileDuplicate(item.sourceName);
+    default:
+      return messages.material.perFileFailed(item.sourceName);
   }
-  return ids;
 }
 
 export default function WorkspaceView(props: WorkspaceViewProps) {
@@ -52,12 +52,67 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   );
   const [materialError, setMaterialError] = useState<unknown | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [importDetails, setImportDetails] = useState<MaterialImportResult[] | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [importing, setImporting] = useState(false);
 
-  const attachedIds = useMemo(() => referencedMaterialIds(project.messages), [project.messages]);
-  const unattachedMaterials: MaterialView[] = useMemo(
-    () => project.materials.filter((material) => !attachedIds.has(material.id)),
-    [project.materials, attachedIds],
+  const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
+
+  const workspaceClass = useMemo(
+    () => `view workspace workspace-chat${dragging ? " is-dropping" : ""}`,
+    [dragging],
   );
+
+  useEffect(() => {
+    importRef.current = async (paths: string[]) => {
+      if (paths.length === 0) return;
+      setImporting(true);
+      setMaterialError(null);
+      setImportNotice(null);
+      setImportDetails(null);
+      try {
+        const report = await api.materialsAddFromPaths(project.id, paths);
+        const added = report.items.filter((item) => item.status === "added").length;
+        const duplicate = report.items.filter((item) => item.status === "duplicate").length;
+        const failed = report.items.filter(
+          (item) => item.status === "unsupported" || item.status === "failed",
+        ).length;
+        setImportNotice(messages.material.importSummary(added, duplicate, failed));
+        if (duplicate > 0 || failed > 0) {
+          setImportDetails(report.items);
+        }
+        await onRefresh();
+      } catch (err) {
+        setMaterialError(err);
+      } finally {
+        setImporting(false);
+      }
+    };
+  }, [project.id, onRefresh]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (!active) return;
+        if (event.payload.type === "over") {
+          setDragging(true);
+        } else if (event.payload.type === "drop") {
+          setDragging(false);
+          void importRef.current(event.payload.paths);
+        } else if (event.payload.type === "leave") {
+          setDragging(false);
+        }
+      })
+      .then((fn) => {
+        if (active) unlisten = fn;
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   async function send(text: string, attachmentIds: string[]) {
     setSendError(null);
@@ -98,23 +153,14 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     }
   }
 
-  async function addFile() {
-    setMaterialError(null);
-    setImportNotice(null);
-    try {
-      const path = await api.pickFile();
-      if (path) {
-        const material = await api.materialAddFromPath(project.id, path);
-        setImportNotice(messages.material.perFileAdded(material.displayName));
-        await onRefresh();
-      }
-    } catch (err) {
-      setMaterialError(err);
-    }
-  }
-
   return (
-    <div className="view workspace workspace-chat">
+    <div className={workspaceClass}>
+      {dragging && (
+        <div className="drop-overlay" role="status" aria-live="polite">
+          {messages.material.dropOverlay}
+        </div>
+      )}
+
       <header className="view-header workspace-header">
         <h1>{project.name}</h1>
       </header>
@@ -132,40 +178,23 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
         />
       </div>
 
-      <details className="workspace-materials" open>
-        <summary>{messages.timeline.unattachedTitle}</summary>
-        <div className="workspace-materials-body">
-          {materialError !== null && <ErrorNotice error={materialError} />}
-          {importNotice && <p className="notice">{importNotice}</p>}
-          {unattachedMaterials.length === 0 ? (
-            <EmptyState
-              title={messages.material.empty.title}
-              body={messages.material.empty.pasteHint}
-              actionLabel={messages.material.addFile}
-              onAction={() => void addFile()}
-            />
-          ) : (
-            <>
-              <div className="row-actions wrap">
-                <button type="button" className="secondary" onClick={() => void addFile()}>
-                  {messages.material.addFile}
-                </button>
-              </div>
-              <ul className="material-list">
-                {unattachedMaterials.map((material) => (
-                  <li key={material.id}>
-                    <MaterialItem
-                      projectId={project.id}
-                      material={material}
-                      onRefresh={onRefresh}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      </details>
+      {materialError !== null && <ErrorNotice error={materialError} />}
+      {importing && (
+        <p className="notice composer-import-status" role="status">
+          <span className="spinner" aria-hidden="true" />
+          {messages.progress.importing}
+        </p>
+      )}
+      {importNotice && <p className="notice composer-import-status">{importNotice}</p>}
+      {importDetails && importDetails.length > 0 && (
+        <ul className="chip-list composer-import-details">
+          {importDetails.map((item) => (
+            <li key={item.sourceName} className="chip">
+              {importDetailLabel(item)}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {sendError !== null && <ErrorNotice error={sendError} onAction={handleSendErrorAction} />}
 

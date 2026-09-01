@@ -67,9 +67,21 @@ beforeEach(() => {
 });
 
 describe("ChatPanel timeline", () => {
-  it("renders the empty hint when there are no messages", () => {
-    render(<ChatPanel {...base} />);
+  it("renders the empty hint when there are no messages or unattached materials", () => {
+    render(<ChatPanel {...base} materials={[]} />);
     expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
+  });
+
+  it("renders unattached materials as chronological conversation items", () => {
+    render(<ChatPanel {...base} />);
+    expect(screen.getAllByText(messages.timeline.resourceLabel).length).toBe(2);
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(messages.assistant.emptyHint)).not.toBeInTheDocument();
   });
 
   it("renders a user message with its text and role label", () => {
@@ -209,7 +221,9 @@ describe("ChatPanel timeline", () => {
       />,
     );
     expect(screen.getByText("Pendiente")).toBeInTheDocument();
-    expect(screen.getByText(materials[0].displayName)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
+    ).toBeInTheDocument();
 
     rerender(
       <ChatPanel
