@@ -19,6 +19,7 @@ use crate::port::AgentEngine;
 
 const DEFAULT_TASK: Duration = Duration::from_secs(120);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const IDLE_WITHOUT_TEXT_GRACE: Duration = Duration::from_secs(2);
 const MESSAGE_LIMIT: &str = "1000";
 
 pub struct OpenCodeAgentEngine {
@@ -91,6 +92,7 @@ impl OpenCodeAgentEngine {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
         let mut idle_without_text_since: Option<Instant> = None;
+        let mut idle_artifacts: Vec<Artifact> = Vec::new();
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
             if !(200..300).contains(&status) {
@@ -110,14 +112,18 @@ impl OpenCodeAgentEngine {
                         }
                         // Empty assistant shells (tool-call placeholders) are
                         // not a completed reply. Keep polling for real text, or
-                        // finish once files exist and the empty shell has sat
-                        // idle briefly (file-only creations).
-                        let artifacts = self.fetch_artifacts(session_id)?;
-                        if !artifacts.is_empty() {
-                            let started = idle_without_text_since.get_or_insert_with(Instant::now);
-                            if started.elapsed() >= Duration::from_secs(2) {
-                                return Ok((phase, None, artifacts));
+                        // finish after a short idle grace (file-only creations
+                        // and empty replies). Fetch /diff once when that grace
+                        // starts, not on every 20 ms tick.
+                        match idle_without_text_since {
+                            None => {
+                                idle_artifacts = self.fetch_artifacts(session_id)?;
+                                idle_without_text_since = Some(Instant::now());
                             }
+                            Some(started) if started.elapsed() >= IDLE_WITHOUT_TEXT_GRACE => {
+                                return Ok((phase, None, idle_artifacts));
+                            }
+                            Some(_) => {}
                         }
                     }
                     // The sidecar may have marked idle before the new assistant
@@ -393,12 +399,10 @@ fn assistant_message_count(messages: &[Value]) -> usize {
 }
 
 fn message_text(message: &Value) -> Option<String> {
-    if let Some(text) = message.get("content").and_then(Value::as_str) {
-        return if text.trim().is_empty() {
-            None
-        } else {
-            Some(text.to_owned())
-        };
+    if let Some(text) = message.get("content").and_then(Value::as_str)
+        && !text.trim().is_empty()
+    {
+        return Some(text.to_owned());
     }
     let parts = message.get("parts")?.as_array()?;
     let mut chunks = Vec::new();
@@ -516,4 +520,28 @@ fn validate_workspace_artifact_path(path: &str) -> Option<String> {
         return None;
     }
     Some(path.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_text;
+    use serde_json::json;
+
+    #[test]
+    fn empty_content_falls_through_to_parts() {
+        let message = json!({
+            "content": "",
+            "parts": [{"type": "text", "text": "hola desde parts"}]
+        });
+        assert_eq!(message_text(&message).as_deref(), Some("hola desde parts"));
+    }
+
+    #[test]
+    fn nonempty_content_wins_over_parts() {
+        let message = json!({
+            "content": "desde content",
+            "parts": [{"type": "text", "text": "desde parts"}]
+        });
+        assert_eq!(message_text(&message).as_deref(), Some("desde content"));
+    }
 }

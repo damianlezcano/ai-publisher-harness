@@ -665,6 +665,46 @@ fn publish_without_creation_id_still_promotes_the_latest_web() {
 }
 
 #[test]
+fn web_sidecar_sibling_is_copied_into_outputs_and_publish() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>juego</h1>");
+    write_artifact(tmp.path(), &p.id, "app.js", b"console.log(1)");
+    let run = app.run_agent(&p.id, "crea", &[]).expect("run");
+    assert_eq!(run.registered_creation_ids.len(), 1);
+    let cid = &run.registered_creation_ids[0];
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.creations[0].display_name, "Actividad");
+
+    let output_js = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("outputs")
+        .join(cid)
+        .join("app.js");
+    assert_eq!(
+        fs::read_to_string(&output_js).expect("output js"),
+        "console.log(1)"
+    );
+
+    app.publish_creation(&p.id, Some(cid)).expect("share");
+    let published_js = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("publish")
+        .join("app.js");
+    assert_eq!(
+        fs::read_to_string(&published_js).expect("published js"),
+        "console.log(1)"
+    );
+}
+
+#[test]
 fn failed_run_persists_failed_assistant_message() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());

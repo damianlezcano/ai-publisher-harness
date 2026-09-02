@@ -428,8 +428,12 @@ describe("WorkspaceView", () => {
 
   it("renders Compartir controls in the composer bar and on each creation card", () => {
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
-    const shareButtons = screen.getAllByRole("button", { name: messages.sharing.shareAction });
-    expect(shareButtons.length).toBe(2);
+    const composerShare = screen.getByRole("button", { name: messages.sharing.shareAction });
+    const cardShare = screen.getByRole("button", {
+      name: `${messages.sharing.shareAction}: ${creations[0].displayName}`,
+    });
+    expect(composerShare).toBeInTheDocument();
+    expect(cardShare).toBeInTheDocument();
   });
 
   it("treats an ai_unavailable send error as transient while the backend is starting", async () => {

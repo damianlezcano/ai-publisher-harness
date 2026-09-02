@@ -21,6 +21,14 @@ const creation = {
 };
 const creations = [creation];
 
+function openLabel(name: string): string {
+  return `${messages.common.open}: ${name}`;
+}
+
+function shareLabel(name: string, action: string = messages.sharing.shareAction): string {
+  return `${action}: ${name}`;
+}
+
 beforeEach(() => {
   invokeMock.mockReset();
 });
@@ -30,7 +38,9 @@ describe("CreationsPanel", () => {
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
     expect(screen.getByText("actividad")).toBeInTheDocument();
     expect(screen.getByText("Actividad interactiva")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: openLabel(creation.displayName) }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: messages.creation.preview }),
     ).not.toBeInTheDocument();
@@ -46,7 +56,7 @@ describe("CreationsPanel", () => {
   it("opens a web creation through the isolated preview (EducAI chooses the opener)", async () => {
     invokeMock.mockResolvedValueOnce(undefined);
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(screen.getByRole("button", { name: openLabel(creation.displayName) }));
     expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
       projectId,
       creationId: creation.id,
@@ -65,7 +75,9 @@ describe("CreationsPanel", () => {
     render(
       <CreationsPanel projectId={projectId} creations={[documentCreation]} onRefresh={() => {}} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(
+      screen.getByRole("button", { name: openLabel(documentCreation.displayName) }),
+    );
     expect(invokeMock).toHaveBeenCalledWith("creation_open", {
       projectId,
       creationId: documentCreation.id,
@@ -92,7 +104,9 @@ describe("CreationsPanel", () => {
     expect(
       screen.queryByRole("button", { name: messages.creation.preview }),
     ).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(
+      screen.getByRole("button", { name: openLabel(fileCreation.displayName) }),
+    );
     expect(invokeMock).toHaveBeenCalledWith("preview_data", {
       projectId,
       resourceKind: "creation",
@@ -106,7 +120,7 @@ describe("CreationsPanel", () => {
       message: "No pudimos abrir ese recurso.",
     });
     render(<CreationsPanel projectId={projectId} creations={creations} onRefresh={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(screen.getByRole("button", { name: openLabel(creation.displayName) }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(messages.error.openFailed.title),
     );
@@ -122,7 +136,7 @@ describe("CreationsPanel", () => {
         share={{ onShare, shared: false, busy: false }}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
+    await userEvent.click(screen.getByRole("button", { name: shareLabel(creation.displayName) }));
     expect(onShare).toHaveBeenCalledTimes(1);
     expect(onShare).toHaveBeenCalledWith(creation.id);
   });
@@ -141,22 +155,24 @@ describe("CreationCard", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(screen.getByRole("button", { name: openLabel(creation.displayName) }));
     expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
       projectId,
       creationId: creation.id,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
+    await userEvent.click(screen.getByRole("button", { name: shareLabel(creation.displayName) }));
     expect(onShare).toHaveBeenCalledTimes(1);
     expect(onShare).toHaveBeenCalledWith(creation.id);
   });
 
   it("omits Compartir when share is not provided", () => {
     render(<CreationCard projectId={projectId} creation={creation} onRefresh={() => {}} />);
-    expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: messages.sharing.shareAction }),
+      screen.getByRole("button", { name: openLabel(creation.displayName) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: shareLabel(creation.displayName) }),
     ).not.toBeInTheDocument();
   });
 
@@ -169,7 +185,9 @@ describe("CreationCard", () => {
         share={{ onShare: vi.fn(), shared: false, busy: true }}
       />,
     );
-    const button = screen.getByRole("button", { name: messages.sharing.sharing });
+    const button = screen.getByRole("button", {
+      name: shareLabel(creation.displayName, messages.sharing.sharing),
+    });
     expect(button).toBeDisabled();
   });
 
@@ -182,7 +200,29 @@ describe("CreationCard", () => {
         share={{ onShare: vi.fn(), shared: true, busy: false }}
       />,
     );
-    const button = screen.getByRole("button", { name: messages.sharing.shared });
+    const button = screen.getByRole("button", {
+      name: shareLabel(creation.displayName, messages.sharing.shared),
+    });
     expect(button).toBeDisabled();
+  });
+
+  it("gives each creation's actions a distinct accessible name", () => {
+    const other = { ...creation, id: "c2", displayName: "otra actividad" };
+    render(
+      <CreationsPanel
+        projectId={projectId}
+        creations={[creation, other]}
+        onRefresh={() => {}}
+        share={{ onShare: vi.fn(), shared: false, busy: false }}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: openLabel(creation.displayName) }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: openLabel(other.displayName) })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: shareLabel(creation.displayName) }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: shareLabel(other.displayName) })).toBeInTheDocument();
   });
 });

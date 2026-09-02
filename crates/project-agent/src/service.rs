@@ -315,30 +315,81 @@ fn sidecar_paths_of_web_entry(artifacts: &[Artifact]) -> HashSet<String> {
         .collect()
 }
 
+const SKIP_WORKSPACE_DIR_NAMES: &[&str] = &[
+    "materials",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "coverage",
+    "bower_components",
+];
+const MAX_WORKSPACE_SCAN_DEPTH: usize = 8;
+const MAX_WORKSPACE_SCAN_FILES: usize = 500;
+const MAX_WORKSPACE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Use the sidecar diff when it already names a registrable artifact. Fall back
+/// to a bounded workspace scan only when the diff is empty (B1: files on disk
+/// that `/diff` did not report). Merging the scan into a non-empty diff would
+/// re-register leftover files from earlier turns as new Creations.
 fn merge_artifacts(from_diff: Vec<Artifact>, workspace_dir: &Path) -> Vec<Artifact> {
-    let mut by_path: HashMap<String, Artifact> = HashMap::new();
-    for artifact in from_diff {
-        by_path.insert(artifact.path.clone(), artifact);
+    let mut artifacts: Vec<Artifact> = from_diff
+        .into_iter()
+        .filter(|artifact| !is_materials_artifact_path(&artifact.path))
+        .collect();
+    if artifacts.is_empty() {
+        artifacts = scan_workspace_artifacts(workspace_dir);
+        artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
     }
-    for scanned in scan_workspace_artifacts(workspace_dir) {
-        by_path.entry(scanned.path.clone()).or_insert(scanned);
-    }
-    let mut artifacts: Vec<Artifact> = by_path.into_values().collect();
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
     artifacts
 }
 
 fn scan_workspace_artifacts(workspace_dir: &Path) -> Vec<Artifact> {
     let mut out = Vec::new();
-    collect_workspace_files(workspace_dir, workspace_dir, &mut out);
+    let mut file_count = 0;
+    let mut total_bytes = 0;
+    collect_workspace_files(
+        workspace_dir,
+        workspace_dir,
+        0,
+        &mut file_count,
+        &mut total_bytes,
+        &mut out,
+    );
     out
 }
 
-fn collect_workspace_files(workspace_dir: &Path, dir: &Path, out: &mut Vec<Artifact>) {
+fn is_skipped_workspace_dir(name: &str) -> bool {
+    SKIP_WORKSPACE_DIR_NAMES
+        .iter()
+        .any(|skip| name.eq_ignore_ascii_case(skip))
+}
+
+fn collect_workspace_files(
+    workspace_dir: &Path,
+    dir: &Path,
+    depth: usize,
+    file_count: &mut usize,
+    total_bytes: &mut u64,
+    out: &mut Vec<Artifact>,
+) {
+    if depth > MAX_WORKSPACE_SCAN_DEPTH
+        || *file_count >= MAX_WORKSPACE_SCAN_FILES
+        || *total_bytes >= MAX_WORKSPACE_SCAN_BYTES
+    {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
+        if *file_count >= MAX_WORKSPACE_SCAN_FILES || *total_bytes >= MAX_WORKSPACE_SCAN_BYTES {
+            return;
+        }
         let path = entry.path();
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;
@@ -352,13 +403,25 @@ fn collect_workspace_files(workspace_dir: &Path, dir: &Path, out: &mut Vec<Artif
             continue;
         }
         if meta.is_dir() {
-            if name_str == "materials" && dir == workspace_dir {
+            if is_skipped_workspace_dir(&name_str) {
                 continue;
             }
-            collect_workspace_files(workspace_dir, &path, out);
+            collect_workspace_files(
+                workspace_dir,
+                &path,
+                depth + 1,
+                file_count,
+                total_bytes,
+                out,
+            );
             continue;
         }
         if !meta.is_file() {
+            continue;
+        }
+        if *file_count >= MAX_WORKSPACE_SCAN_FILES
+            || total_bytes.saturating_add(meta.len()) > MAX_WORKSPACE_SCAN_BYTES
+        {
             continue;
         }
         let Ok(relative) = path.strip_prefix(workspace_dir) else {
@@ -373,6 +436,8 @@ fn collect_workspace_files(workspace_dir: &Path, dir: &Path, out: &mut Vec<Artif
             continue;
         }
         let path = format!("workspace/{relative}");
+        *file_count += 1;
+        *total_bytes = total_bytes.saturating_add(meta.len());
         out.push(Artifact {
             path: path.clone(),
             kind: artifact_kind_from_path(&path),
@@ -425,6 +490,8 @@ fn read_workspace_artifact(workspace_dir: &Path, artifact_path: &str) -> AgentRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Artifact, ArtifactKind};
+    use std::fs;
 
     #[test]
     fn instruction_block_is_spanish_human_facing() {
@@ -480,5 +547,44 @@ mod tests {
         );
         assert!(text.contains("- manual.pdf (pdf)"));
         assert!(text.ends_with("create an activity"));
+    }
+
+    #[test]
+    fn merge_artifacts_keeps_diff_and_does_not_scan_prior_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("old.html"), b"old").expect("old");
+        fs::write(tmp.path().join("new.html"), b"new").expect("new");
+        let merged = merge_artifacts(
+            vec![Artifact {
+                path: "workspace/new.html".into(),
+                kind: ArtifactKind::Web,
+                byte_size: 3,
+                sha256: None,
+            }],
+            tmp.path(),
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, "workspace/new.html");
+    }
+
+    #[test]
+    fn merge_artifacts_scans_when_diff_is_empty() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
+        let merged = merge_artifacts(Vec::new(), tmp.path());
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, "workspace/index.html");
+        assert_eq!(merged[0].kind, ArtifactKind::Web);
+    }
+
+    #[test]
+    fn workspace_scan_skips_dependency_trees() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("node_modules/pkg")).expect("deps");
+        fs::write(tmp.path().join("node_modules/pkg/index.js"), b"dep").expect("dep");
+        fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
+        let scanned = scan_workspace_artifacts(tmp.path());
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].path, "workspace/index.html");
     }
 }

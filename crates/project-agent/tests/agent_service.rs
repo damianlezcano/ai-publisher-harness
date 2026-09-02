@@ -388,3 +388,42 @@ fn web_sidecar_assets_are_not_separate_creations() {
     assert!(kinds.contains(&ArtifactKind::Pdf));
     assert!(!kinds.contains(&ArtifactKind::Other));
 }
+
+#[test]
+fn later_turn_does_not_reregister_prior_workspace_files() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web, 4)]);
+    write_artifact(tmp.path(), "proj-7", "index.html", b"<h1>one</h1>");
+    let registrar = FakeRegistrar::new();
+    let service = AgentService::new(engine.clone(), registrar.clone(), tmp.path().to_path_buf());
+    let first = service
+        .run(AgentRequest {
+            project_id: "proj-7".into(),
+            prompt: prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("turn 1");
+    assert_eq!(first.registered.len(), 1);
+
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad-2/index.html",
+        ArtifactKind::Web,
+        4,
+    )]);
+    write_artifact(
+        tmp.path(),
+        "proj-7",
+        "actividad-2/index.html",
+        b"<h1>two</h1>",
+    );
+    let second = service
+        .run(AgentRequest {
+            project_id: "proj-7".into(),
+            prompt: prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("turn 2");
+    assert_eq!(second.registered.len(), 1);
+    assert_eq!(registrar.records().len(), 2);
+}

@@ -76,13 +76,8 @@ impl CreationRegistrar for FilesystemCreationRegistrar {
         } else {
             safe_file_name(file_name)
         };
-        let display_name = web_display_name(&artifact.path).unwrap_or_else(|| {
-            let stem = std::path::Path::new(file_name)
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or(file_name);
-            safe_file_name(stem)
-        });
+        let display_name = web_display_name(&artifact.path)
+            .unwrap_or_else(|| fallback_display_name(file_name, kind));
         let request = CreateCreation {
             display_name,
             kind,
@@ -103,13 +98,15 @@ impl CreationRegistrar for FilesystemCreationRegistrar {
             .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
         drop(service);
         if kind == CreationKind::Web {
-            copy_web_sidecars(
+            // Best-effort: the primary file is already a Creation. A sidecar
+            // copy failure must not hide it from Abrir.
+            let _ = copy_web_sidecars(
                 &self.base,
                 project_id,
                 created.id.as_str(),
                 &artifact.path,
                 file_name,
-            )?;
+            );
         }
         Ok(created.id.as_str().to_owned())
     }
@@ -128,6 +125,24 @@ fn creation_kind(kind: ArtifactKind) -> CreationKind {
     }
 }
 
+const DEFAULT_WEB_DISPLAY_NAME: &str = "Actividad";
+const SKIP_SIDECAR_DIR_NAMES: &[&str] = &[
+    "materials",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "coverage",
+    "bower_components",
+];
+const RESERVED_ROOT_SIDECARS: &[&str] = &["materials.html", "files"];
+const MAX_SIDECAR_DEPTH: usize = 8;
+const MAX_SIDECAR_FILES: usize = 500;
+const MAX_SIDECAR_BYTES: u64 = 32 * 1024 * 1024;
+
 fn web_display_name(artifact_path: &str) -> Option<String> {
     let relative = artifact_path
         .replace('\\', "/")
@@ -141,6 +156,17 @@ fn web_display_name(artifact_path: &str) -> Option<String> {
         .and_then(|n| n.to_str())
         .filter(|n| !n.is_empty() && *n != "." && *n != "workspace")?;
     Some(safe_file_name(parent))
+}
+
+fn fallback_display_name(file_name: &str, kind: CreationKind) -> String {
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or(file_name);
+    if kind == CreationKind::Web && stem.eq_ignore_ascii_case("index") {
+        return DEFAULT_WEB_DISPLAY_NAME.to_owned();
+    }
+    safe_file_name(stem)
 }
 
 fn is_document_sidecar(name: &str) -> bool {
@@ -165,6 +191,14 @@ fn copy_web_sidecars(
     let relative = artifact_path.replace('\\', "/");
     let relative = relative.trim_start_matches('/');
     let relative = relative.strip_prefix("workspace/").unwrap_or(relative);
+    if relative.is_empty()
+        || Path::new(relative).is_absolute()
+        || relative
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(AgentError::RegistrationFailed("unsafe sidecar path".into()));
+    }
     let source_file = base
         .join("projects")
         .join(project_id)
@@ -181,7 +215,71 @@ fn copy_web_sidecars(
         .join(project_id)
         .join("outputs")
         .join(creation_id);
-    copy_tree_sidecars(source_dir, &dest_dir, source_dir, primary_file_name)
+    let mut limits = SidecarCopyLimits::default();
+    copy_tree_sidecars(
+        source_dir,
+        &dest_dir,
+        source_dir,
+        primary_file_name,
+        0,
+        &mut limits,
+    )
+}
+
+#[derive(Default)]
+struct SidecarCopyLimits {
+    files: usize,
+    bytes: u64,
+}
+
+fn is_skipped_sidecar_dir(name: &str) -> bool {
+    SKIP_SIDECAR_DIR_NAMES
+        .iter()
+        .any(|skip| name.eq_ignore_ascii_case(skip))
+}
+
+fn is_windows_reserved_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// Mirrors `project-fs` snapshot `validate_component` so a copied sidecar cannot
+/// make Compartir reject the bundle.
+fn sidecar_component_ok(name: &str, at_root: bool) -> bool {
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', '\0']) {
+        return false;
+    }
+    if is_windows_reserved_stem(name) {
+        return false;
+    }
+    if at_root && RESERVED_ROOT_SIDECARS.contains(&name) {
+        return false;
+    }
+    true
 }
 
 fn copy_tree_sidecars(
@@ -189,12 +287,23 @@ fn copy_tree_sidecars(
     dest_root: &Path,
     current: &Path,
     primary_file_name: &str,
+    depth: usize,
+    limits: &mut SidecarCopyLimits,
 ) -> AgentResult<()> {
+    if depth > MAX_SIDECAR_DEPTH
+        || limits.files >= MAX_SIDECAR_FILES
+        || limits.bytes >= MAX_SIDECAR_BYTES
+    {
+        return Ok(());
+    }
     let entries = match fs::read_dir(current) {
         Ok(entries) => entries,
         Err(_) => return Ok(()),
     };
     for entry in entries.flatten() {
+        if limits.files >= MAX_SIDECAR_FILES || limits.bytes >= MAX_SIDECAR_BYTES {
+            return Ok(());
+        }
         let path = entry.path();
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
@@ -205,32 +314,43 @@ fn copy_tree_sidecars(
         }
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str == "materials" {
+        if name_str.starts_with('.') {
             continue;
         }
+        let at_root = current == source_root;
         if meta.is_dir() {
-            let dest = dest_root.join(path.strip_prefix(source_root).unwrap_or(&path));
-            fs::create_dir_all(&dest)
-                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
-            copy_tree_sidecars(source_root, dest_root, &path, primary_file_name)?;
+            if is_skipped_sidecar_dir(&name_str) {
+                continue;
+            }
+            if !sidecar_component_ok(&name_str, at_root) {
+                continue;
+            }
+            copy_tree_sidecars(
+                source_root,
+                dest_root,
+                &path,
+                primary_file_name,
+                depth + 1,
+                limits,
+            )?;
             continue;
         }
         if !meta.is_file() {
             continue;
         }
-        if current == source_root && name_str == primary_file_name {
+        if at_root && name_str == primary_file_name {
             continue;
         }
         if is_document_sidecar(&name_str) {
             continue;
         }
         let safe = safe_file_name(&name_str);
-        if safe.is_empty() {
+        if safe.is_empty() || !sidecar_component_ok(&safe, at_root) {
             continue;
         }
         let relative = path.strip_prefix(source_root).unwrap_or(&path);
         let mut dest = dest_root.to_path_buf();
-        for component in relative.iter().take_while(|_| true) {
+        for component in relative.iter() {
             let part = component.to_string_lossy();
             if part == ".." || part == "." {
                 return Err(AgentError::RegistrationFailed("unsafe sidecar path".into()));
@@ -241,7 +361,13 @@ fn copy_tree_sidecars(
             dest.push(parent_rel);
         }
         dest.push(&safe);
-        if dest.file_name().and_then(|n| n.to_str()) == Some("index.html") {
+        // Root `index.html` is the primary stored file; nested copies must stay.
+        if dest == dest_root.join("index.html") {
+            continue;
+        }
+        if limits.files >= MAX_SIDECAR_FILES
+            || limits.bytes.saturating_add(meta.len()) > MAX_SIDECAR_BYTES
+        {
             continue;
         }
         if let Some(parent) = dest.parent() {
@@ -251,6 +377,66 @@ fn copy_tree_sidecars(
         let bytes =
             fs::read(&path).map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
         fs::write(&dest, bytes).map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
+        limits.files += 1;
+        limits.bytes = limits.bytes.saturating_add(meta.len());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use project_core::CreationKind;
+    use std::fs;
+
+    #[test]
+    fn root_index_html_uses_human_display_name() {
+        assert_eq!(web_display_name("workspace/index.html"), None);
+        assert_eq!(
+            fallback_display_name("index.html", CreationKind::Web),
+            "Actividad"
+        );
+        assert_eq!(
+            fallback_display_name("index.htm", CreationKind::Web),
+            "Actividad"
+        );
+        assert_eq!(
+            web_display_name("workspace/actividad-2/index.html").as_deref(),
+            Some("actividad-2")
+        );
+    }
+
+    #[test]
+    fn copy_skips_unpublishable_roots_and_keeps_nested_index() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(source.join("slides")).expect("slides");
+        fs::create_dir_all(source.join("node_modules/pkg")).expect("deps");
+        fs::create_dir_all(source.join("files")).expect("files");
+        fs::write(source.join("index.html"), b"<h1>root</h1>").expect("primary");
+        fs::write(source.join("app.js"), b"console.log(1)").expect("js");
+        fs::write(source.join("slides/index.html"), b"<h1>slide</h1>").expect("nested");
+        fs::write(source.join("materials.html"), b"nope").expect("reserved");
+        fs::write(source.join("aux.js"), b"reserved").expect("aux");
+        fs::write(source.join("files/secret.txt"), b"nope").expect("files child");
+        fs::write(source.join("node_modules/pkg/index.js"), b"dep").expect("dep");
+
+        let mut limits = SidecarCopyLimits::default();
+        copy_tree_sidecars(&source, &dest, &source, "index.html", 0, &mut limits).expect("copy");
+
+        assert_eq!(
+            fs::read_to_string(dest.join("app.js")).expect("js"),
+            "console.log(1)"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("slides/index.html")).expect("nested"),
+            "<h1>slide</h1>"
+        );
+        assert!(!dest.join("index.html").exists());
+        assert!(!dest.join("materials.html").exists());
+        assert!(!dest.join("aux.js").exists());
+        assert!(!dest.join("files").exists());
+        assert!(!dest.join("node_modules").exists());
+    }
 }

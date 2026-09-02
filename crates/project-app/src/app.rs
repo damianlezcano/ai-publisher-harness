@@ -930,8 +930,7 @@ where
                     .iter()
                     .map(|id| parse_creation_id(id))
                     .collect::<AppResult<Vec<_>>>()?;
-                let text =
-                    assistant_reply_text(result.task.message.as_deref(), !creation_ids.is_empty());
+                let text = assistant_reply_text(result.task.message.as_deref());
                 self.projects
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1367,7 +1366,7 @@ fn parse_creation_id(id: &str) -> AppResult<CreationId> {
     CreationId::parse(id).map_err(|_| AppError::invalid("Esa creación no es válida."))
 }
 
-fn assistant_reply_text(message: Option<&str>, _has_creations: bool) -> String {
+fn assistant_reply_text(message: Option<&str>) -> String {
     let trimmed = message.unwrap_or("").trim();
     if trimmed.is_empty() {
         "Listo.".to_owned()

@@ -154,7 +154,9 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByText("Acá tenés la actividad")).toBeInTheDocument();
     expect(screen.getByText(messages.timeline.assistantLabel)).toBeInTheDocument();
     expect(screen.getByText(creations[0].displayName)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    ).toBeInTheDocument();
   });
 
   it("does not render an empty completed assistant bubble labelled only Asistente", () => {
@@ -190,8 +192,14 @@ describe("ChatPanel timeline", () => {
     expect(
       screen.getByText("Listo. Creé el recurso usando el archivo que adjuntaste."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.common.open })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: messages.sharing.shareAction })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: `${messages.sharing.shareAction}: ${creations[0].displayName}`,
+      }),
+    ).toBeInTheDocument();
   });
 
   it("Abrir and Compartir on a creation card target the same registered creation", async () => {
@@ -214,12 +222,18 @@ describe("ChatPanel timeline", () => {
         ]}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: messages.common.open }));
+    await userEvent.click(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    );
     expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
       projectId,
       creationId: "c1",
     });
-    await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `${messages.sharing.shareAction}: ${creations[0].displayName}`,
+      }),
+    );
     expect(onShare).toHaveBeenCalledWith("c1");
   });
 

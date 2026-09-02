@@ -476,8 +476,8 @@ describe("App", () => {
         },
       });
     });
-    expect(screen.queryByText(messages.agent.ready)).not.toBeInTheDocument();
-    expect(screen.queryAllByText(messages.agent.ready)).toHaveLength(0);
+    expect(screen.queryByText("Tu recurso está listo.")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("Tu recurso está listo.")).toHaveLength(0);
   });
 
   it("renders the assistant result once and never as a raw green duplicate on completion", async () => {
