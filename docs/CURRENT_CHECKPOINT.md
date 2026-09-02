@@ -4,13 +4,14 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (CONVERSATION UX / PER-CONVERSATION MODEL / SESSION LOGGING / MODEL-SWITCH CAUSALITY PASS — AUTHOR COMPLETE, HUMAN ACCEPTANCE PENDING, M11 NO INICIADO, 2026-09-02)
+## Estado actual (CONVERSATION UX / PER-CONVERSATION MODEL / SESSION LOGGING / MODEL-SWITCH CAUSALITY PASS — REVIEW-FIX R1-R6, HUMAN ACCEPTANCE PENDING, M11 NO INICIADO, 2026-09-02)
 
 - **Bounded pass, M11 NOT STARTED.** Findings 1–5: `Procesando tu solicitud…`; title-opened Conversation Details owns rename/model/materials/Creations; optional per-conversation `project.json` model with global fallback; post-send composer chips clear while history/material retention remains; Creation kind labels are not repeated; Configuración has current-session Logs.
 - **Finding 6 root cause/fix:** old polling recomputed the last user ID from mutable sidecar session state. `a61fc08` captures it immediately after `prompt_async`, requires its exact parent plus `finish:"stop"`, and evicts failed/timeout session mappings. `f327c87` fences empty-diff workspace scans to files absent at current-turn start.
 - **Real 1.18.25 trace (isolated XDG):** T1 `ses_f9c6fd94fffeDk0X1ULulz5kZF`, `missing/provider`, start `1788376786616`, FAILED timeout `1788376816726`, user `msg_063902701001RGKM58k04apJTM`; T2 distinct session `ses_f9c6f6398ffe4UdSN2L5FwP9fV`, `opencode/big-pickle`, completed `1788376821440`, user `msg_063909c6f001BEiV69B4gpzETm`, assistant `msg_063909c7c001iFGKDrPWISJPUG`, parent=T2 user, `finish=stop`, greeting only/no artifacts.
-- **Logs:** process-local 500-event buffer, stderr mirror, INFO default and `--debug`/`--log-level`; no persistence and metadata-only redaction. Viewer has levels, autoscroll, Clear, Copy.
-- **Evidence:** FE 228/228; `project-agent --lib` 16/16; adapter 27/27; fmt/check/clippy clean. Final `./scripts/verify` follows this checkpoint update. Author: Codex CLI gpt-5.6-terra, owner OpenAI/ChatGPT account. Commits `a61fc08`, `f327c87`. No human acceptance claimed.
+- **Review fixes R1-R6:** default selection now calls an explicit clear command and reloads; unavailable pinned models are validated at send time and WARN/fall back globally; all Conversation Details/Logs copy is centralized; log refresh/live announcement and accessibility are bounded; poisoned locks are recoverable; send errors evict sessions and anchor/poll share one deadline. Targeted session-log and adapter eviction tests were added.
+- **Logs:** process-local 500-event buffer, stderr mirror, INFO default and `--debug`/`--log-level`; no persistence and metadata-only redaction. Viewer has levels, autoscroll, Refresh, Clear, Copy.
+- **Evidence:** FE 228/228; `project-agent --lib` 16/16; adapter 28/28; app facade 37/37. Review-cycle fmt/checks and full gate are recorded in the handoff. Author: Codex CLI gpt-5.6-terra, owner OpenAI/ChatGPT account. Commits include `a61fc08`, `f327c87`, `09c7d04` plus review-fix commits below. No human acceptance claimed.
 
 ## Estado previo (FRESH REAL APPIMAGE POST-MESSAGE-SELECTION — preservado)
 
