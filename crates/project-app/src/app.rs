@@ -1156,10 +1156,14 @@ where
             .ok();
         let model = match project.and_then(|project| project.model) {
             Some(model)
-                if self.model_list().unwrap_or_default().iter().any(|available| {
-                    available.provider_id == model.provider_id
-                        && available.model_id == model.model_id
-                }) =>
+                if self
+                    .model_list()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|available| {
+                        available.provider_id == model.provider_id
+                            && available.model_id == model.model_id
+                    }) =>
             {
                 Some(ModelRef {
                     provider_id: model.provider_id,
