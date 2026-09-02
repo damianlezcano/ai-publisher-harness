@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { AgentPhase, BackendReadiness, ProjectSummary, ProjectView } from "./types";
 import { guidanceFromError } from "./guidance";
@@ -24,6 +24,7 @@ export default function App() {
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [backendStatus, setBackendStatus] = useState<BackendReadiness>("starting");
   const { toasts, show } = useToast();
+  const selectedIdRef = useRef(selectedId);
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -36,6 +37,15 @@ export default function App() {
     const view = await api.projectOpen(id);
     setConversation({ ...view, name: conversationDisplayName(view.name) });
   }, []);
+  const refreshConversationRef = useRef(refreshConversation);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    refreshConversationRef.current = refreshConversation;
+  }, [refreshConversation]);
 
   const openConversation = useCallback(
     async (id: string) => {
@@ -86,34 +96,38 @@ export default function App() {
   }, [openConversation, refreshConversations, show]);
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
-    let active = true;
     void api
       .onAgentTask((event) => {
-        if (!active || event.projectId !== selectedId) return;
+        const currentId = selectedIdRef.current;
+        if (event.projectId !== currentId) return;
         if (event.status === "working") {
           setAgentPhase("working");
           setAgentMessage(null);
         } else if (event.status === "completed") {
           setAgentPhase("completed");
           setAgentMessage(null);
-          show(messages.agent.ready);
         } else {
           setAgentPhase("failed");
           setAgentMessage(event.message ?? messages.agent.taskFailed);
         }
-        if (selectedId) {
-          void refreshConversation(selectedId);
+        if (currentId) {
+          void refreshConversationRef.current(currentId);
         }
       })
       .then((fn) => {
-        if (active) unlisten = fn;
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
       });
     return () => {
-      active = false;
+      cancelled = true;
       unlisten?.();
     };
-  }, [selectedId, refreshConversation, show]);
+  }, []);
 
   useEffect(() => {
     let active = true;

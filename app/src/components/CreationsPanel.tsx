@@ -8,7 +8,7 @@ import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
 
 export interface CreationCardShareProps {
-  onShare: () => void;
+  onShare: (creationId: string) => void;
   shared: boolean;
   busy: boolean;
 }
@@ -84,7 +84,12 @@ export function CreationCard(props: CreationCardProps) {
         <span className="item-meta">{kindLabel(creation.kind)}</span>
       </div>
       <span className="row-actions wrap">
-        <button type="button" className="primary" onClick={() => void open()}>
+        <button
+          type="button"
+          className="primary"
+          aria-label={`${messages.common.open}: ${creation.displayName}`}
+          onClick={() => void open()}
+        >
           {messages.common.open}
         </button>
         {share != null && (
@@ -92,7 +97,8 @@ export function CreationCard(props: CreationCardProps) {
             type="button"
             className="secondary"
             disabled={share.busy || share.shared}
-            onClick={() => void share.onShare()}
+            aria-label={`${share.shared ? messages.sharing.shared : share.busy ? messages.sharing.sharing : messages.sharing.shareAction}: ${creation.displayName}`}
+            onClick={() => void share.onShare(creation.id)}
           >
             {share.shared
               ? messages.sharing.shared

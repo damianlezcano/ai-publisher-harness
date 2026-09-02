@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ModelSummary, ProviderSummary, SelectedModelView } from "../../types";
 import { messages } from "../../messages";
+import { modelOptionLabel } from "../../labels";
 
 interface ModelSelectorProps {
   /** Bumped by the parent after provider/model mutations so the list reloads. */
@@ -126,8 +127,7 @@ export default function ModelSelector({ refreshKey }: ModelSelectorProps) {
           <optgroup key={group.label} label={group.label}>
             {group.options.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.model.name}
-                {option.model.free ? messages.model.freeSuffix : messages.model.paidSuffix}
+                {modelOptionLabel(option.model)}
               </option>
             ))}
           </optgroup>

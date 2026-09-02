@@ -341,8 +341,12 @@ pub async fn agent_status(state: State<'_, SharedState>) -> Result<String, AppEr
 pub async fn publish(
     state: State<'_, SharedState>,
     project_id: String,
+    creation_id: Option<String>,
 ) -> Result<PublicationView, AppError> {
-    blocking(state.inner().clone(), move |app| app.publish(&project_id)).await
+    blocking(state.inner().clone(), move |app| {
+        app.publish_creation(&project_id, creation_id.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]

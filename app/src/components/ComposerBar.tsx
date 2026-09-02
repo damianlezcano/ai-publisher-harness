@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type {
-  AgentPhase,
-  MaterialView,
-  ModelSummary,
-  ProviderSummary,
-  SelectedModelView,
-} from "../types";
+import type { AgentPhase, MaterialView } from "../types";
 import { messages } from "../messages";
 import ErrorNotice from "./ui/ErrorNotice";
 
@@ -34,17 +28,6 @@ function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null
     }
   }
   return null;
-}
-
-function modelOptionLabel(model: ModelSummary): string {
-  const nameLooksLikeId = model.name === model.modelId;
-  if (nameLooksLikeId) {
-    if (model.free) {
-      return model.recommended ? messages.model.automaticFree : messages.model.free;
-    }
-    return messages.model.paid;
-  }
-  return `${model.name}${model.free ? messages.model.freeSuffix : messages.model.paidSuffix}`;
 }
 
 export default function ComposerBar({
@@ -75,37 +58,11 @@ export default function ComposerBar({
       setInternalAttachmentIds(resolved);
     }
   }
-  const [models, setModels] = useState<ModelSummary[]>([]);
-  const [providers, setProviders] = useState<ProviderSummary[]>([]);
-  const [selected, setSelected] = useState<SelectedModelView | null>(null);
-  const [modelLoading, setModelLoading] = useState(true);
   const [pickError, setPickError] = useState<unknown | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const working = agentPhase === "working";
   const composerDisabled = working || pasteBusy || !aiUsable;
-
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const [modelList, providerList, current] = await Promise.all([
-          api.modelList(),
-          api.providerList(),
-          api.modelGetSelected(),
-        ]);
-        if (!active) return;
-        setModels(modelList ?? []);
-        setProviders(providerList ?? []);
-        setSelected(current);
-      } finally {
-        if (active) setModelLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
 
   function resizeTextarea() {
     const el = textareaRef.current;
@@ -199,31 +156,6 @@ export default function ComposerBar({
       void send();
     }
   }
-
-  const connectedIds = new Set(providers.filter((p) => p.connected).map((p) => p.id));
-  const visibleModels = models.filter((m) => m.free || connectedIds.has(m.providerId));
-
-  const currentValue = selected?.model
-    ? `${selected.model.providerId}::${selected.model.modelId}`
-    : "";
-
-  const valueInVisible = visibleModels.some(
-    (m) => `${m.providerId}::${m.modelId}` === currentValue,
-  );
-
-  async function handleModelChange(next: string) {
-    if (next === "") return;
-    const [providerId, modelId] = next.split("::");
-    try {
-      await api.modelSelect(providerId, modelId);
-      const current = await api.modelGetSelected();
-      setSelected(current);
-    } catch {
-      // Compact bar keeps the previous selection; error surface is left to Settings.
-    }
-  }
-
-  const selectedIsFree = selected?.model?.free === true && !selected.requiresChoice;
 
   return (
     <div className="composer-bar" role="region" aria-label={messages.assistant.panelLabel}>
@@ -332,45 +264,11 @@ export default function ComposerBar({
           </div>
         )}
 
-        <div className="composer-secondary">
-          <div className="composer-model">
-            <label className="sr-only" htmlFor="composer-model-select">
-              {messages.model.label}
-            </label>
-            {selected?.requiresChoice && (
-              <p className="notice" role="alert">
-                {selected.notice ?? messages.model.unavailableChoice}
-              </p>
-            )}
-            <select
-              id="composer-model-select"
-              className="composer-model-select"
-              value={valueInVisible ? currentValue : ""}
-              onChange={(e) => void handleModelChange(e.target.value)}
-              disabled={modelLoading || composerDisabled}
-            >
-              {modelLoading && <option value="">{messages.model.loading}</option>}
-              {!modelLoading && visibleModels.length === 0 && (
-                <option value="">{messages.model.none}</option>
-              )}
-              {!modelLoading && visibleModels.length > 0 && !valueInVisible && (
-                <option value="" disabled>
-                  {selectedIsFree ? messages.model.automaticFree : messages.model.choose}
-                </option>
-              )}
-              {visibleModels.map((m) => (
-                <option
-                  key={`${m.providerId}::${m.modelId}`}
-                  value={`${m.providerId}::${m.modelId}`}
-                >
-                  {modelOptionLabel(m)}
-                </option>
-              ))}
-            </select>
+        {shareAction && (
+          <div className="composer-secondary">
+            <div className="composer-share-slot">{shareAction}</div>
           </div>
-
-          {shareAction && <div className="composer-share-slot">{shareAction}</div>}
-        </div>
+        )}
       </form>
     </div>
   );

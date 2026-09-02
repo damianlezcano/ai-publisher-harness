@@ -417,15 +417,17 @@ describe("App", () => {
     expect(otherDeleteItem).toBeEnabled();
   });
 
-  it("opens settings from the gear button and restores the conversation on close", async () => {
+  it("opens settings from the gear button, shows the model selector there, and restores the conversation on close", async () => {
     mockBackend({ projects: [baseSummary] });
     render(<App />);
     await waitForWorkspace();
+    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: messages.app.settings }));
     expect(
       await screen.findByRole("dialog", { name: messages.provider.heading }),
     ).toBeInTheDocument();
+    expect(await screen.findByLabelText(messages.model.label)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: messages.common.close }));
     await waitFor(() =>
@@ -434,6 +436,7 @@ describe("App", () => {
       ).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("heading", { name: projectView.name })).toBeInTheDocument();
+    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
   });
 
   it("creates a conversation with Ctrl+N", async () => {
@@ -456,7 +459,7 @@ describe("App", () => {
     expect(region).toHaveAttribute("aria-atomic", "true");
   });
 
-  it("announces the ready toast when an agent task completes", async () => {
+  it("does not announce a ready toast when an agent task completes", async () => {
     mockBackend();
     captureTaskListener();
     render(<App />);
@@ -473,9 +476,8 @@ describe("App", () => {
         },
       });
     });
-    expect(
-      await screen.findByText(messages.agent.ready, {}, { timeout: 5000 }),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("Tu recurso está listo.")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("Tu recurso está listo.")).toHaveLength(0);
   });
 
   it("renders the assistant result once and never as a raw green duplicate on completion", async () => {
@@ -522,20 +524,14 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows free-model state only in the compact selector, never as a banner", async () => {
+  it("keeps the model selector out of the composer; free-model state is not a banner", async () => {
     mockBackend();
     render(<App />);
     await waitForWorkspace();
     expect(screen.queryByText("Modelo gratuito")).not.toBeInTheDocument();
     expect(screen.queryByText(/No hay una IA conectada/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Conectar IA" })).not.toBeInTheDocument();
-    const modelSelect = screen.getByLabelText(messages.model.label) as HTMLSelectElement;
-    expect(modelSelect).toBeInTheDocument();
-    await waitFor(() =>
-      expect(Array.from(modelSelect.options).map((option) => option.textContent)).toContain(
-        messages.model.automaticFree,
-      ),
-    );
+    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
     expect(screen.queryByText("big-pickle")).not.toBeInTheDocument();
     expect(screen.queryByText(/::/)).not.toBeInTheDocument();
   });

@@ -62,6 +62,31 @@ pub struct Artifact {
     pub sha256: Option<String>,
 }
 
+/// Infer the artifact kind from a workspace-relative path. Interactive web
+/// entries are `index.html` or any `.html`/`.htm` file (the registrar stores
+/// web artifacts as `index.html`, the generic publication entry).
+pub fn artifact_kind_from_path(path: &str) -> ArtifactKind {
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let lower = file_name.to_ascii_lowercase();
+    let ext = std::path::Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext {
+        "html" | "htm" => ArtifactKind::Web,
+        "docx" => ArtifactKind::Document,
+        "xlsx" => ArtifactKind::Spreadsheet,
+        "pptx" => ArtifactKind::Presentation,
+        "pdf" => ArtifactKind::Pdf,
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" => ArtifactKind::Image,
+        "md" | "txt" => ArtifactKind::Text,
+        _ => ArtifactKind::Other,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentStatus {
     Stopped,

@@ -206,9 +206,9 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           pendingUser={pendingUser}
           onRefresh={onRefresh}
           share={{
-            onShare: () => {
+            onShare: (creationId: string) => {
               if (!share.shared) {
-                void share.publish();
+                void share.publish(creationId);
               }
             },
             shared: share.shared,

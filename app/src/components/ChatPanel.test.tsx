@@ -154,6 +154,87 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByText("Acá tenés la actividad")).toBeInTheDocument();
     expect(screen.getByText(messages.timeline.assistantLabel)).toBeInTheDocument();
     expect(screen.getByText(creations[0].displayName)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render an empty completed assistant bubble labelled only Asistente", () => {
+    const onShare = vi.fn();
+    render(
+      <ChatPanel
+        {...base}
+        share={{ onShare, shared: false, busy: false }}
+        messages={[
+          {
+            id: "msg-empty",
+            role: "assistant",
+            text: "   ",
+            status: "ok",
+            createdAt: "2026-08-28T15:01:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+          {
+            id: "msg-real",
+            role: "assistant",
+            text: "Listo. Creé el recurso usando el archivo que adjuntaste.",
+            status: "ok",
+            createdAt: "2026-08-28T15:02:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+      />,
+    );
+    const labels = screen.getAllByText(messages.timeline.assistantLabel);
+    expect(labels).toHaveLength(1);
+    expect(
+      screen.getByText("Listo. Creé el recurso usando el archivo que adjuntaste."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: `${messages.sharing.shareAction}: ${creations[0].displayName}`,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("Abrir and Compartir on a creation card target the same registered creation", async () => {
+    const onShare = vi.fn();
+    invokeMock.mockResolvedValue(undefined);
+    render(
+      <ChatPanel
+        {...base}
+        share={{ onShare, shared: false, busy: false }}
+        messages={[
+          {
+            id: "msg-2",
+            role: "assistant",
+            text: "Listo.",
+            status: "ok",
+            createdAt: "2026-08-28T15:01:00Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: `${messages.common.open}: ${creations[0].displayName}` }),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("preview_open_web", {
+      projectId,
+      creationId: "c1",
+    });
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `${messages.sharing.shareAction}: ${creations[0].displayName}`,
+      }),
+    );
+    expect(onShare).toHaveBeenCalledWith("c1");
   });
 
   it("renders a failed assistant message as an alert without creation cards", () => {

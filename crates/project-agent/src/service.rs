@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::AgentResult;
 use crate::error::AgentError;
-use crate::model::{AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask};
+use crate::model::{
+    AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact, ArtifactKind,
+    artifact_kind_from_path,
+};
 use crate::port::AgentEngine;
 use crate::registrar::CreationRegistrar;
 
@@ -94,9 +97,12 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             return Err(AgentError::TaskFailed("task did not complete".into()));
         }
 
+        let mut artifacts = merge_artifacts(task.artifacts.clone(), &workspace_dir);
+        artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
+        let skip_sidecars = sidecar_paths_of_web_entry(&artifacts);
         let mut registered = Vec::new();
-        for artifact in &task.artifacts {
-            if is_materials_artifact_path(&artifact.path) {
+        for artifact in &artifacts {
+            if skip_sidecars.contains(&artifact.path) {
                 continue;
             }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
@@ -190,12 +196,13 @@ fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentR
 
 /// Spanish plain-language instruction injected into every agent run.
 ///
-/// It keeps the assistant reply human-facing for non-technical teachers and
-/// forbids leaking implementation details such as paths, shell commands,
-/// Node/npm, /tmp, localhost, ports, file extensions, or internal names.
+/// It keeps the assistant reply human-facing for non-technical teachers,
+/// tells the engine to write a web creation EducAI can register, and forbids
+/// leaking implementation details or telling the user to open files manually.
 fn build_instruction() -> &'static str {
     "Respondé siempre en el mismo idioma que el usuario (español), con un tono simple y amigable para una docente sin conocimientos técnicos.\n\
-     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el juego de Pasapalabra.\" No describas cómo se construyó.\n\
+     Cuando crees una actividad interactiva, escribila como un recurso web estático en el directorio de trabajo, con index.html como entrada (y CSS/JS al lado si hace falta). EducAI la va a mostrar en el chat con botones Abrir y Compartir: no le pidas a la persona que abra archivos a mano, que haga doble clic, ni que use el explorador.\n\
+     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el recurso usando el archivo que adjuntaste.\" No describas cómo se construyó.\n\
      NUNCA mencionés: rutas de archivos, comandos de shell o terminal, Node/npm, /tmp, localhost, puertos, extensiones de archivo como detalle de implementación, nombres internos de herramientas/proveedores/modelos, ni ningún detalle de implementación o construcción.\n\
      Cuando uses un archivo adjunto, referilo únicamente como \"el archivo que adjuntaste\".\n\
      Mantené las respuestas breves."
@@ -250,6 +257,196 @@ fn is_materials_artifact_path(artifact_path: &str) -> bool {
     relative == "materials" || relative.starts_with("materials/")
 }
 
+fn is_standalone_document(kind: ArtifactKind) -> bool {
+    matches!(
+        kind,
+        ArtifactKind::Document
+            | ArtifactKind::Spreadsheet
+            | ArtifactKind::Presentation
+            | ArtifactKind::Pdf
+            | ArtifactKind::Text
+    )
+}
+
+fn workspace_dir_of(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let relative = normalized.trim_start_matches('/');
+    match Path::new(relative).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            parent.to_string_lossy().replace('\\', "/")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Paths that belong to a web bundle (same directory tree as the web entry)
+/// and should not be registered as separate Creations. Documents stay separate.
+fn sidecar_paths_of_web_entry(artifacts: &[Artifact]) -> HashSet<String> {
+    let web = artifacts
+        .iter()
+        .find(|a| {
+            a.kind == ArtifactKind::Web
+                && Path::new(&a.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("index.html"))
+        })
+        .or_else(|| artifacts.iter().find(|a| a.kind == ArtifactKind::Web));
+    let Some(web) = web else {
+        return HashSet::new();
+    };
+    let web_dir = workspace_dir_of(&web.path);
+    let prefix = if web_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{web_dir}/")
+    };
+    artifacts
+        .iter()
+        .filter(|a| a.path != web.path && !is_standalone_document(a.kind))
+        .filter(|a| {
+            if prefix.is_empty() {
+                workspace_dir_of(&a.path) == web_dir || a.path.starts_with("workspace/")
+            } else {
+                a.path == web_dir || a.path.starts_with(&prefix)
+            }
+        })
+        .map(|a| a.path.clone())
+        .collect()
+}
+
+const SKIP_WORKSPACE_DIR_NAMES: &[&str] = &[
+    "materials",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "coverage",
+    "bower_components",
+];
+const MAX_WORKSPACE_SCAN_DEPTH: usize = 8;
+const MAX_WORKSPACE_SCAN_FILES: usize = 500;
+const MAX_WORKSPACE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Use the sidecar diff when it already names a registrable artifact. Fall back
+/// to a bounded workspace scan only when the diff is empty (B1: files on disk
+/// that `/diff` did not report). Merging the scan into a non-empty diff would
+/// re-register leftover files from earlier turns as new Creations.
+fn merge_artifacts(from_diff: Vec<Artifact>, workspace_dir: &Path) -> Vec<Artifact> {
+    let mut artifacts: Vec<Artifact> = from_diff
+        .into_iter()
+        .filter(|artifact| !is_materials_artifact_path(&artifact.path))
+        .collect();
+    if artifacts.is_empty() {
+        artifacts = scan_workspace_artifacts(workspace_dir);
+        artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
+    }
+    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+    artifacts
+}
+
+fn scan_workspace_artifacts(workspace_dir: &Path) -> Vec<Artifact> {
+    let mut out = Vec::new();
+    let mut file_count = 0;
+    let mut total_bytes = 0;
+    collect_workspace_files(
+        workspace_dir,
+        workspace_dir,
+        0,
+        &mut file_count,
+        &mut total_bytes,
+        &mut out,
+    );
+    out
+}
+
+fn is_skipped_workspace_dir(name: &str) -> bool {
+    SKIP_WORKSPACE_DIR_NAMES
+        .iter()
+        .any(|skip| name.eq_ignore_ascii_case(skip))
+}
+
+fn collect_workspace_files(
+    workspace_dir: &Path,
+    dir: &Path,
+    depth: usize,
+    file_count: &mut usize,
+    total_bytes: &mut u64,
+    out: &mut Vec<Artifact>,
+) {
+    if depth > MAX_WORKSPACE_SCAN_DEPTH
+        || *file_count >= MAX_WORKSPACE_SCAN_FILES
+        || *total_bytes >= MAX_WORKSPACE_SCAN_BYTES
+    {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *file_count >= MAX_WORKSPACE_SCAN_FILES || *total_bytes >= MAX_WORKSPACE_SCAN_BYTES {
+            return;
+        }
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') {
+            continue;
+        }
+        if meta.is_dir() {
+            if is_skipped_workspace_dir(&name_str) {
+                continue;
+            }
+            collect_workspace_files(
+                workspace_dir,
+                &path,
+                depth + 1,
+                file_count,
+                total_bytes,
+                out,
+            );
+            continue;
+        }
+        if !meta.is_file() {
+            continue;
+        }
+        if *file_count >= MAX_WORKSPACE_SCAN_FILES
+            || total_bytes.saturating_add(meta.len()) > MAX_WORKSPACE_SCAN_BYTES
+        {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(workspace_dir) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty()
+            || relative
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            continue;
+        }
+        let path = format!("workspace/{relative}");
+        *file_count += 1;
+        *total_bytes = total_bytes.saturating_add(meta.len());
+        out.push(Artifact {
+            path: path.clone(),
+            kind: artifact_kind_from_path(&path),
+            byte_size: meta.len(),
+            sha256: None,
+        });
+    }
+}
+
 /// Read `workspace_dir/<path>` after stripping a leading `workspace/` prefix.
 ///
 /// Traversal (`..`), empty segments, absolute paths, and symlink escapes are
@@ -293,15 +490,20 @@ fn read_workspace_artifact(workspace_dir: &Path, artifact_path: &str) -> AgentRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Artifact, ArtifactKind};
+    use std::fs;
 
     #[test]
     fn instruction_block_is_spanish_human_facing() {
         let instruction = build_instruction();
         assert!(instruction.contains("español"));
         assert!(instruction.contains("docente"));
-        assert!(instruction.contains("Listo. Creé el juego de Pasapalabra."));
+        assert!(instruction.contains("Listo. Creé el recurso usando el archivo que adjuntaste."));
         assert!(instruction.contains("el archivo que adjuntaste"));
         assert!(instruction.contains("NUNCA mencionés"));
+        assert!(instruction.contains("index.html"));
+        assert!(instruction.contains("Abrir y Compartir"));
+        assert!(instruction.contains("doble clic"));
     }
 
     #[test]
@@ -345,5 +547,44 @@ mod tests {
         );
         assert!(text.contains("- manual.pdf (pdf)"));
         assert!(text.ends_with("create an activity"));
+    }
+
+    #[test]
+    fn merge_artifacts_keeps_diff_and_does_not_scan_prior_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("old.html"), b"old").expect("old");
+        fs::write(tmp.path().join("new.html"), b"new").expect("new");
+        let merged = merge_artifacts(
+            vec![Artifact {
+                path: "workspace/new.html".into(),
+                kind: ArtifactKind::Web,
+                byte_size: 3,
+                sha256: None,
+            }],
+            tmp.path(),
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, "workspace/new.html");
+    }
+
+    #[test]
+    fn merge_artifacts_scans_when_diff_is_empty() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
+        let merged = merge_artifacts(Vec::new(), tmp.path());
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, "workspace/index.html");
+        assert_eq!(merged[0].kind, ArtifactKind::Web);
+    }
+
+    #[test]
+    fn workspace_scan_skips_dependency_trees() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("node_modules/pkg")).expect("deps");
+        fs::write(tmp.path().join("node_modules/pkg/index.js"), b"dep").expect("dep");
+        fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
+        let scanned = scan_workspace_artifacts(tmp.path());
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].path, "workspace/index.html");
     }
 }

@@ -174,7 +174,6 @@ export const messages = {
   agent: {
     creating: "Creando tu recurso…",
     taskFailed: "No se pudo completar la creación.",
-    ready: "Tu recurso está listo.",
   },
 
   material: {

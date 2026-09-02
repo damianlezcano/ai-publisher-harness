@@ -247,6 +247,23 @@ fn artifact_kind_mapping_and_outputs_only() {
 }
 
 #[test]
+fn session_relative_html_paths_are_workspace_web_artifacts() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["busy", "idle"]);
+    server
+        .set_diff_body(r#"[{"path":"rosco.html","byte_size":24},{"path":"app.js","byte_size":8}]"#);
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.artifacts.len(), 2);
+    assert_eq!(task.artifacts[0].path, "workspace/rosco.html");
+    assert_eq!(task.artifacts[0].kind, ArtifactKind::Web);
+    assert_eq!(task.artifacts[1].path, "workspace/app.js");
+    assert_eq!(task.artifacts[1].kind, ArtifactKind::Other);
+}
+
+#[test]
 fn status_stopped_ready_stopped() {
     let server = FakeServer::start();
     let engine = engine_for(&server);
@@ -302,6 +319,30 @@ fn send_completes_when_status_map_omits_session_key() {
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");
     assert_eq!(task.message.as_deref(), Some("done"));
+}
+
+#[test]
+fn send_empty_assistant_without_files_completes_after_idle_grace() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":""}]}]"#,
+    );
+    server.set_diff_body("[]");
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let started = std::time::Instant::now();
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert!(task.message.is_none());
+    assert!(task.artifacts.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "empty idle reply must not spin until the task timeout"
+    );
 }
 
 #[test]

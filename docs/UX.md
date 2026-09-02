@@ -98,21 +98,24 @@ stack trace.
 ## Main screens (approved chat-first direction, UX_RELEASE_GATE_01)
 
 The 2×2 dashboard layout is **not** the target UI. Approved layout: persistent left conversation
-list / center conversation / fixed bottom bar with prompt + model + a single Compartir action /
-separate Settings with a close **X** / resources in conversation context. See §8 of
-`docs/UX_RELEASE_GATE_01.md`.
+list / center conversation / fixed bottom bar with attachment, prompt, send, and a single
+Compartir action / separate Settings (Configuración) with a close **X** / resources in
+conversation context. Provider and model selection live in Configuración, not in the composer.
+First-run users get a dynamically discovered free/default model; they are never forced to pick.
+See §8 of `docs/UX_RELEASE_GATE_01.md` for the chat-first direction.
 
 ### Conversations
 Persistent left list, newest first, with shared vs not-shared state and inline rename. First-run
 guide on empty.
 
 ### Conversation
-Chat log with creations inline and materials in context; the bottom bar holds the prompt, model
-selector and Compartir/Dejar de compartir.
+Chat log with creations inline and materials in context; the bottom bar holds attachment, prompt,
+send, and Compartir/Dejar de compartir. Generated deliverables appear as Creation cards with
+Abrir and Compartir on the same registered artifact.
 
 ### Settings
-Separate surface with a close **X**, returning to the same conversation; provider connection
-lives here.
+Separate surface with a close **X**, returning to the exact same conversation (no dashboard
+redirect). Provider connection and model selection live here.
 
 ### Shared state
 Show the share link, copy action, QR, and Dejar de compartir, with the
