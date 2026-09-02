@@ -111,6 +111,56 @@ fn project_lifecycle() {
 }
 
 #[test]
+fn conversation_model_is_validated_persisted_isolated_and_clearable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+    let first = app.create_project("A").expect("create A");
+    let second = app.create_project("B").expect("create B");
+    let unknown = app.conversation_model_select(&first.id, "missing", "model");
+    assert_eq!(
+        unknown.expect_err("unknown model").code,
+        ErrorCode::ModelUnavailable
+    );
+    app.conversation_model_select(&first.id, "opencode", "big-pickle")
+        .expect("select model");
+    assert_eq!(
+        app.open_project(&first.id)
+            .expect("open")
+            .model
+            .unwrap()
+            .model_id,
+        "big-pickle"
+    );
+    assert!(
+        app.open_project(&second.id)
+            .expect("open B")
+            .model
+            .is_none()
+    );
+    app.conversation_model_clear(&first.id)
+        .expect("clear model");
+    assert!(app.open_project(&first.id).expect("reload").model.is_none());
+}
+
+#[test]
+fn owned_material_and_creation_paths_reject_foreign_ids() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+    let first = app.create_project("A").expect("create");
+    let second = app.create_project("B").expect("create");
+    let source = tmp.path().join("note.txt");
+    fs::write(&source, b"hello").expect("source");
+    let material = app
+        .add_material_from_path(&first.id, source.to_str().expect("utf8"))
+        .expect("material");
+    let path = app.material_path(&first.id, &material.id).expect("path");
+    assert!(path.starts_with(tmp.path().join("projects").join(&first.id)));
+    assert!(app.material_path(&second.id, &material.id).is_err());
+    assert!(app.material_path(&first.id, "not-an-id").is_err());
+    assert!(app.creation_path(&second.id, "not-an-id").is_err());
+}
+
+#[test]
 fn delete_unpublishes_before_removing_data() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, _, _) = app(tmp.path());
