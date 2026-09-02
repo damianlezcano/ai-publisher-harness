@@ -69,7 +69,8 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         fs::create_dir_all(&workspace_dir)
             .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
 
-        let prompt = provision_attachments(&workspace_dir, &request)?;
+        let revise_existing = workspace_has_existing_web(&workspace_dir);
+        let prompt = provision_attachments(&workspace_dir, &request, revise_existing)?;
 
         let session = self.engine.open_session(&AgentProject {
             project_id: request.project_id.clone(),
@@ -164,7 +165,11 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
     }
 }
 
-fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentResult<AgentPrompt> {
+fn provision_attachments(
+    workspace_dir: &Path,
+    request: &AgentRequest,
+    revise_existing: bool,
+) -> AgentResult<AgentPrompt> {
     let mut lines = Vec::new();
     if !request.attachments.is_empty() {
         for attachment in &request.attachments {
@@ -189,7 +194,7 @@ fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentR
         }
     }
     Ok(AgentPrompt {
-        text: augment_prompt(&request.prompt.text, &lines),
+        text: augment_prompt(&request.prompt.text, &lines, revise_existing),
         model: request.prompt.model.clone(),
     })
 }
@@ -202,16 +207,25 @@ fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentR
 fn build_instruction() -> &'static str {
     "Respondé siempre en el mismo idioma que el usuario (español), con un tono simple y amigable para una docente sin conocimientos técnicos.\n\
      Cuando crees una actividad interactiva, escribila como un recurso web estático en el directorio de trabajo, con index.html como entrada (y CSS/JS al lado si hace falta). EducAI la va a mostrar en el chat con botones Abrir y Compartir: no le pidas a la persona que abra archivos a mano, que haga doble clic, ni que use el explorador.\n\
-     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el recurso usando el archivo que adjuntaste.\" No describas cómo se construyó.\n\
+     Primero escribí el recurso en el directorio de trabajo. Recién cuando esos archivos existan, respondé en forma breve qué creaste, por ejemplo: \"Listo. Creé el recurso usando el archivo que adjuntaste.\" Nunca digas que está listo, ni respondas solo \"Listo.\", antes de haber escrito el recurso.\n\
      NUNCA mencionés: rutas de archivos, comandos de shell o terminal, Node/npm, /tmp, localhost, puertos, extensiones de archivo como detalle de implementación, nombres internos de herramientas/proveedores/modelos, ni ningún detalle de implementación o construcción.\n\
      Cuando uses un archivo adjunto, referilo únicamente como \"el archivo que adjuntaste\".\n\
      Mantené las respuestas breves."
 }
 
-fn augment_prompt(original: &str, lines: &[String]) -> String {
+fn existing_activity_instruction() -> &'static str {
+    "Esta conversación ya tiene una actividad en el directorio de trabajo. Si la persona pide un cambio (colores, textos, datos, comportamiento), modificá ESA misma actividad: actualizá los archivos existentes. No crees una actividad nueva ni una copia, salvo que pida explícitamente una nueva o una versión aparte."
+}
+
+fn augment_prompt(original: &str, lines: &[String], revise_existing: bool) -> String {
     let mut block = String::from(build_instruction());
     block.push('\n');
     block.push('\n');
+    if revise_existing {
+        block.push_str(existing_activity_instruction());
+        block.push('\n');
+        block.push('\n');
+    }
     if !lines.is_empty() {
         block.push_str(
             "Materiales adjuntos (usá estos archivos como contexto; están en la carpeta \"materials\"):\n",
@@ -248,6 +262,12 @@ fn is_safe_display_name(name: &str) -> bool {
         return false;
     }
     trimmed != "." && trimmed != ".."
+}
+
+fn workspace_has_existing_web(workspace_dir: &Path) -> bool {
+    scan_workspace_artifacts(workspace_dir)
+        .iter()
+        .any(|artifact| artifact.kind == ArtifactKind::Web)
 }
 
 fn is_materials_artifact_path(artifact_path: &str) -> bool {
@@ -504,6 +524,8 @@ mod tests {
         assert!(instruction.contains("index.html"));
         assert!(instruction.contains("Abrir y Compartir"));
         assert!(instruction.contains("doble clic"));
+        assert!(instruction.contains("Nunca digas que está listo"));
+        assert!(!instruction.contains("Decí primero"));
     }
 
     #[test]
@@ -529,15 +551,16 @@ mod tests {
 
     #[test]
     fn augment_prompt_always_includes_instruction() {
-        let text = augment_prompt("create an activity", &[]);
+        let text = augment_prompt("create an activity", &[], false);
         assert!(text.starts_with(build_instruction()));
         assert!(text.contains("create an activity"));
+        assert!(!text.contains(existing_activity_instruction()));
     }
 
     #[test]
     fn augment_prompt_keeps_materials_block_after_instruction() {
         let lines = vec!["- manual.pdf (pdf)".to_owned()];
-        let text = augment_prompt("create an activity", &lines);
+        let text = augment_prompt("create an activity", &lines, false);
         let instruction = build_instruction();
         let inst_end = text.find(instruction).unwrap() + instruction.len();
         let materials_start = text.find("Materiales adjuntos").unwrap();
@@ -547,6 +570,13 @@ mod tests {
         );
         assert!(text.contains("- manual.pdf (pdf)"));
         assert!(text.ends_with("create an activity"));
+    }
+
+    #[test]
+    fn augment_prompt_asks_to_revise_existing_activity() {
+        let text = augment_prompt("cambiá el fondo", &[], true);
+        assert!(text.contains(existing_activity_instruction()));
+        assert!(text.ends_with("cambiá el fondo"));
     }
 
     #[test]

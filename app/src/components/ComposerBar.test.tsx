@@ -136,15 +136,44 @@ describe("ComposerBar", () => {
     expect(textarea).toHaveValue("");
   });
 
-  it("Ctrl+Enter sends; Enter alone does not send", async () => {
+  it("Enter sends; Shift+Enter inserts a newline without sending", async () => {
     setupApiMock({ selected: selectedFreeModel });
     render(<ComposerBar {...base} />);
     const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
     await userEvent.type(textarea, "Primera línea");
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", shiftKey: true });
+    expect(base.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+    await waitFor(() => expect(base.onSend).toHaveBeenCalledWith("Primera línea", []));
+  });
+
+  it("does not send while IME composition is active", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "hola");
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", isComposing: true });
+    expect(base.onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 229 });
+    expect(base.onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not send whitespace-only prompts", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    await userEvent.type(textarea, "   ");
     fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
     expect(base.onSend).not.toHaveBeenCalled();
-    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", ctrlKey: true });
-    await waitFor(() => expect(base.onSend).toHaveBeenCalledWith("Primera línea", []));
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled();
+  });
+
+  it("does not send when the composer is busy", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} agentPhase="working" />);
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+    expect(base.onSend).not.toHaveBeenCalled();
   });
 
   it("does not send an empty prompt", async () => {

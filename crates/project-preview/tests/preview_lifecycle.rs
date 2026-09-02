@@ -41,6 +41,10 @@ fn start_serves_files_then_teardown_invalidates_token() {
     assert_eq!(r.status().as_u16(), 200);
     assert_eq!(r.bytes().unwrap().as_ref(), b"<h1>preview</h1>");
 
+    let root = agent.get(endpoint.url()).send().unwrap();
+    assert_eq!(root.status().as_u16(), 200);
+    assert_eq!(root.bytes().unwrap().as_ref(), b"<h1>preview</h1>");
+
     let r = agent.get(&png).send().unwrap();
     assert_eq!(r.status().as_u16(), 200);
     assert_eq!(r.bytes().unwrap().as_ref(), b"\x89PNG\r\n");

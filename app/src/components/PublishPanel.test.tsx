@@ -106,7 +106,10 @@ describe("ShareControl", () => {
     ).toBeInTheDocument();
     expect(
       within(menu).getByRole("menuitem", { name: messages.sharing.stopSharing }),
-    ).toBeInTheDocument();
+    ).toBeEnabled();
+    expect(within(menu).getByRole("menuitem", { name: messages.sharing.stopSharing })).toHaveClass(
+      "danger",
+    );
     expect(within(menu).getByText(messages.sharing.temporaryNote)).toBeInTheDocument();
   });
 

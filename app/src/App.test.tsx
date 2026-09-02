@@ -65,6 +65,8 @@ interface MockOptions {
   freeModel?: boolean;
   agentSendError?: unknown;
   agentStatus?: string | string[];
+  views?: Record<string, Partial<ProjectView>>;
+  holdOpen?: Record<string, Promise<void>>;
 }
 
 function mockBackend(options: MockOptions = {}) {
@@ -76,6 +78,8 @@ function mockBackend(options: MockOptions = {}) {
     freeModel: useFree = true,
     agentSendError,
     agentStatus = "ready",
+    views = {},
+    holdOpen = {},
   } = options;
 
   const allProjects = projects.map((project) => ({ ...project }));
@@ -107,12 +111,21 @@ function mockBackend(options: MockOptions = {}) {
       case "project_open": {
         if (openError) return Promise.reject(openError);
         const { projectId } = (args as { projectId: string }) ?? {};
-        const summary = allProjects.find((project) => project.id === projectId);
-        return Promise.resolve({
-          ...projectView,
-          id: projectId ?? projectView.id,
-          name: summary?.name ?? projectView.name,
-        });
+        const resolveView = () => {
+          const summary = allProjects.find((project) => project.id === projectId);
+          const extra = (projectId && views[projectId]) || {};
+          return {
+            ...projectView,
+            id: projectId ?? projectView.id,
+            name: summary?.name ?? projectView.name,
+            publication: extra.publication ?? projectView.publication,
+            messages: extra.messages ?? projectView.messages,
+            creations: extra.creations ?? projectView.creations,
+            materials: extra.materials ?? projectView.materials,
+          };
+        };
+        const hold = projectId ? holdOpen[projectId] : undefined;
+        return hold ? hold.then(resolveView) : Promise.resolve(resolveView());
       }
       case "project_rename": {
         const { projectId, name } = (args as { projectId: string; name: string }) ?? {};
@@ -142,6 +155,21 @@ function mockBackend(options: MockOptions = {}) {
         });
       case "agent_send":
         return agentSendError ? Promise.reject(agentSendError) : Promise.resolve(undefined);
+      case "publish": {
+        const { projectId } = (args as { projectId: string }) ?? {};
+        const target = allProjects.find((project) => project.id === projectId);
+        if (target) target.shared = true;
+        if (projectId) {
+          views[projectId] = {
+            ...views[projectId],
+            publication: { state: "published", publicUrl: "https://fake.trycloudflare.com/x/" },
+          };
+        }
+        return Promise.resolve({
+          state: "published",
+          publicUrl: "https://fake.trycloudflare.com/x/",
+        });
+      }
       case "app_status":
         return Promise.resolve({ version: "0.1.0", agent: nextAgentStatus() });
       default:
@@ -729,5 +757,168 @@ describe("App", () => {
 
       unmount();
     }
+  });
+
+  it("shows only the selected conversation's messages when switching", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: {
+          messages: [
+            {
+              id: "msg-a",
+              role: "user",
+              text: "mensaje secreto de A",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+        },
+        [otherSummary.id]: { messages: [] },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(screen.getByText("mensaje secreto de A")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.queryByText("mensaje secreto de A")).not.toBeInTheDocument();
+    expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    expect(screen.getByText("mensaje secreto de A")).toBeInTheDocument();
+  });
+
+  it("does not keep the previous conversation visible while the next one is loading", async () => {
+    let release!: () => void;
+    const holdB = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: {
+          messages: [
+            {
+              id: "msg-a",
+              role: "user",
+              text: "mensaje secreto de A",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+        },
+        [otherSummary.id]: { messages: [] },
+      },
+      holdOpen: { [otherSummary.id]: holdB },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(screen.getByText("mensaje secreto de A")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitFor(() => expect(screen.queryByText("mensaje secreto de A")).not.toBeInTheDocument());
+    expect(screen.getByText(messages.app.loading)).toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.queryByText("mensaje secreto de A")).not.toBeInTheDocument();
+  });
+
+  it("ignores a late agent result from another conversation", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: {
+          messages: [
+            {
+              id: "msg-a",
+              role: "assistant",
+              text: "respuesta tardía de A",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+        },
+        [otherSummary.id]: { messages: [] },
+      },
+    });
+    captureTaskListener();
+    render(<App />);
+    await waitForWorkspace();
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 9,
+        payload: {
+          projectId: baseSummary.id,
+          status: "completed",
+          message: "respuesta tardía de A",
+          registeredCreationIds: [],
+        },
+      });
+    });
+
+    expect(screen.getByRole("heading", { name: otherSummary.name })).toBeInTheDocument();
+    expect(screen.queryByText("respuesta tardía de A")).not.toBeInTheDocument();
+  });
+
+  it("refreshes the conversation list when a share-related task completes", async () => {
+    mockBackend({ projects: [baseSummary] });
+    captureTaskListener();
+    render(<App />);
+    await waitForWorkspace();
+    const listCallsBefore = invokeMock.mock.calls.filter(
+      (call) => call[0] === "project_list",
+    ).length;
+
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 2,
+        payload: {
+          projectId: baseSummary.id,
+          status: "completed",
+          message: null,
+          registeredCreationIds: [],
+        },
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter((call) => call[0] === "project_list").length,
+      ).toBeGreaterThan(listCallsBefore),
+    );
+  });
+
+  it("shows the sidebar Compartido badge as soon as the conversation is shared", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    render(<App />);
+    await waitForWorkspace();
+    const selected = screen.getByRole("button", { name: new RegExp(baseSummary.name) });
+    expect(selected.querySelector(".conversation-shared-badge")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
+
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: new RegExp(baseSummary.name) });
+      expect(button.querySelector(".conversation-shared-badge")).toHaveTextContent(
+        messages.conversations.sharedLabel,
+      );
+    });
   });
 });

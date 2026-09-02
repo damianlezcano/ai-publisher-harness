@@ -346,6 +346,58 @@ fn send_empty_assistant_without_files_completes_after_idle_grace() {
 }
 
 #[test]
+fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+    );
+    server.set_diff_body("[]");
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
+        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(800));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let started = std::time::Instant::now();
+    let task = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(120));
+            server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
+        });
+        engine.send(&session, &prompt()).expect("send")
+    });
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert_eq!(task.message.as_deref(), Some("Listo."));
+    assert_eq!(task.artifacts.len(), 1);
+    assert_eq!(task.artifacts[0].path, "workspace/index.html");
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn send_completes_brief_listo_after_ack_grace_when_no_files_appear() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+    );
+    server.set_diff_body("[]");
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
+        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(200));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let started = std::time::Instant::now();
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert_eq!(task.message.as_deref(), Some("Listo."));
+    assert!(task.artifacts.is_empty());
+    assert!(started.elapsed() >= Duration::from_millis(200));
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
 fn send_ignores_foreign_session_in_status_map() {
     let server = FakeServer::start();
     server.set_session_id("own-session");

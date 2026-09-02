@@ -427,3 +427,31 @@ fn later_turn_does_not_reregister_prior_workspace_files() {
     assert_eq!(second.registered.len(), 1);
     assert_eq!(registrar.records().len(), 2);
 }
+
+#[test]
+fn later_turn_prompt_asks_to_revise_existing_web() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web, 4)]);
+    write_artifact(tmp.path(), "proj-8", "index.html", b"<h1>one</h1>");
+    let registrar = FakeRegistrar::new();
+    let service = AgentService::new(engine.clone(), registrar, tmp.path().to_path_buf());
+    service
+        .run(AgentRequest {
+            project_id: "proj-8".into(),
+            prompt: prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("turn 1");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web, 4)]);
+    write_artifact(tmp.path(), "proj-8", "index.html", b"<h1>two</h1>");
+    service
+        .run(AgentRequest {
+            project_id: "proj-8".into(),
+            prompt: prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("turn 2");
+    let text = engine.last_prompt_text().expect("prompt");
+    assert!(text.contains("modificá ESA misma actividad"), "{text}");
+}

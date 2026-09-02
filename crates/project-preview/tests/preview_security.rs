@@ -417,11 +417,15 @@ fn directory_paths_and_roots_are_404() {
         &server,
         &format!("http://127.0.0.1:{}/preview/", server.port),
     );
-    assert_404(
-        &server,
-        &format!("http://127.0.0.1:{}/preview/{}", server.port, server.token),
-    );
-    assert_404(&server, &server.base);
+    let root = server.get(&server.base);
+    assert_eq!(root.status, 200);
+    assert_eq!(root.body, b"root");
+    let no_slash = server.get(&format!(
+        "http://127.0.0.1:{}/preview/{}",
+        server.port, server.token
+    ));
+    assert_eq!(no_slash.status, 200);
+    assert_eq!(no_slash.body, b"root");
     assert_404(&server, &format!("{}sub/", server.base));
     assert_404(&server, &format!("{}sub", server.base));
 
@@ -477,9 +481,23 @@ fn mime_policy_and_nosniff_on_every_response() {
         }
     }
 
+    let root = server.get(&server.base);
+    assert_eq!(root.status, 200, "{}", server.base);
+    assert_eq!(
+        root.header("content-type"),
+        Some("text/html; charset=utf-8"),
+        "{}",
+        server.base
+    );
+    assert_eq!(
+        root.header("x-content-type-options"),
+        Some("nosniff"),
+        "{}",
+        server.base
+    );
+
     for url in [
         format!("{}missing.txt", server.base),
-        server.base.clone(),
         format!("http://127.0.0.1:{}/", server.port),
     ] {
         let r = server.get(&url);

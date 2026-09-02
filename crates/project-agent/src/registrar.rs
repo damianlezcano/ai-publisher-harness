@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use project_core::{
-    CreateCreation, CreationContent, CreationKind, CreationVisibility, ProjectId, ProjectService,
-    SystemClock, UuidV7IdGenerator, safe_file_name,
+    CreateCreation, CreationContent, CreationId, CreationKind, CreationVisibility, ProjectId,
+    ProjectService, SystemClock, UuidV7IdGenerator, safe_file_name,
 };
 use project_fs::{FilesystemProjectContentStore, FilesystemProjectRepository};
 
@@ -78,24 +78,46 @@ impl CreationRegistrar for FilesystemCreationRegistrar {
         };
         let display_name = web_display_name(&artifact.path)
             .unwrap_or_else(|| fallback_display_name(file_name, kind));
-        let request = CreateCreation {
-            display_name,
-            kind,
-            visibility: CreationVisibility::Private,
-            content_type: None,
-            content: CreationContent {
-                bytes,
-                file_name: stored_file_name,
-            },
-            parent_creation_id: None,
-        };
         let mut service = self
             .service
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let created = service
-            .create_creation(&pid, request)
-            .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
+        let existing_id: Option<CreationId> =
+            service.list_creations(&pid).ok().and_then(|creations| {
+                creations
+                    .into_iter()
+                    .rev()
+                    .find(|c| c.kind == kind && c.display_name == display_name)
+                    .map(|c| c.id)
+            });
+        let created = if let Some(id) = existing_id {
+            wipe_creation_output_dir(&self.base, project_id, id.as_str())?;
+            service
+                .replace_creation_content(
+                    &pid,
+                    &id,
+                    CreationContent {
+                        bytes,
+                        file_name: stored_file_name,
+                    },
+                )
+                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?
+        } else {
+            let request = CreateCreation {
+                display_name,
+                kind,
+                visibility: CreationVisibility::Private,
+                content_type: None,
+                content: CreationContent {
+                    bytes,
+                    file_name: stored_file_name,
+                },
+                parent_creation_id: None,
+            };
+            service
+                .create_creation(&pid, request)
+                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?
+        };
         drop(service);
         if kind == CreationKind::Web {
             // Best-effort: the primary file is already a Creation. A sidecar
@@ -167,6 +189,45 @@ fn fallback_display_name(file_name: &str, kind: CreationKind) -> String {
         return DEFAULT_WEB_DISPLAY_NAME.to_owned();
     }
     safe_file_name(stem)
+}
+
+fn wipe_creation_output_dir(base: &Path, project_id: &str, creation_id: &str) -> AgentResult<()> {
+    if creation_id.is_empty()
+        || creation_id.contains(['/', '\\', '\0'])
+        || creation_id == "."
+        || creation_id == ".."
+    {
+        return Err(AgentError::RegistrationFailed("unsafe creation id".into()));
+    }
+    let dest = base
+        .join("projects")
+        .join(project_id)
+        .join("outputs")
+        .join(creation_id);
+    if !dest.is_dir() {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(&dest) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        if meta.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+    Ok(())
 }
 
 fn is_document_sidecar(name: &str) -> bool {

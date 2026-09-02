@@ -3,6 +3,11 @@
 ## Principle
 Keep product/domain logic independent of Tauri, OpenCode and Cloudflare.
 
+Persistent on-disk layout (app data directory, conversations, materials,
+workspace, Creations, preview temp, publish snapshots) is documented from
+the current implementation in `docs/STORAGE_LAYOUT.md`. The AppImage is
+package media, not the user-data container.
+
 ## Layers
 
 ```

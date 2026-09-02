@@ -142,10 +142,6 @@ fn resolve(raw_path: &str, state: &PreviewState) -> ResolveOutcome {
     }
 
     let sub = &body[2..];
-    if sub.is_empty() {
-        return ResolveOutcome::NotFound;
-    }
-
     let has_trailing_slash = sub.last() == Some(&"");
     let mut file_segments: Vec<String> = Vec::new();
     for (idx, seg) in sub.iter().enumerate() {
@@ -166,7 +162,11 @@ fn resolve(raw_path: &str, state: &PreviewState) -> ResolveOutcome {
         }
     }
 
-    if file_segments.is_empty() || has_trailing_slash {
+    if file_segments.is_empty() {
+        // Token root `/preview/<token>/` maps to the web entrypoint, matching
+        // the publisher route-root contract. Nested directories still 404.
+        file_segments.push("index.html".to_string());
+    } else if has_trailing_slash {
         return ResolveOutcome::NotFound;
     }
 

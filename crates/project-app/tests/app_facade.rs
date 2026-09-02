@@ -805,3 +805,111 @@ fn message_append_is_durable_before_agent_run() {
     assert_eq!(view.messages.len(), 2);
     assert_eq!(view.messages[1].role, "assistant");
 }
+
+#[test]
+fn later_turn_updates_the_same_web_creation_and_refreshes_publish() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "index.html",
+        b"<html><body>ORIGINAL</body></html>",
+    );
+    engine.set_message("Listo. Creé el recurso.".into());
+    let first = app
+        .send_message(&p.id, "creá la actividad", &[])
+        .expect("first");
+    assert_eq!(first.registered_creation_ids.len(), 1);
+    let cid = first.registered_creation_ids[0].clone();
+
+    app.publish_creation(&p.id, Some(&cid)).expect("share");
+    let published = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("publish")
+        .join("index.html");
+    assert!(
+        fs::read_to_string(&published)
+            .expect("first snapshot")
+            .contains("ORIGINAL")
+    );
+
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "index.html",
+        b"<html><body style=\"background:white\">UPDATED</body></html>",
+    );
+    engine.set_message("Listo. Ya está con fondo blanco.".into());
+    let second = app
+        .send_message(&p.id, "cambiá el fondo a blanco", &[])
+        .expect("second");
+    assert_eq!(second.registered_creation_ids, vec![cid.clone()]);
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.creations.len(), 1);
+    assert_eq!(view.creations[0].id, cid);
+    let html = fs::read_to_string(&published).expect("updated snapshot");
+    assert!(html.contains("UPDATED"), "{html}");
+    assert!(html.contains("background:white"), "{html}");
+    assert!(!html.contains("ORIGINAL"), "{html}");
+}
+
+#[test]
+fn distinct_web_activity_still_registers_a_new_creation() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>one</h1>");
+    app.send_message(&p.id, "creá una", &[]).expect("first");
+
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad-2/index.html",
+        ArtifactKind::Web,
+    )]);
+    write_artifact(tmp.path(), &p.id, "actividad-2/index.html", b"<h1>two</h1>");
+    app.send_message(&p.id, "creá otra", &[]).expect("second");
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.creations.len(), 2);
+}
+
+#[test]
+fn new_distinct_web_does_not_replace_an_already_published_snapshot() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>one</h1>");
+    let first = app.send_message(&p.id, "creá una", &[]).expect("first");
+    let cid = first.registered_creation_ids[0].clone();
+    app.publish_creation(&p.id, Some(&cid)).expect("share");
+    let published = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("publish")
+        .join("index.html");
+    assert!(
+        fs::read_to_string(&published)
+            .expect("first snapshot")
+            .contains("one")
+    );
+
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad-2/index.html",
+        ArtifactKind::Web,
+    )]);
+    write_artifact(tmp.path(), &p.id, "actividad-2/index.html", b"<h1>two</h1>");
+    app.send_message(&p.id, "creá otra", &[]).expect("second");
+
+    let html = fs::read_to_string(&published).expect("snapshot after second");
+    assert!(html.contains("one"), "{html}");
+    assert!(!html.contains("two"), "{html}");
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.creations.len(), 2);
+}
