@@ -589,6 +589,7 @@ fn send_message_persists_user_and_assistant_messages() {
         .send_message(&p.id, "crea una actividad", &[])
         .expect("send");
     assert_eq!(run.status, "completed");
+    assert!(run.turn_id.as_deref().is_some_and(|id| !id.is_empty()));
     assert_eq!(run.registered_creation_ids.len(), 1);
 
     let view = app.open_project(&p.id).expect("open");
@@ -713,6 +714,7 @@ fn failed_run_persists_failed_assistant_message() {
 
     let run = app.send_message(&p.id, "hacé algo", &[]).expect("send");
     assert_eq!(run.status, "failed");
+    assert!(run.turn_id.as_deref().is_some_and(|id| !id.is_empty()));
 
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.messages.len(), 2);
@@ -739,6 +741,7 @@ fn cancel_persists_cancelled_message() {
 
     let run = app.send_message(&p.id, "hacé algo", &[]).expect("send");
     assert_eq!(run.status, "cancelled");
+    assert!(run.turn_id.as_deref().is_some_and(|id| !id.is_empty()));
 
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.messages.len(), 2);
@@ -804,6 +807,25 @@ fn message_append_is_durable_before_agent_run() {
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.messages.len(), 2);
     assert_eq!(view.messages[1].role, "assistant");
+}
+
+#[test]
+fn sequential_sends_keep_distinct_turn_ids_and_ordered_results() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+    engine.set_message("respuesta".to_owned());
+
+    let first = app.send_message(&p.id, "primero", &[]).expect("first");
+    let second = app.send_message(&p.id, "segundo", &[]).expect("second");
+
+    assert_ne!(first.turn_id, second.turn_id);
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages.len(), 4);
+    assert_eq!(view.messages[0].text, "primero");
+    assert_eq!(view.messages[1].text, "respuesta");
+    assert_eq!(view.messages[2].text, "segundo");
+    assert_eq!(view.messages[3].text, "respuesta");
 }
 
 #[test]

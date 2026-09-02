@@ -132,21 +132,22 @@ impl OpenCodeAgentEngine {
                             }
                             last_artifact_fetch = Some(Instant::now());
                         }
-                        if !idle_artifacts.is_empty() {
-                            return Ok((phase, message, idle_artifacts));
-                        }
                         // A first nonempty reply (especially a brief "Listo.")
                         // is not terminal while no files exist: the sidecar
                         // often marks idle between the first text part and
                         // tool work. Debounce idle and keep polling.
-                        let grace = match &message {
-                            Some(text) if is_brief_ack(text) => self.ack_without_artifacts_grace,
-                            None => self.idle_without_text_grace,
-                            Some(_) => Duration::ZERO,
-                        };
-                        if grace == Duration::ZERO {
-                            return Ok((phase, message, idle_artifacts));
+                        // OpenCode 1.18.25 can return an empty status map while
+                        // tool work is active. Only the final assistant message
+                        // marker, `finish: "stop"`, closes this specific turn.
+                        if assistant_message_is_terminal(&messages) {
+                            // Do not let the artifact refresh interval hide a
+                            // Creation that was written just before the final
+                            // message became visible.
+                            if let Ok(artifacts) = self.fetch_artifacts(session_id) {
+                                return Ok((phase, message, artifacts));
+                            }
                         }
+                        let grace = self.ack_without_artifacts_grace;
                         match idle_since {
                             None => idle_since = Some(Instant::now()),
                             Some(started) if started.elapsed() >= grace => {
@@ -389,24 +390,32 @@ fn session_status_phase(value: &Value, session_id: &str) -> Option<String> {
 
 /// Short acknowledgements that are not a completed turn when no files exist yet.
 /// Generic (not product-specific): a lone "Listo." must not end a creation run.
-fn is_brief_ack(text: &str) -> bool {
-    let normalized = text
-        .trim()
-        .trim_end_matches(['.', '!', '?', '…', '。'])
-        .trim()
-        .to_lowercase();
-    matches!(
-        normalized.as_str(),
-        "listo"
-            | "hecho"
-            | "vale"
-            | "ok"
-            | "okay"
-            | "perfecto"
-            | "perfect"
-            | "de acuerdo"
-            | "entendido"
-    )
+fn assistant_message_is_terminal(messages: &[Value]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message_role(message) == "assistant")
+        .and_then(|message| {
+            message
+                .get("info")
+                .and_then(|info| info.get("finish"))
+                .and_then(Value::as_str)
+                .or_else(|| message.get("finish").and_then(Value::as_str))
+        })
+        == Some("stop")
+}
+
+fn message_role(message: &Value) -> &str {
+    message
+        .get("role")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            message
+                .get("info")
+                .and_then(|info| info.get("role"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("")
 }
 
 fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
@@ -581,7 +590,7 @@ fn validate_workspace_artifact_path(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_brief_ack, message_text};
+    use super::{assistant_message_is_terminal, message_text};
     use serde_json::json;
 
     #[test]
@@ -603,14 +612,16 @@ mod tests {
     }
 
     #[test]
-    fn brief_ack_detects_listo_and_ignores_real_replies() {
-        assert!(is_brief_ack("Listo."));
-        assert!(is_brief_ack(" listo "));
-        assert!(is_brief_ack("OK"));
-        assert!(!is_brief_ack(
-            "Listo. Creé el recurso usando el archivo que adjuntaste."
+    fn only_stop_finish_marks_the_latest_assistant_message_terminal() {
+        let in_progress = serde_json::json!([
+            {"info":{"role":"assistant","finish":"tool-calls"}}
+        ]);
+        let complete = serde_json::json!([
+            {"info":{"role":"assistant","finish":"stop"}}
+        ]);
+        assert!(!assistant_message_is_terminal(
+            in_progress.as_array().unwrap()
         ));
-        assert!(!is_brief_ack("¡Hola! ¿Cómo estás?"));
-        assert!(!is_brief_ack("done"));
+        assert!(assistant_message_is_terminal(complete.as_array().unwrap()));
     }
 }

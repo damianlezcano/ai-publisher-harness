@@ -73,6 +73,7 @@ export interface ProjectView {
 
 export interface AgentTaskEvent {
   projectId: string;
+  turnId?: string;
   status: "working" | "completed" | "failed" | "cancelled";
   message: string | null;
   registeredCreationIds: string[];

@@ -17,8 +17,8 @@ use project_agent::{
 };
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
-    MaterialContent, MaterialId, Message, MessageRole, MessageStatus, ProjectContentStore,
-    ProjectId, ProjectService, SystemClock, UuidV7IdGenerator,
+    MaterialContent, MaterialId, Message, MessageId, MessageRole, MessageStatus,
+    ProjectContentStore, ProjectId, ProjectService, SystemClock, UuidV7IdGenerator,
 };
 use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
@@ -185,9 +185,18 @@ impl
 /// durable user message contains exactly what the user typed.
 pub struct AgentRunInputs {
     project_id: ProjectId,
+    /// The durable user message is the logical identity of this run. It avoids
+    /// relying on assistant-message position or a session-wide count.
+    turn_id: Option<MessageId>,
     prompt: String,
     model: Option<ModelRef>,
     attachments: Vec<AgentAttachment>,
+}
+
+impl AgentRunInputs {
+    pub fn turn_id(&self) -> Option<&str> {
+        self.turn_id.as_ref().map(MessageId::as_str)
+    }
 }
 
 impl<E, T, P, R> AppState<E, T, P, R>
@@ -906,16 +915,18 @@ where
         prompt: &str,
         attachment_ids: &[String],
     ) -> AppResult<AgentRunInputs> {
-        let inputs = self.resolve_agent_inputs(project_id, prompt, attachment_ids)?;
+        let mut inputs = self.resolve_agent_inputs(project_id, prompt, attachment_ids)?;
         let material_ids: Vec<MaterialId> = attachment_ids
             .iter()
             .map(|id| parse_material_id(id))
             .collect::<AppResult<Vec<_>>>()?;
-        self.projects
+        let user_message = self
+            .projects
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .append_user_message(&inputs.project_id, prompt, &material_ids)
             .map_err(AppError::from_core)?;
+        inputs.turn_id = Some(user_message.id);
         Ok(inputs)
     }
 
@@ -923,6 +934,7 @@ where
     /// message reflecting the outcome (`ok`, `failed`, or `cancelled`).
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
         let project_id = inputs.project_id.clone();
+        let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
         match self.run_agent_with_inputs(inputs) {
             Ok(result) => {
                 let creation_ids: Vec<CreationId> = result
@@ -946,6 +958,7 @@ where
                     .map_err(AppError::from_core)?;
                 Ok(AgentRunView {
                     status: "completed".to_owned(),
+                    turn_id: turn_id.clone(),
                     registered_creation_ids: result.registered,
                     message: result.task.message,
                 })
@@ -959,6 +972,7 @@ where
                     .map_err(AppError::from_core)?;
                 Ok(AgentRunView {
                     status: "cancelled".to_owned(),
+                    turn_id: turn_id.clone(),
                     registered_creation_ids: Vec::new(),
                     message: Some(text),
                 })
@@ -972,6 +986,7 @@ where
                     .map_err(AppError::from_core)?;
                 Ok(AgentRunView {
                     status: "failed".to_owned(),
+                    turn_id,
                     registered_creation_ids: Vec::new(),
                     message: Some(err.message),
                 })
@@ -989,6 +1004,7 @@ where
         let result = self.run_agent_with_inputs(inputs);
         match result {
             Ok(run) => Ok(AgentRunView {
+                turn_id: None,
                 status: match run.task.status {
                     TaskStatus::Completed => "completed".to_owned(),
                     TaskStatus::Cancelled => "cancelled".to_owned(),
@@ -998,6 +1014,7 @@ where
                 message: run.task.message,
             }),
             Err(project_agent::AgentError::Cancelled) => Ok(AgentRunView {
+                turn_id: None,
                 status: "cancelled".to_owned(),
                 registered_creation_ids: Vec::new(),
                 message: Some("La creación se canceló.".to_owned()),
@@ -1026,6 +1043,7 @@ where
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
         Ok(AgentRunInputs {
             project_id,
+            turn_id: None,
             prompt: prompt.to_owned(),
             model,
             attachments,

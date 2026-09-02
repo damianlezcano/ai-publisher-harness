@@ -25,7 +25,7 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState<BackendReadiness>("starting");
   const { toasts, show } = useToast();
   const selectedIdRef = useRef(selectedId);
-  const inFlightRef = useRef(new Set<string>());
+  const inFlightRef = useRef(new Map<string, string>());
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -117,8 +117,11 @@ export default function App() {
     void api
       .onAgentTask((event) => {
         if (event.status === "working") {
-          inFlightRef.current.add(event.projectId);
+          inFlightRef.current.set(event.projectId, event.turnId ?? "");
         } else {
+          const activeTurn = inFlightRef.current.get(event.projectId);
+          if (activeTurn !== undefined && activeTurn !== "" && (event.turnId ?? "") !== activeTurn)
+            return;
           inFlightRef.current.delete(event.projectId);
         }
         const currentId = selectedIdRef.current;
@@ -288,7 +291,7 @@ export default function App() {
               onSendStart={() => {
                 const id = selectedIdRef.current;
                 if (!id) return;
-                inFlightRef.current.add(id);
+                inFlightRef.current.set(id, "");
                 setAgentPhase("working");
                 setAgentMessage(null);
               }}
