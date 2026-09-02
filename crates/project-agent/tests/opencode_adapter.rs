@@ -384,7 +384,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
     server.set_messages_body("[]");
     server.set_prompt_response_text("Voy a preparar la actividad.");
     server.set_prompt_response_finish("tool-calls");
-    server.set_diff_body("[]");
+    server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
         .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
@@ -395,7 +395,6 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
     let task = std::thread::scope(|scope| {
         scope.spawn(|| {
             std::thread::sleep(Duration::from_millis(120));
-            server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
             server.set_messages_body(
                 r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
             );

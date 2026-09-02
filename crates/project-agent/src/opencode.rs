@@ -132,9 +132,6 @@ impl OpenCodeAgentEngine {
                             }
                             last_artifact_fetch = Some(Instant::now());
                         }
-                        if !idle_artifacts.is_empty() {
-                            return Ok((phase, message, idle_artifacts));
-                        }
                         // A first nonempty reply (especially a brief "Listo.")
                         // is not terminal while no files exist: the sidecar
                         // often marks idle between the first text part and
