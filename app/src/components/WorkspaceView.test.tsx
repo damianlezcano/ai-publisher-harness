@@ -189,7 +189,7 @@ describe("WorkspaceView", () => {
   it("opens conversation details from the title and returns to the workspace on close", async () => {
     setupApi();
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
-    await userEvent.click(screen.getByRole("button", { name: "Detalles de la conversación" }));
+    await userEvent.click(screen.getByRole("button", { name: "Detalles de Fotosíntesis" }));
     expect(
       await screen.findByRole("dialog", { name: "Detalles de la conversación" }),
     ).toBeInTheDocument();

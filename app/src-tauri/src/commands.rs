@@ -153,8 +153,15 @@ pub async fn material_open(
 }
 
 #[tauri::command]
-pub async fn material_open_folder(state: State<'_, SharedState>, project_id: String, material_id: String) -> Result<(), AppError> {
-    blocking(state.inner().clone(), move |app| app.open_material_folder(&project_id, &material_id)).await
+pub async fn material_open_folder(
+    state: State<'_, SharedState>,
+    project_id: String,
+    material_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.open_material_folder(&project_id, &material_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -183,8 +190,15 @@ pub async fn creation_open(
 }
 
 #[tauri::command]
-pub async fn creation_open_folder(state: State<'_, SharedState>, project_id: String, creation_id: String) -> Result<(), AppError> {
-    blocking(state.inner().clone(), move |app| app.open_creation_folder(&project_id, &creation_id)).await
+pub async fn creation_open_folder(
+    state: State<'_, SharedState>,
+    project_id: String,
+    creation_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.open_creation_folder(&project_id, &creation_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -218,7 +232,11 @@ pub async fn preview_open_web(
     })
     .await?;
     let token = web.token.clone();
-    let preview_origin = format!("http://127.0.0.1:{}/preview/{}/", origin_port(&web.url), token);
+    let preview_origin = format!(
+        "http://127.0.0.1:{}/preview/{}/",
+        origin_port(&web.url),
+        token
+    );
     // Navigate to the creation entrypoint. The preview server also maps the
     // token root to index.html; this URL is the same artifact Abrir/Compartir use.
     let url = preview_entrypoint_url(&web.url);
@@ -575,5 +593,9 @@ pub async fn session_logs(state: State<'_, SharedState>) -> Result<Vec<SessionLo
 
 #[tauri::command]
 pub async fn session_logs_clear(state: State<'_, SharedState>) -> Result<(), AppError> {
-    blocking(state.inner().clone(), |app| { app.clear_session_logs(); Ok(()) }).await
+    blocking(state.inner().clone(), |app| {
+        app.clear_session_logs();
+        Ok(())
+    })
+    .await
 }

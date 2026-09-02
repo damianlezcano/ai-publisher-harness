@@ -79,7 +79,6 @@ export const messages = {
   conversations: {
     title: "Conversaciones",
     listAriaLabel: "Conversaciones",
-    selectAriaLabel: "Seleccionar conversación",
     newButton: "Nueva conversación",
     sharedLabel: "Compartido",
     menuAriaLabel: "Opciones de conversación",
@@ -353,7 +352,6 @@ export const messages = {
   },
 
   progress: {
-    creating: "Procesando tu solicitud…",
     importing: "Agregando archivos…",
     sharing: "Compartiendo…",
     sharingNote: "puede tardar unos segundos",

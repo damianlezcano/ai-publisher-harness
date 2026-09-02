@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { ModelSummary, ProjectView } from "../types";
+import type { ModelSummary, ProjectView, ProviderSummary } from "../types";
 import Dialog from "./ui/Dialog";
 import { kindLabel, modelOptionLabel } from "../labels";
 import { messages } from "../messages";
@@ -15,12 +15,15 @@ interface Props {
 export default function ConversationDetails({ project, active, onClose, onRefresh }: Props) {
   const [name, setName] = useState(project.name);
   const [models, setModels] = useState<ModelSummary[]>([]);
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api
-      .modelList()
-      .then(setModels)
+    void Promise.all([api.modelList(), api.providerList()])
+      .then(([modelList, providerList]) => {
+        setModels(modelList);
+        setProviders(providerList);
+      })
       .catch((err) => setError(errorMessage(err)));
   }, [project.id, project.name]);
 
@@ -48,6 +51,8 @@ export default function ConversationDetails({ project, active, onClose, onRefres
     }
   }
   const current = project.model ? `${project.model.providerId}::${project.model.modelId}` : "";
+  const connected = new Set(providers.filter((provider) => provider.connected).map((p) => p.id));
+  const visibleModels = models.filter((model) => model.free || connected.has(model.providerId));
 
   return (
     <Dialog title={messages.conversationDetails.title} onClose={onClose} closeButton>
@@ -80,7 +85,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
           onChange={(event) => void changeModel(event.target.value)}
         >
           <option value="">{messages.conversationDetails.globalDefault}</option>
-          {models.map((model) => (
+          {visibleModels.map((model) => (
             <option
               key={`${model.providerId}::${model.modelId}`}
               value={`${model.providerId}::${model.modelId}`}

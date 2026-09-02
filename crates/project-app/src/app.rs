@@ -1235,7 +1235,7 @@ where
         if selected.requires_choice {
             return Err(AppError::new(
                 ErrorCode::ModelUnavailable,
-                "No encontramos un modelo para usar. Elegí uno en Conectá tu IA.",
+                "No encontramos un modelo para usar. Elegí uno en los detalles de la conversación.",
             ));
         }
         Ok(Some(ModelRef {

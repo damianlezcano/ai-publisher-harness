@@ -48,6 +48,7 @@ const model = {
 function setup() {
   invokeMock.mockImplementation((command: string) => {
     if (command === "model_list") return Promise.resolve([model]);
+    if (command === "provider_list") return Promise.resolve([]);
     return Promise.resolve(undefined);
   });
 }

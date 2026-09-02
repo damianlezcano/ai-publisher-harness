@@ -15,7 +15,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = build_state(app.handle())?;
-            project_app::session_log::record("INFO", format!("startup version={}", project_app::APP_VERSION));
+            project_app::session_log::record(
+                "INFO",
+                format!("startup version={}", project_app::APP_VERSION),
+            );
             app.manage(Arc::new(state));
             Ok(())
         })

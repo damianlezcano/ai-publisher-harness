@@ -69,8 +69,13 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   }
 
   async function clearLogs() {
-    await api.sessionLogsClear();
-    setLogs([]);
+    try {
+      await api.sessionLogsClear();
+      setLogs([]);
+      setLoadingError(null);
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
   }
 
   useEffect(() => {
@@ -79,9 +84,13 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   }, [logs]);
 
   async function copyLogs() {
-    await navigator.clipboard?.writeText(
-      logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"),
-    );
+    try {
+      await navigator.clipboard?.writeText(
+        logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"),
+      );
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
   }
 
   return (
