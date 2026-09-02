@@ -105,6 +105,8 @@ export const api = {
     invoke<void>("model_select", { providerId, modelId }),
   conversationModelSelect: (projectId: string, providerId: string, modelId: string) =>
     invoke<void>("conversation_model_select", { projectId, providerId, modelId }),
+  conversationModelClear: (projectId: string) =>
+    invoke<void>("conversation_model_clear", { projectId }),
   modelGetSelected: () => invoke<SelectedModelView>("model_get_selected"),
   sessionLogs: () => invoke<SessionLogEntry[]>("session_logs"),
   sessionLogsClear: () => invoke<void>("session_logs_clear"),

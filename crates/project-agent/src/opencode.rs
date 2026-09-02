@@ -89,9 +89,9 @@ impl OpenCodeAgentEngine {
         session_id: &str,
         before_assistant_count: usize,
         originating_user_id: &str,
+        deadline: Instant,
     ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
-        let deadline = Instant::now() + self.task_timeout;
         let mut last_artifact_fetch: Option<Instant> = None;
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
@@ -266,86 +266,92 @@ impl AgentEngine for OpenCodeAgentEngine {
     }
 
     fn send(&self, session: &AgentSession, req: &AgentPrompt) -> AgentResult<AgentTask> {
-        self.require_ready()?;
-        log_event("task started");
-        let mut body = json!({
-            "parts": [{ "type": "text", "text": req.text }],
-        });
-        if let Some(model) = &req.model {
-            body["model"] = json!({
-                "providerID": model.provider_id,
-                "modelID": model.model_id,
+        let result = (|| {
+            self.require_ready()?;
+            log_event("task started");
+            let mut body = json!({
+                "parts": [{ "type": "text", "text": req.text }],
             });
-        }
-        let before_messages = self.fetch_message_list(&session.id)?;
-        let before_assistant_count = assistant_message_count(&before_messages);
-        let before_message_ids: std::collections::HashSet<String> = before_messages
-            .iter()
-            .filter_map(message_id)
-            .map(str::to_owned)
-            .collect();
-        let path = format!("/session/{}/prompt_async", session.id);
-        let (status, _) = self.backend.post(&path, &body).map_err(map_backend_error)?;
-        if status != 204 && !(200..300).contains(&status) {
-            log_event("task failed");
-            return Err(AgentError::Http(format!("prompt_async status {status}")));
-        }
-
-        // OpenCode creates the user message asynchronously. Capture its ID once
-        // and keep it immutable: recomputing "last user" while polling lets a
-        // later turn change the identity used to select this turn's response.
-        let anchor_deadline = Instant::now() + self.task_timeout;
-        let originating_user_id = loop {
-            let messages = self.fetch_message_list(&session.id)?;
-            if let Some(id) = messages
+            if let Some(model) = &req.model {
+                body["model"] = json!({
+                    "providerID": model.provider_id,
+                    "modelID": model.model_id,
+                });
+            }
+            let before_messages = self.fetch_message_list(&session.id)?;
+            let before_assistant_count = assistant_message_count(&before_messages);
+            let before_message_ids: std::collections::HashSet<String> = before_messages
                 .iter()
-                .rev()
-                .find(|message| {
-                    message_role(message) == "user"
-                        && message_id(message).is_some_and(|id| !before_message_ids.contains(id))
-                })
-                .and_then(message_id)
-            {
-                break id.to_owned();
+                .filter_map(message_id)
+                .map(str::to_owned)
+                .collect();
+            let path = format!("/session/{}/prompt_async", session.id);
+            let (status, _) = self.backend.post(&path, &body).map_err(map_backend_error)?;
+            if status != 204 && !(200..300).contains(&status) {
+                log_event("task failed");
+                return Err(AgentError::Http(format!("prompt_async status {status}")));
             }
-            if Instant::now() >= anchor_deadline {
-                self.lock_sessions().remove(&session.project_id);
-                return Err(AgentError::TaskFailed(
-                    "timed out waiting for turn identity".into(),
-                ));
-            }
-            thread::sleep(STATUS_POLL_INTERVAL);
-        };
 
-        match self.poll_session(&session.id, before_assistant_count, &originating_user_id) {
-            Ok((_phase, message, artifacts)) => {
-                log_event("task completed");
-                Ok(AgentTask {
-                    id: format!("{}-task", session.id),
-                    status: TaskStatus::Completed,
-                    artifacts,
-                    message,
-                })
+            // OpenCode creates the user message asynchronously. Capture its ID once
+            // and keep it immutable: recomputing "last user" while polling lets a
+            // later turn change the identity used to select this turn's response.
+            let deadline = Instant::now() + self.task_timeout;
+            let originating_user_id = loop {
+                let messages = self.fetch_message_list(&session.id)?;
+                if let Some(id) = messages
+                    .iter()
+                    .rev()
+                    .find(|message| {
+                        message_role(message) == "user"
+                            && message_id(message)
+                                .is_some_and(|id| !before_message_ids.contains(id))
+                    })
+                    .and_then(message_id)
+                {
+                    break id.to_owned();
+                }
+                if Instant::now() >= deadline {
+                    return Err(AgentError::TaskFailed(
+                        "timed out waiting for turn identity".into(),
+                    ));
+                }
+                thread::sleep(STATUS_POLL_INTERVAL);
+            };
+
+            match self.poll_session(
+                &session.id,
+                before_assistant_count,
+                &originating_user_id,
+                deadline,
+            ) {
+                Ok((_phase, message, artifacts)) => {
+                    log_event("task completed");
+                    Ok(AgentTask {
+                        id: format!("{}-task", session.id),
+                        status: TaskStatus::Completed,
+                        artifacts,
+                        message,
+                    })
+                }
+                Err(err @ AgentError::TaskFailed(_)) => {
+                    // A terminal failure must never be resumed by the next prompt.
+                    // The next turn gets a fresh OpenCode session.
+                    log_event("task failed");
+                    Err(err)
+                }
+                Err(AgentError::Timeout) => {
+                    // A task that started but never completed is not a backend
+                    // startup failure; keep Timeout for ensure_ready only.
+                    log_event("task failed");
+                    Err(AgentError::TaskFailed("timed out".into()))
+                }
+                Err(err) => Err(err),
             }
-            Err(err @ AgentError::TaskFailed(_)) => {
-                // A terminal failure must never be resumed by the next prompt.
-                // The next turn gets a fresh OpenCode session.
-                self.lock_sessions().remove(&session.project_id);
-                log_event("task failed");
-                Err(err)
-            }
-            Err(AgentError::Timeout) => {
-                // A task that started but never completed is not a backend
-                // startup failure; keep Timeout for ensure_ready only.
-                self.lock_sessions().remove(&session.project_id);
-                log_event("task failed");
-                Err(AgentError::TaskFailed("timed out".into()))
-            }
-            Err(err) => {
-                self.lock_sessions().remove(&session.project_id);
-                Err(err)
-            }
+        })();
+        if result.is_err() {
+            self.lock_sessions().remove(&session.project_id);
         }
+        result
     }
 
     fn cancel(&self, session: &AgentSession) -> AgentResult<()> {

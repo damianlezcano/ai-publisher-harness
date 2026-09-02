@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 const CAPACITY: usize = 500;
 static LOGS: OnceLock<Mutex<VecDeque<SessionLogEntry>>> = OnceLock::new();
-static MIN_LEVEL: OnceLock<LogLevel> = OnceLock::new();
+static MIN_LEVEL: OnceLock<Mutex<LogLevel>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
@@ -37,9 +37,12 @@ pub struct SessionLogEntry {
 fn buffer() -> &'static Mutex<VecDeque<SessionLogEntry>> {
     LOGS.get_or_init(|| Mutex::new(VecDeque::new()))
 }
+fn min_level() -> &'static Mutex<LogLevel> {
+    MIN_LEVEL.get_or_init(|| Mutex::new(LogLevel::Info))
+}
 /// Metadata only: callers must never pass prompts, secrets, paths, or generated contents.
 pub fn record(level: &str, message: impl Into<String>) {
-    if LogLevel::from_entry(level) < *MIN_LEVEL.get_or_init(|| LogLevel::Info) {
+    if LogLevel::from_entry(level) < *min_level().lock().unwrap_or_else(|e| e.into_inner()) {
         return;
     }
     let message = message.into();
@@ -67,7 +70,7 @@ pub fn configure_from_args(args: impl IntoIterator<Item = String>) {
             level = LogLevel::parse(&value);
         }
     }
-    let _ = MIN_LEVEL.set(level);
+    *min_level().lock().unwrap_or_else(|e| e.into_inner()) = level;
 }
 pub fn list() -> Vec<SessionLogEntry> {
     buffer()
@@ -79,4 +82,61 @@ pub fn list() -> Vec<SessionLogEntry> {
 }
 pub fn clear() {
     buffer().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn bounded_levels_and_clear_are_process_local() {
+        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        clear();
+        configure_from_args(["--debug".to_owned()]);
+        for index in 0..501 {
+            record("INFO", format!("entry-{index}"));
+        }
+        let entries = list();
+        assert_eq!(entries.len(), 500);
+        assert_eq!(
+            entries.first().map(|entry| entry.message.as_str()),
+            Some("entry-1")
+        );
+        assert_eq!(
+            LogLevel::Debug.cmp(&LogLevel::Info),
+            std::cmp::Ordering::Less
+        );
+        clear();
+        assert!(list().is_empty());
+    }
+
+    #[test]
+    fn configure_from_args_sets_level_ordering() {
+        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        clear();
+        configure_from_args(["--log-level".to_owned(), "warn".to_owned()]);
+        record("INFO", "hidden");
+        record("WARN", "shown");
+        assert_eq!(
+            list()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["shown"]
+        );
+        configure_from_args(["--log-level".to_owned(), "error".to_owned()]);
+        record("WARN", "hidden-again");
+        record("ERROR", "error");
+        assert_eq!(
+            list()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["shown", "error"]
+        );
+        clear();
+    }
 }

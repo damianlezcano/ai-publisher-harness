@@ -1155,10 +1155,27 @@ where
             .open_project(&project_id)
             .ok();
         let model = match project.and_then(|project| project.model) {
-            Some(model) => Some(ModelRef {
-                provider_id: model.provider_id,
-                model_id: model.model_id,
-            }),
+            Some(model)
+                if self.model_list().unwrap_or_default().iter().any(|available| {
+                    available.provider_id == model.provider_id
+                        && available.model_id == model.model_id
+                }) =>
+            {
+                Some(ModelRef {
+                    provider_id: model.provider_id,
+                    model_id: model.model_id,
+                })
+            }
+            Some(model) => {
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "conversation model unavailable conversation_id={} model={}/{} falling_back=global",
+                        project_id, model.provider_id, model.model_id
+                    ),
+                );
+                self.selected_model_ref()?
+            }
             None => self.selected_model_ref()?,
         };
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
@@ -1363,11 +1380,15 @@ where
             ));
         }
         let lock = self.agent.project_lock(project_id);
-        let Some(_guard) = lock.try_lock().ok() else {
-            return Err(AppError::new(
-                ErrorCode::Conflict,
-                "Esperá a que termine la solicitud antes de cambiar el modelo.",
-            ));
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    "Esperá a que termine la solicitud antes de cambiar el modelo.",
+                ));
+            }
         };
         self.projects
             .lock()
@@ -1383,6 +1404,33 @@ where
         crate::session_log::record(
             "INFO",
             format!("conversation model changed id={project_id} model={provider_id}/{model_id}"),
+        );
+        Ok(())
+    }
+
+    /// Clears this conversation's explicit model so future turns use the
+    /// global configured default. Existing terminal turns remain unchanged.
+    pub fn conversation_model_clear(&self, project_id: &str) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let lock = self.agent.project_lock(project_id);
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    "Esperá a que termine la solicitud antes de cambiar el modelo.",
+                ));
+            }
+        };
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_project_model(&pid, None)
+            .map_err(AppError::from_core)?;
+        crate::session_log::record(
+            "INFO",
+            format!("conversation model cleared id={project_id} fallback=global"),
         );
         Ok(())
     }

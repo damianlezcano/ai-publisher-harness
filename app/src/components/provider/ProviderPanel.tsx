@@ -59,6 +59,15 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     void load();
   };
 
+  async function refreshLogs() {
+    try {
+      const sessionLogs = await api.sessionLogs();
+      setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
+  }
+
   async function clearLogs() {
     await api.sessionLogsClear();
     setLogs([]);
@@ -84,15 +93,15 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     >
       <p className="muted">{messages.provider.privacyNote}</p>
 
-      <section className="provider-section" aria-label="Logs de esta sesión">
-        <h3>Logs de esta sesión</h3>
-        <p className="muted">
-          Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni
-          mensajes.
-        </p>
+      <section className="provider-section" aria-label={messages.sessionLogs.heading}>
+        <h3>{messages.sessionLogs.heading}</h3>
+        <p className="muted">{messages.sessionLogs.description}</p>
         <div className="row-actions">
           <button type="button" className="secondary" onClick={() => void clearLogs()}>
-            Limpiar
+            {messages.sessionLogs.clear}
+          </button>
+          <button type="button" className="secondary" onClick={() => void refreshLogs()}>
+            {messages.sessionLogs.refresh}
           </button>
           <button
             type="button"
@@ -100,12 +109,15 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
             onClick={() => void copyLogs()}
             disabled={logs.length === 0}
           >
-            Copiar
+            {messages.sessionLogs.copy}
           </button>
         </div>
-        <pre ref={logsRef} className="session-logs" aria-live="polite">
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {logs.length > 0 ? messages.sessionLogs.latestAnnouncement(logs[logs.length - 1].level) : ""}
+        </p>
+        <pre ref={logsRef} className="session-logs">
           {logs.length === 0
-            ? "Sin eventos todavía."
+            ? messages.sessionLogs.empty
             : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}
         </pre>
       </section>

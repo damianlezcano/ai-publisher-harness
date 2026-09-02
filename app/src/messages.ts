@@ -79,6 +79,7 @@ export const messages = {
   conversations: {
     title: "Conversaciones",
     listAriaLabel: "Conversaciones",
+    selectAriaLabel: "Seleccionar conversación",
     newButton: "Nueva conversación",
     sharedLabel: "Compartido",
     menuAriaLabel: "Opciones de conversación",
@@ -93,6 +94,39 @@ export const messages = {
 
   conversation: {
     defaultName: "Conversación nueva",
+  },
+
+  conversationDetails: {
+    title: "Detalles de la conversación",
+    titleAria(name: string) {
+      return `Detalles de ${name}`;
+    },
+    conversationHeading: "Conversación",
+    nameLabel: "Nombre",
+    rename: "Renombrar",
+    modelHeading: "Modelo",
+    modelLabel: "Modelo de esta conversación",
+    globalDefault: "Predeterminado de Configuración",
+    activeTurnNotice: "Esperá a que termine la solicitud antes de cambiar el modelo.",
+    filesHeading: "Archivos y material",
+    uploadedHeading: "Material subido",
+    noUploaded: "No hay material subido.",
+    openContainingFolder: "Abrir carpeta contenedora",
+    generatedHeading: "Creaciones generadas",
+    noGenerated: "No hay creaciones generadas.",
+  },
+
+  sessionLogs: {
+    heading: "Logs de esta sesión",
+    description:
+      "Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni mensajes.",
+    clear: "Limpiar",
+    copy: "Copiar",
+    refresh: "Actualizar",
+    empty: "Sin eventos todavía.",
+    latestAnnouncement(level: string) {
+      return `Nuevo evento de nivel ${level}.`;
+    },
   },
 
   common: {

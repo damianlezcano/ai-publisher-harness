@@ -551,6 +551,17 @@ pub async fn conversation_model_select(
 }
 
 #[tauri::command]
+pub async fn conversation_model_clear(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.conversation_model_clear(&project_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn model_get_selected(
     state: State<'_, SharedState>,
 ) -> Result<SelectedModelView, AppError> {

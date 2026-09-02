@@ -177,7 +177,27 @@ fn send_never_idle_times_out() {
         Err(err) => err,
         Ok(_) => panic!("timeout"),
     };
-    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out" || reason == "timed out waiting for turn identity"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn failed_send_evicts_cached_session_for_next_turn() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["busy"]);
+    server.set_status_delay(Duration::from_millis(50));
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let first = engine.open_session(&project()).expect("first session");
+    let _ = engine.send(&first, &prompt());
+    server.set_session_id("ses-fresh");
+    let second = engine.open_session(&project()).expect("fresh session");
+    assert_eq!(
+        second.id, "ses-fresh",
+        "failed turn must not reuse its session"
+    );
 }
 
 #[test]
@@ -357,7 +377,10 @@ fn send_idle_without_new_assistant_message_times_out() {
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let err = engine.send(&session, &prompt()).expect_err("timeout");
-    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
+    assert!(
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out" || reason == "timed out waiting for turn identity"),
+        "{err:?}"
+    );
 }
 
 #[test]

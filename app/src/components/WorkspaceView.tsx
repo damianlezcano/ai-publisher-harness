@@ -215,12 +215,16 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           <button
             type="button"
             className="title-button"
-            aria-label="Abrir detalles de la conversación"
+            aria-label={messages.conversationDetails.title}
+            aria-describedby="conversation-details-name"
             onClick={() => setDetailsOpen(true)}
           >
             {project.name}
           </button>
         </h1>
+        <span id="conversation-details-name" className="sr-only">
+          {project.name}
+        </span>
       </header>
 
       <div className="workspace-timeline">

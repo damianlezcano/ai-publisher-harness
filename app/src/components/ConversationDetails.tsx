@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
 import type { ModelSummary, ProjectView } from "../types";
 import Dialog from "./ui/Dialog";
-import { kindLabel } from "../labels";
+import { kindLabel, modelOptionLabel } from "../labels";
+import { messages } from "../messages";
 
 interface Props {
   project: ProjectView;
@@ -33,9 +34,13 @@ export default function ConversationDetails({ project, active, onClose, onRefres
     }
   }
   async function changeModel(value: string) {
-    const [providerId, modelId] = value.split("::");
     try {
-      await api.conversationModelSelect(project.id, providerId, modelId);
+      if (value === "") {
+        await api.conversationModelClear(project.id);
+      } else {
+        const [providerId, modelId] = value.split("::");
+        await api.conversationModelSelect(project.id, providerId, modelId);
+      }
       await onRefresh();
       setError(null);
     } catch (err) {
@@ -45,10 +50,10 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const current = project.model ? `${project.model.providerId}::${project.model.modelId}` : "";
 
   return (
-    <Dialog title="Detalles de la conversación" onClose={onClose} closeButton>
+    <Dialog title={messages.conversationDetails.title} onClose={onClose} closeButton>
       <section className="provider-section">
-        <h3>Conversación</h3>
-        <label htmlFor="conversation-name">Nombre</label>
+        <h3>{messages.conversationDetails.conversationHeading}</h3>
+        <label htmlFor="conversation-name">{messages.conversationDetails.nameLabel}</label>
         <div className="row-actions wrap">
           <input
             id="conversation-name"
@@ -61,39 +66,38 @@ export default function ConversationDetails({ project, active, onClose, onRefres
             onClick={() => void rename()}
             disabled={active || name.trim() === project.name}
           >
-            Renombrar
+            {messages.conversationDetails.rename}
           </button>
         </div>
       </section>
       <section className="provider-section">
-        <h3>Modelo</h3>
-        <label htmlFor="conversation-model">Modelo de esta conversación</label>
+        <h3>{messages.conversationDetails.modelHeading}</h3>
+        <label htmlFor="conversation-model">{messages.conversationDetails.modelLabel}</label>
         <select
           id="conversation-model"
           value={current}
           disabled={active}
           onChange={(event) => void changeModel(event.target.value)}
         >
-          <option value="">Predeterminado de Configuración</option>
+          <option value="">{messages.conversationDetails.globalDefault}</option>
           {models.map((model) => (
             <option
               key={`${model.providerId}::${model.modelId}`}
               value={`${model.providerId}::${model.modelId}`}
             >
-              {model.name}
-              {model.free ? " · Gratis" : " · De pago"}
+              {modelOptionLabel(model)}
             </option>
           ))}
         </select>
         {active && (
-          <p className="notice">Esperá a que termine la solicitud antes de cambiar el modelo.</p>
+          <p className="notice">{messages.conversationDetails.activeTurnNotice}</p>
         )}
       </section>
       <section className="provider-section">
-        <h3>Archivos y material</h3>
-        <h4>Material subido</h4>
+        <h3>{messages.conversationDetails.filesHeading}</h3>
+        <h4>{messages.conversationDetails.uploadedHeading}</h4>
         {project.materials.length === 0 ? (
-          <p className="muted">No hay material subido.</p>
+          <p className="muted">{messages.conversationDetails.noUploaded}</p>
         ) : (
           <ul className="item-list">
             {project.materials.map((material) => (
@@ -104,15 +108,15 @@ export default function ConversationDetails({ project, active, onClose, onRefres
                   className="secondary"
                   onClick={() => void api.materialOpenFolder(project.id, material.id)}
                 >
-                  Abrir carpeta contenedora
+                  {messages.conversationDetails.openContainingFolder}
                 </button>
               </li>
             ))}
           </ul>
         )}
-        <h4>Creaciones generadas</h4>
+        <h4>{messages.conversationDetails.generatedHeading}</h4>
         {project.creations.length === 0 ? (
-          <p className="muted">No hay creaciones generadas.</p>
+          <p className="muted">{messages.conversationDetails.noGenerated}</p>
         ) : (
           <ul className="item-list">
             {project.creations.map((creation) => (
@@ -123,7 +127,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
                   className="secondary"
                   onClick={() => void api.creationOpenFolder(project.id, creation.id)}
                 >
-                  Abrir carpeta contenedora
+                  {messages.conversationDetails.openContainingFolder}
                 </button>
               </li>
             ))}

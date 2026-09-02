@@ -58,6 +58,7 @@ pub fn run() {
             commands::model_list,
             commands::model_select,
             commands::conversation_model_select,
+            commands::conversation_model_clear,
             commands::model_get_selected,
             commands::session_logs,
             commands::session_logs_clear,

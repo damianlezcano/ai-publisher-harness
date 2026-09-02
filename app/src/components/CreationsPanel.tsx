@@ -75,7 +75,7 @@ export function CreationCard(props: CreationCardProps) {
       </p>
       {error != null ? <ErrorNotice error={error} /> : null}
       <div className="creation-card-main">
-        <span className="creation-card-title" aria-label={creation.displayName}>
+        <span className="creation-card-title">
           <span className="creation-card-icon" aria-hidden="true">
             {kindIcon(creation.kind)}
           </span>
