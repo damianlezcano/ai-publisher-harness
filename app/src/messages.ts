@@ -172,7 +172,7 @@ export const messages = {
   },
 
   agent: {
-    creating: "Creando tu recurso…",
+    creating: "Procesando tu solicitud…",
     taskFailed: "No se pudo completar la creación.",
   },
 
@@ -319,7 +319,7 @@ export const messages = {
   },
 
   progress: {
-    creating: "Creando tu recurso…",
+    creating: "Procesando tu solicitud…",
     importing: "Agregando archivos…",
     sharing: "Compartiendo…",
     sharingNote: "puede tardar unos segundos",

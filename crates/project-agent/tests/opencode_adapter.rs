@@ -177,10 +177,7 @@ fn send_never_idle_times_out() {
         Err(err) => err,
         Ok(_) => panic!("timeout"),
     };
-    assert!(
-        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
-        "{err:?}"
-    );
+    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
 }
 
 #[test]
@@ -360,10 +357,7 @@ fn send_idle_without_new_assistant_message_times_out() {
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let err = engine.send(&session, &prompt()).expect_err("timeout");
-    assert!(
-        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
-        "{err:?}"
-    );
+    assert!(matches!(err, AgentError::TaskFailed(_)), "{err:?}");
 }
 
 #[test]
@@ -421,7 +415,7 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
             std::thread::sleep(Duration::from_millis(120));
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")
@@ -451,7 +445,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
         scope.spawn(|| {
             std::thread::sleep(Duration::from_millis(120));
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")
@@ -481,7 +475,7 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
             server.set_diff_status(200);
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")

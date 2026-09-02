@@ -287,6 +287,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .create_project(name)
             .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation created id={}", project.id));
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
@@ -304,6 +305,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .rename_project(&pid, name)
             .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation renamed id={id}"));
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
@@ -362,6 +364,10 @@ where
             creations,
             messages,
             publication,
+            model: project.model.as_ref().map(|model| ConversationModelView {
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
+            }),
         })
     }
 
@@ -620,6 +626,15 @@ where
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
     }
 
+    pub fn open_material_folder(&self, project_id: &str, material_id: &str) -> AppResult<()> {
+        let path = self.material_path(project_id, material_id)?;
+        let directory = path
+            .parent()
+            .ok_or_else(|| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
+    }
+
     // -- Creations ---------------------------------------------------------
 
     pub fn set_creation_visibility(
@@ -671,6 +686,15 @@ where
         let path = self.creation_path(project_id, creation_id)?;
         opener::open(path)
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
+    }
+
+    pub fn open_creation_folder(&self, project_id: &str, creation_id: &str) -> AppResult<()> {
+        let path = self.creation_path(project_id, creation_id)?;
+        let directory = path
+            .parent()
+            .ok_or_else(|| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
     }
 
     // -- Preview ------------------------------------------------------------
@@ -927,6 +951,15 @@ where
             .append_user_message(&inputs.project_id, prompt, &material_ids)
             .map_err(AppError::from_core)?;
         inputs.turn_id = Some(user_message.id);
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "turn accepted conversation_id={} message_id={} chars={}",
+                inputs.project_id,
+                inputs.turn_id.as_ref().expect("turn id"),
+                prompt.chars().count()
+            ),
+        );
         Ok(inputs)
     }
 
@@ -1055,8 +1088,21 @@ where
             return Err(AppError::invalid("Escribí qué querés crear."));
         }
         let project_id = parse_project_id(project_id)?;
-        // The global model selection applies to the next prompt (design §12).
-        let model = self.selected_model_ref()?;
+        // An explicit conversation model is captured before the user message
+        // is persisted; otherwise retain the established global default.
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&project_id)
+            .map_err(AppError::from_core)?;
+        let model = match project.model {
+            Some(model) => Some(ModelRef {
+                provider_id: model.provider_id,
+                model_id: model.model_id,
+            }),
+            None => self.selected_model_ref()?,
+        };
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
         Ok(AgentRunInputs {
             project_id,
@@ -1130,6 +1176,14 @@ where
             AgentStatus::Ready => "ready",
             AgentStatus::Failed => "failed",
         }
+    }
+
+    pub fn session_logs(&self) -> Vec<crate::session_log::SessionLogEntry> {
+        crate::session_log::list()
+    }
+
+    pub fn clear_session_logs(&self) {
+        crate::session_log::clear();
     }
 
     // -- Provider ------------------------------------------------------------
@@ -1229,6 +1283,50 @@ where
         self.provider
             .select_model(provider_id, model_id)
             .map_err(AppError::from_provider)
+    }
+
+    /// Selects a model for exactly one conversation. This does not mutate the
+    /// global fallback and is rejected while that conversation has a live run.
+    pub fn conversation_model_select(
+        &self,
+        project_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let models = self.model_list()?;
+        if !models
+            .iter()
+            .any(|model| model.provider_id == provider_id && model.model_id == model_id)
+        {
+            return Err(AppError::new(
+                ErrorCode::ModelUnavailable,
+                "Ese modelo ya no está disponible.",
+            ));
+        }
+        let lock = self.agent.project_lock(project_id);
+        let Some(_guard) = lock.try_lock().ok() else {
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "Esperá a que termine la solicitud antes de cambiar el modelo.",
+            ));
+        };
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_project_model(
+                &pid,
+                Some(project_core::ConversationModel {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                }),
+            )
+            .map_err(AppError::from_core)?;
+        crate::session_log::record(
+            "INFO",
+            format!("conversation model changed id={project_id} model={provider_id}/{model_id}"),
+        );
+        Ok(())
     }
 
     pub fn model_get_selected(&self) -> AppResult<SelectedModelView> {

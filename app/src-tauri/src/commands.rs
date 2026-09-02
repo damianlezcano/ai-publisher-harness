@@ -10,7 +10,7 @@ use std::sync::Arc;
 use project_app::{
     AppError, AppState, AppStatusView, CreationView, MaterialAddImageView, MaterialView,
     MaterialsImportReport, PreviewData, ProjectSummary, ProjectView, PublicationView,
-    SelectedModelView,
+    SelectedModelView, SessionLogEntry,
 };
 use project_provider::{
     ConnectionTest, ConnectionView, ModelSummary, OAuthAttempt, OAuthStatus, ProviderDetail,
@@ -153,6 +153,11 @@ pub async fn material_open(
 }
 
 #[tauri::command]
+pub async fn material_open_folder(state: State<'_, SharedState>, project_id: String, material_id: String) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| app.open_material_folder(&project_id, &material_id)).await
+}
+
+#[tauri::command]
 pub async fn creation_set_visibility(
     state: State<'_, SharedState>,
     project_id: String,
@@ -175,6 +180,11 @@ pub async fn creation_open(
         app.open_creation(&project_id, &creation_id)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn creation_open_folder(state: State<'_, SharedState>, project_id: String, creation_id: String) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| app.open_creation_folder(&project_id, &creation_id)).await
 }
 
 #[tauri::command]
@@ -528,8 +538,31 @@ pub async fn model_select(
 }
 
 #[tauri::command]
+pub async fn conversation_model_select(
+    state: State<'_, SharedState>,
+    project_id: String,
+    provider_id: String,
+    model_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.conversation_model_select(&project_id, &provider_id, &model_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn model_get_selected(
     state: State<'_, SharedState>,
 ) -> Result<SelectedModelView, AppError> {
     blocking(state.inner().clone(), |app| app.model_get_selected()).await
+}
+
+#[tauri::command]
+pub async fn session_logs(state: State<'_, SharedState>) -> Result<Vec<SessionLogEntry>, AppError> {
+    blocking(state.inner().clone(), |app| Ok(app.session_logs())).await
+}
+
+#[tauri::command]
+pub async fn session_logs_clear(state: State<'_, SharedState>) -> Result<(), AppError> {
+    blocking(state.inner().clone(), |app| { app.clear_session_logs(); Ok(()) }).await
 }

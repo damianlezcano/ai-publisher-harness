@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
-import type { ProviderSummary } from "../../types";
+import type { ProviderSummary, SessionLogEntry } from "../../types";
 import ProviderCard from "./ProviderCard";
-import ModelSelector from "./ModelSelector";
 import Dialog from "../ui/Dialog";
 import { messages } from "../../messages";
 
@@ -16,7 +15,7 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [othersOpen, setOthersOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [modelRefreshKey, setModelRefreshKey] = useState(0);
+  const [logs, setLogs] = useState<SessionLogEntry[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -32,9 +31,10 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     let active = true;
     void (async () => {
       try {
-        const list = await api.providerList();
+        const [list, sessionLogs] = await Promise.all([api.providerList(), api.sessionLogs()]);
         if (active) {
           setProviders(list);
+          setLogs(sessionLogs);
           setLoadingError(null);
         }
       } catch (err) {
@@ -54,9 +54,13 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
 
   const changed = () => {
     onChanged();
-    setModelRefreshKey((k) => k + 1);
     void load();
   };
+
+  async function clearLogs() {
+    await api.sessionLogsClear();
+    setLogs([]);
+  }
 
   return (
     <Dialog
@@ -67,7 +71,12 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     >
       <p className="muted">{messages.provider.privacyNote}</p>
 
-      <ModelSelector refreshKey={modelRefreshKey} />
+      <section className="provider-section" aria-label="Logs de esta sesión">
+        <h3>Logs de esta sesión</h3>
+        <p className="muted">Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni mensajes.</p>
+        <div className="row-actions"><button type="button" className="secondary" onClick={() => void clearLogs()}>Limpiar</button></div>
+        <pre className="session-logs" aria-live="polite">{logs.length === 0 ? "Sin eventos todavía." : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}</pre>
+      </section>
 
       {loadingError && (
         <p className="error" role="alert">

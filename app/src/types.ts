@@ -69,6 +69,12 @@ export interface ProjectView {
   creations: CreationView[];
   publication: PublicationView;
   messages: MessageView[];
+  model?: ConversationModelView | null;
+}
+
+export interface ConversationModelView {
+  providerId: string;
+  modelId: string;
 }
 
 export interface AgentTaskEvent {
@@ -169,4 +175,9 @@ export interface SelectedModelView {
   model: ModelSummary;
   notice: string | null;
   requiresChoice: boolean;
+}
+
+export interface SessionLogEntry {
+  level: "ERROR" | "WARN" | "INFO" | "DEBUG" | string;
+  message: string;
 }

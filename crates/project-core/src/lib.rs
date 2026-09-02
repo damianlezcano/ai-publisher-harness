@@ -397,6 +397,14 @@ pub struct Creation {
     #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
 }
+/// The optional model explicitly chosen for one conversation. It deliberately
+/// stores only provider/model identifiers, never credentials or provider data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationModel {
+    pub provider_id: String,
+    pub model_id: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -413,6 +421,8 @@ pub struct Project {
     pub state: ProjectState,
     #[serde(rename = "publicationRoute", skip_serializing_if = "Option::is_none")]
     pub publication_route: Option<PublicationRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ConversationModel>,
     pub materials: Vec<Material>,
     pub creations: Vec<Creation>,
     #[serde(default)]
@@ -428,6 +438,7 @@ impl Project {
             updated_at: now,
             state: ProjectState::Local,
             publication_route: None,
+            model: None,
             materials: vec![],
             creations: vec![],
             messages: vec![],
@@ -656,6 +667,7 @@ impl SchemaV1Project {
             updated_at: self.updated_at,
             state: self.state,
             publication_route: None,
+            model: None,
             materials: self.materials,
             creations: self
                 .creations
@@ -800,6 +812,19 @@ where
         let e = p.updated_at.clone();
         p.migrate_to_v3()?;
         p.name = ProjectName::parse(name)?;
+        p.updated_at = self.clock.now();
+        self.repository.replace(&p, &e)?;
+        Ok(p)
+    }
+    pub fn set_project_model(
+        &mut self,
+        id: &ProjectId,
+        model: Option<ConversationModel>,
+    ) -> CoreResult<Project> {
+        let mut p = self.repository.get(id)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v3()?;
+        p.model = model;
         p.updated_at = self.clock.now();
         self.repository.replace(&p, &e)?;
         Ok(p)

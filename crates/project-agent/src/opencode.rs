@@ -88,6 +88,7 @@ impl OpenCodeAgentEngine {
         &self,
         session_id: &str,
         before_assistant_count: usize,
+        originating_user_id: &str,
     ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
@@ -103,12 +104,11 @@ impl OpenCodeAgentEngine {
             match phase.as_str() {
                 "idle" | "done" | "complete" | "completed" | "success" => {
                     let messages = self.fetch_message_list(session_id)?;
-                    let originating_user_id = last_user_message_id(&messages);
                     if assistant_message_count(&messages) > before_assistant_count {
                         let message = authoritative_assistant_text(
                             &messages,
                             before_assistant_count,
-                            originating_user_id.as_deref(),
+                            Some(originating_user_id),
                         );
                         let should_fetch = match last_artifact_fetch {
                             None => true,
@@ -131,7 +131,7 @@ impl OpenCodeAgentEngine {
                         if assistant_message_is_terminal(
                             &messages,
                             before_assistant_count,
-                            originating_user_id.as_deref(),
+                            Some(originating_user_id),
                         ) {
                             // Do not let the artifact refresh interval hide a
                             // Creation that was written just before the final
@@ -146,12 +146,11 @@ impl OpenCodeAgentEngine {
                 }
                 "failed" | "error" | "failure" => {
                     let messages = self.fetch_message_list(session_id)?;
-                    let originating_user_id = last_user_message_id(&messages);
                     let text = if assistant_message_count(&messages) > before_assistant_count {
                         authoritative_assistant_text(
                             &messages,
                             before_assistant_count,
-                            originating_user_id.as_deref(),
+                            Some(originating_user_id),
                         )
                     } else {
                         None
@@ -280,6 +279,11 @@ impl AgentEngine for OpenCodeAgentEngine {
         }
         let before_messages = self.fetch_message_list(&session.id)?;
         let before_assistant_count = assistant_message_count(&before_messages);
+        let before_message_ids: std::collections::HashSet<String> = before_messages
+            .iter()
+            .filter_map(message_id)
+            .map(str::to_owned)
+            .collect();
         let path = format!("/session/{}/prompt_async", session.id);
         let (status, _) = self.backend.post(&path, &body).map_err(map_backend_error)?;
         if status != 204 && !(200..300).contains(&status) {
@@ -287,7 +291,33 @@ impl AgentEngine for OpenCodeAgentEngine {
             return Err(AgentError::Http(format!("prompt_async status {status}")));
         }
 
-        match self.poll_session(&session.id, before_assistant_count) {
+        // OpenCode creates the user message asynchronously. Capture its ID once
+        // and keep it immutable: recomputing "last user" while polling lets a
+        // later turn change the identity used to select this turn's response.
+        let anchor_deadline = Instant::now() + self.task_timeout;
+        let originating_user_id = loop {
+            let messages = self.fetch_message_list(&session.id)?;
+            if let Some(id) = messages
+                .iter()
+                .rev()
+                .find(|message| {
+                    message_role(message) == "user"
+                        && message_id(message).is_some_and(|id| !before_message_ids.contains(id))
+                })
+                .and_then(message_id)
+            {
+                break id.to_owned();
+            }
+            if Instant::now() >= anchor_deadline {
+                self.lock_sessions().remove(&session.project_id);
+                return Err(AgentError::TaskFailed(
+                    "timed out waiting for turn identity".into(),
+                ));
+            }
+            thread::sleep(STATUS_POLL_INTERVAL);
+        };
+
+        match self.poll_session(&session.id, before_assistant_count, &originating_user_id) {
             Ok((_phase, message, artifacts)) => {
                 log_event("task completed");
                 Ok(AgentTask {
@@ -298,16 +328,23 @@ impl AgentEngine for OpenCodeAgentEngine {
                 })
             }
             Err(err @ AgentError::TaskFailed(_)) => {
+                // A terminal failure must never be resumed by the next prompt.
+                // The next turn gets a fresh OpenCode session.
+                self.lock_sessions().remove(&session.project_id);
                 log_event("task failed");
                 Err(err)
             }
             Err(AgentError::Timeout) => {
                 // A task that started but never completed is not a backend
                 // startup failure; keep Timeout for ensure_ready only.
+                self.lock_sessions().remove(&session.project_id);
                 log_event("task failed");
                 Err(AgentError::TaskFailed("timed out".into()))
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                self.lock_sessions().remove(&session.project_id);
+                Err(err)
+            }
         }
     }
 
@@ -406,15 +443,6 @@ fn message_role(message: &Value) -> &str {
         .unwrap_or("")
 }
 
-fn last_user_message_id(messages: &[Value]) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message_role(message) == "user")
-        .and_then(message_id)
-        .map(str::to_owned)
-}
-
 fn authoritative_assistant_text(
     messages: &[Value],
     before_assistant_count: usize,
@@ -468,10 +496,10 @@ fn parent_message_id(message: &Value) -> Option<&str> {
 fn message_belongs_to_turn(message: &Value, originating_user_id: Option<&str>) -> bool {
     match (originating_user_id, parent_message_id(message)) {
         (Some(expected), Some(actual)) => expected == actual,
-        // Some test doubles and older responses omit parentID. The assistant
-        // watermark still proves that such a message was created by this turn.
-        (_, None) => true,
-        (None, Some(_)) => true,
+        // In production a response without the explicit turn link is not
+        // attributable safely. Do not use lenient fallbacks that can attach a
+        // stale session event to the current turn.
+        _ => false,
     }
 }
 

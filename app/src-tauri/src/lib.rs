@@ -14,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = build_state(app.handle())?;
+            project_app::session_log::record("INFO", format!("startup version={}", project_app::APP_VERSION));
             app.manage(Arc::new(state));
             Ok(())
         })
@@ -28,8 +29,10 @@ pub fn run() {
             commands::materials_add_from_paths,
             commands::material_remove,
             commands::material_open,
+            commands::material_open_folder,
             commands::creation_set_visibility,
             commands::creation_open,
+            commands::creation_open_folder,
             commands::preview_data,
             commands::preview_open_web,
             commands::preview_close,
@@ -53,7 +56,10 @@ pub fn run() {
             commands::provider_test_connection,
             commands::model_list,
             commands::model_select,
+            commands::conversation_model_select,
             commands::model_get_selected,
+            commands::session_logs,
+            commands::session_logs_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
