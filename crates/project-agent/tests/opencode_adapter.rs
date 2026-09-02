@@ -178,8 +178,25 @@ fn send_never_idle_times_out() {
         Ok(_) => panic!("timeout"),
     };
     assert!(
-        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out" || reason == "timed out waiting for turn identity"),
         "{err:?}"
+    );
+}
+
+#[test]
+fn failed_send_evicts_cached_session_for_next_turn() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["busy"]);
+    server.set_status_delay(Duration::from_millis(50));
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let first = engine.open_session(&project()).expect("first session");
+    let _ = engine.send(&first, &prompt());
+    server.set_session_id("ses-fresh");
+    let second = engine.open_session(&project()).expect("fresh session");
+    assert_eq!(
+        second.id, "ses-fresh",
+        "failed turn must not reuse its session"
     );
 }
 
@@ -361,7 +378,7 @@ fn send_idle_without_new_assistant_message_times_out() {
     let session = engine.open_session(&project()).expect("session");
     let err = engine.send(&session, &prompt()).expect_err("timeout");
     assert!(
-        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out"),
+        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out" || reason == "timed out waiting for turn identity"),
         "{err:?}"
     );
 }
@@ -421,7 +438,7 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
             std::thread::sleep(Duration::from_millis(120));
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")
@@ -451,7 +468,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
         scope.spawn(|| {
             std::thread::sleep(Duration::from_millis(120));
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")
@@ -481,7 +498,7 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
             server.set_diff_status(200);
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
             server.set_messages_body(
-                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+                r#"[{"info":{"id":"user-appended-1","role":"user"},"parts":[{"type":"text","text":"prompt"}]},{"info":{"id":"msg-final","role":"assistant","parentID":"user-appended-1","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
             );
         });
         engine.send(&session, &prompt()).expect("send")

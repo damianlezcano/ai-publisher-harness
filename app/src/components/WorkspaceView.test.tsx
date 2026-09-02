@@ -186,6 +186,17 @@ beforeEach(() => {
 });
 
 describe("WorkspaceView", () => {
+  it("opens conversation details from the title and returns to the workspace on close", async () => {
+    setupApi();
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+    await userEvent.click(screen.getByRole("button", { name: "Detalles de Fotosíntesis" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Detalles de la conversación" }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cerrar" }));
+    expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument();
+  });
+
   it("renders the project name as an h1", () => {
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
     expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument();

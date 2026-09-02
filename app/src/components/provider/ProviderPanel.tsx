@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../api";
-import type { ProviderSummary } from "../../types";
+import type { ProviderSummary, SessionLogEntry } from "../../types";
 import ProviderCard from "./ProviderCard";
-import ModelSelector from "./ModelSelector";
 import Dialog from "../ui/Dialog";
 import { messages } from "../../messages";
 
@@ -16,7 +15,8 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [othersOpen, setOthersOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [modelRefreshKey, setModelRefreshKey] = useState(0);
+  const [logs, setLogs] = useState<SessionLogEntry[]>([]);
+  const logsRef = useRef<HTMLPreElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -33,8 +33,10 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     void (async () => {
       try {
         const list = await api.providerList();
+        const sessionLogs = await api.sessionLogs().catch(() => []);
         if (active) {
           setProviders(list);
+          setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
           setLoadingError(null);
         }
       } catch (err) {
@@ -54,9 +56,42 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
 
   const changed = () => {
     onChanged();
-    setModelRefreshKey((k) => k + 1);
     void load();
   };
+
+  async function refreshLogs() {
+    try {
+      const sessionLogs = await api.sessionLogs();
+      setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
+  }
+
+  async function clearLogs() {
+    try {
+      await api.sessionLogsClear();
+      setLogs([]);
+      setLoadingError(null);
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
+  }
+
+  useEffect(() => {
+    const node = logsRef.current;
+    if (node && typeof node.scrollTo === "function") node.scrollTo({ top: node.scrollHeight });
+  }, [logs]);
+
+  async function copyLogs() {
+    try {
+      await navigator.clipboard?.writeText(
+        logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"),
+      );
+    } catch (err) {
+      setLoadingError(errorMessage(err));
+    }
+  }
 
   return (
     <Dialog
@@ -67,7 +102,36 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     >
       <p className="muted">{messages.provider.privacyNote}</p>
 
-      <ModelSelector refreshKey={modelRefreshKey} />
+      <section className="provider-section" aria-label={messages.sessionLogs.heading}>
+        <h3>{messages.sessionLogs.heading}</h3>
+        <p className="muted">{messages.sessionLogs.description}</p>
+        <div className="row-actions">
+          <button type="button" className="secondary" onClick={() => void clearLogs()}>
+            {messages.sessionLogs.clear}
+          </button>
+          <button type="button" className="secondary" onClick={() => void refreshLogs()}>
+            {messages.sessionLogs.refresh}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void copyLogs()}
+            disabled={logs.length === 0}
+          >
+            {messages.sessionLogs.copy}
+          </button>
+        </div>
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {logs.length > 0
+            ? messages.sessionLogs.latestAnnouncement(logs[logs.length - 1].level)
+            : ""}
+        </p>
+        <pre ref={logsRef} className="session-logs">
+          {logs.length === 0
+            ? messages.sessionLogs.empty
+            : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}
+        </pre>
+      </section>
 
       {loadingError && (
         <p className="error" role="alert">

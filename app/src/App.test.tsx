@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
@@ -235,13 +235,15 @@ describe("App", () => {
     expect(sidebar).toBeInTheDocument();
 
     const selected = await waitFor(() => {
-      const button = screen.getByRole("button", { name: new RegExp(baseSummary.name) });
+      const button = within(sidebar).getByRole("button", { name: new RegExp(baseSummary.name) });
       expect(button).toHaveAttribute("aria-current", "page");
       return button;
     });
     expect(selected).toBeInTheDocument();
 
-    const sharedButton = screen.getByRole("button", { name: new RegExp(otherSummary.name) });
+    const sharedButton = within(sidebar).getByRole("button", {
+      name: new RegExp(otherSummary.name),
+    });
     expect(sharedButton).not.toHaveAttribute("aria-current");
     expect(screen.getByText(messages.conversations.sharedLabel)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: messages.conversations.title })).toBeInTheDocument();
@@ -445,7 +447,7 @@ describe("App", () => {
     expect(otherDeleteItem).toBeEnabled();
   });
 
-  it("opens settings from the gear button, shows the model selector there, and restores the conversation on close", async () => {
+  it("opens settings without a competing model selector and restores the conversation on close", async () => {
     mockBackend({ projects: [baseSummary] });
     render(<App />);
     await waitForWorkspace();
@@ -455,7 +457,8 @@ describe("App", () => {
     expect(
       await screen.findByRole("dialog", { name: messages.provider.heading }),
     ).toBeInTheDocument();
-    expect(await screen.findByLabelText(messages.model.label)).toBeInTheDocument();
+    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
+    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: messages.common.close }));
     await waitFor(() =>
@@ -729,7 +732,9 @@ describe("App", () => {
       ).toBeInTheDocument(),
     );
     expect(
-      screen.getByRole("button", { name: new RegExp(messages.conversation.defaultName) }),
+      within(
+        screen.getByRole("navigation", { name: messages.conversations.listAriaLabel }),
+      ).getByRole("button", { name: new RegExp(messages.conversation.defaultName) }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Proyecto sin título")).not.toBeInTheDocument();
     expect(screen.queryAllByText(/Proyecto sin título/)).toHaveLength(0);
@@ -742,7 +747,11 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument(),
     );
-    expect(screen.getByRole("button", { name: /Fotosíntesis/ })).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("navigation", { name: messages.conversations.listAriaLabel }),
+      ).getByRole("button", { name: /Fotosíntesis/ }),
+    ).toBeInTheDocument();
   });
 
   it("preserves sidebar ordering when legacy names are present", async () => {
@@ -951,13 +960,14 @@ describe("App", () => {
     mockBackend({ projects: [baseSummary, otherSummary] });
     render(<App />);
     await waitForWorkspace();
-    const selected = screen.getByRole("button", { name: new RegExp(baseSummary.name) });
+    const sidebar = screen.getByRole("navigation", { name: messages.conversations.listAriaLabel });
+    const selected = within(sidebar).getByRole("button", { name: new RegExp(baseSummary.name) });
     expect(selected.querySelector(".conversation-shared-badge")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
 
     await waitFor(() => {
-      const button = screen.getByRole("button", { name: new RegExp(baseSummary.name) });
+      const button = within(sidebar).getByRole("button", { name: new RegExp(baseSummary.name) });
       expect(button.querySelector(".conversation-shared-badge")).toHaveTextContent(
         messages.conversations.sharedLabel,
       );

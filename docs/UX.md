@@ -100,7 +100,8 @@ stack trace.
 The 2×2 dashboard layout is **not** the target UI. Approved layout: persistent left conversation
 list / center conversation / fixed bottom bar with attachment, prompt, send, and a single
 Compartir action / separate Settings (Configuración) with a close **X** / resources in
-conversation context. Provider and model selection live in Configuración, not in the composer.
+conversation context. Provider connection lives in Configuración; the active
+model belongs to Conversation Details, not the composer or a competing global control.
 First-run users get a dynamically discovered free/default model; they are never forced to pick.
 See §8 of `docs/UX_RELEASE_GATE_01.md` for the chat-first direction.
 
@@ -113,9 +114,16 @@ Chat log with creations inline and materials in context; the bottom bar holds at
 send, and Compartir/Dejar de compartir. Generated deliverables appear as Creation cards with
 Abrir and Compartir on the same registered artifact.
 
+Clicking the conversation title opens Conversation Details: rename, the
+conversation model, uploaded Materials, and generated Creations. Folder
+actions use only validated project-owned locations and do not expose paths.
+
 ### Settings
 Separate surface with a close **X**, returning to the exact same conversation (no dashboard
-redirect). Provider connection and model selection live here.
+redirect). Provider connection and "Logs de esta sesión" live here. The log
+viewer mirrors current-process stderr events, can be cleared/copied, and does
+not survive restart; it excludes secrets, prompt text, raw payloads, and file
+or generated-resource contents.
 
 ### Shared state
 Show the share link, copy action, QR, and Dejar de compartir, with the

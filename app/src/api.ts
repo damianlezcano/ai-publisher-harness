@@ -20,6 +20,7 @@ import type {
   ProviderSummary,
   PublicationView,
   SelectedModelView,
+  SessionLogEntry,
 } from "./types";
 
 export const api = {
@@ -44,6 +45,8 @@ export const api = {
     invoke<void>("material_remove", { projectId, materialId }),
   materialOpen: (projectId: string, materialId: string) =>
     invoke<void>("material_open", { projectId, materialId }),
+  materialOpenFolder: (projectId: string, materialId: string) =>
+    invoke<void>("material_open_folder", { projectId, materialId }),
   previewData: (projectId: string, resourceKind: string, resourceId: string) =>
     invoke<PreviewData>("preview_data", { projectId, resourceKind, resourceId }),
   previewOpenWeb: (projectId: string, creationId: string) =>
@@ -57,6 +60,8 @@ export const api = {
     }),
   creationOpen: (projectId: string, creationId: string) =>
     invoke<void>("creation_open", { projectId, creationId }),
+  creationOpenFolder: (projectId: string, creationId: string) =>
+    invoke<void>("creation_open_folder", { projectId, creationId }),
   openPublicUrl: (projectId: string) => invoke<void>("open_public_url", { projectId }),
   agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
     invoke<void>("agent_send", { projectId, prompt, attachmentIds }),
@@ -98,7 +103,13 @@ export const api = {
   modelList: () => invoke<ModelSummary[]>("model_list"),
   modelSelect: (providerId: string, modelId: string) =>
     invoke<void>("model_select", { providerId, modelId }),
+  conversationModelSelect: (projectId: string, providerId: string, modelId: string) =>
+    invoke<void>("conversation_model_select", { projectId, providerId, modelId }),
+  conversationModelClear: (projectId: string) =>
+    invoke<void>("conversation_model_clear", { projectId }),
   modelGetSelected: () => invoke<SelectedModelView>("model_get_selected"),
+  sessionLogs: () => invoke<SessionLogEntry[]>("session_logs"),
+  sessionLogsClear: () => invoke<void>("session_logs_clear"),
 };
 
 export function isAppError(value: unknown): value is AppError {

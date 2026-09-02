@@ -79,9 +79,9 @@ export function CreationCard(props: CreationCardProps) {
           <span className="creation-card-icon" aria-hidden="true">
             {kindIcon(creation.kind)}
           </span>
-          <span className="item-name">{creation.displayName}</span>
+          <span className="sr-only">{creation.displayName}</span>
+          <span className="item-name">{kindLabel(creation.kind)}</span>
         </span>
-        <span className="item-meta">{kindLabel(creation.kind)}</span>
       </div>
       <span className="row-actions wrap">
         <button

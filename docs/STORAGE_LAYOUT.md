@@ -69,7 +69,8 @@ A user-facing **Conversación** is a `Project` (`ProjectId`, ADR-0014).
 ```
 
 `project.json` holds schema v3: id, display name, timestamps, optional durable
-`publicationRoute`, materials, creations, and `messages`. Paths inside it are
+`publicationRoute`, optional per-conversation `model` (provider/model IDs only),
+materials, creations, and `messages`. Paths inside it are
 relative and forward-slash. Identity is a UUIDv7; rename changes only `name` and
 `updatedAt`.
 

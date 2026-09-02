@@ -9,6 +9,7 @@
 pub mod app;
 pub mod dtos;
 pub mod error;
+pub mod session_log;
 pub mod sidecar;
 
 pub use app::{APP_VERSION, AppConfig, AppState, SharedBackendRestarter};
@@ -18,3 +19,4 @@ pub use dtos::{
     PublicationView, SelectedModelView, WebPreview,
 };
 pub use error::{AppError, AppResult, ErrorCode};
+pub use session_log::SessionLogEntry;

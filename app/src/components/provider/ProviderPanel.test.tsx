@@ -90,11 +90,26 @@ beforeEach(() => {
 });
 
 describe("ProviderPanel", () => {
+  it("renders current-session logs and clears them", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs")
+        return Promise.resolve([{ level: "INFO", message: "turn started" }]);
+      if (cmd === "session_logs_clear") return Promise.resolve(undefined);
+      return Promise.resolve(undefined);
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    expect(await screen.findByText("[INFO] turn started")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Limpiar" }));
+    expect(invokeMock).toHaveBeenCalledWith("session_logs_clear");
+    expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
+  });
+
   it("renders as a labelled dialog and closes on Escape", async () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
     expect(await screen.findByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
-    expect(await screen.findByLabelText("Modelo")).toBeInTheDocument();
+    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });

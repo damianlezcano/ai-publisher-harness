@@ -10,6 +10,7 @@ import ShareControl from "./PublishPanel";
 import { useShareControl } from "./useShareControl";
 import ErrorNotice from "./ui/ErrorNotice";
 import { messages } from "../messages";
+import ConversationDetails from "./ConversationDetails";
 
 interface WorkspaceViewProps {
   project: ProjectView;
@@ -65,6 +66,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
@@ -209,7 +211,16 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       )}
 
       <header className="view-header workspace-header">
-        <h1>{project.name}</h1>
+        <h1>
+          <button
+            type="button"
+            className="title-button"
+            aria-label={messages.conversationDetails.titleAria(project.name)}
+            onClick={() => setDetailsOpen(true)}
+          >
+            {project.name}
+          </button>
+        </h1>
       </header>
 
       <div className="workspace-timeline">
@@ -293,6 +304,15 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           }
         />
       </div>
+      {detailsOpen && (
+        <ConversationDetails
+          key={project.id}
+          project={project}
+          active={agentPhase === "working"}
+          onClose={() => setDetailsOpen(false)}
+          onRefresh={onRefresh}
+        />
+      )}
     </div>
   );
 }

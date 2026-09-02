@@ -60,8 +60,10 @@ single adapter, `OpenCodeProviderConnector`, drives the OpenCode server.
 Credentials are owned by OpenCode, one-way: the frontend submits a secret
 exactly once (or never, for OAuth), OpenCode stores it in its isolated
 `auth.json` (0600), and there is no read-back command and no app-owned secret
-store. Model selection is one global choice with a free default (the `opencode`
-tier, `cost: 0`), applied per prompt without restart; credential mutations
+store. Model selection is optional per conversation in `project.json`; when no
+conversation selection exists, the global free default (the `opencode` tier,
+`cost: 0`) is used. A selected model is captured for future turns and cannot
+change an active turn; credential mutations
 restart the shared backend so no stale session uses a removed credential
 (ADR-0008, ADR-0009).
 
@@ -74,3 +76,6 @@ restart the shared backend so no stale session uses a removed credential
 - `project-core` has no provider/OpenCode dependency (unchanged).
 - Only `project-opencode`, `project-agent`, and `project-provider` know OpenCode.
 - Credentials never appear in project files, logs, URLs, or bundles (SECURITY.md #8).
+- Diagnostics are a bounded in-memory process buffer mirrored to stderr; they
+  are not persisted and contain metadata only, never prompt, credential,
+  attachment/generated content, or raw auth payloads.

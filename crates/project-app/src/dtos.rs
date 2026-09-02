@@ -128,6 +128,14 @@ pub struct ProjectView {
     pub creations: Vec<CreationView>,
     pub messages: Vec<MessageView>,
     pub publication: PublicationView,
+    pub model: Option<ConversationModelView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationModelView {
+    pub provider_id: String,
+    pub model_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

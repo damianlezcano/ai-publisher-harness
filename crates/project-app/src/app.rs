@@ -287,6 +287,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .create_project(name)
             .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation created id={}", project.id));
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
@@ -304,6 +305,7 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .rename_project(&pid, name)
             .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation renamed id={id}"));
         Ok(ProjectSummary {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
@@ -340,7 +342,9 @@ where
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .delete_project(&pid)
-            .map_err(AppError::from_core)
+            .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation deleted id={id}"));
+        Ok(())
     }
 
     pub fn open_project(&self, id: &str) -> AppResult<ProjectView> {
@@ -362,6 +366,10 @@ where
             creations,
             messages,
             publication,
+            model: project.model.as_ref().map(|model| ConversationModelView {
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
+            }),
         })
     }
 
@@ -386,6 +394,15 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .add_material(&pid, request)
             .map_err(AppError::from_material)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "attachment associated conversation_id={project_id} material_id={} name={} bytes={}",
+                material.id,
+                project_core::safe_file_name(&material.original_file_name),
+                material.byte_size
+            ),
+        );
         Ok(material_view(&material))
     }
 
@@ -620,6 +637,15 @@ where
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
     }
 
+    pub fn open_material_folder(&self, project_id: &str, material_id: &str) -> AppResult<()> {
+        let path = self.material_path(project_id, material_id)?;
+        let directory = path
+            .parent()
+            .ok_or_else(|| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
+    }
+
     // -- Creations ---------------------------------------------------------
 
     pub fn set_creation_visibility(
@@ -671,6 +697,15 @@ where
         let path = self.creation_path(project_id, creation_id)?;
         opener::open(path)
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir ese recurso."))
+    }
+
+    pub fn open_creation_folder(&self, project_id: &str, creation_id: &str) -> AppResult<()> {
+        let path = self.creation_path(project_id, creation_id)?;
+        let directory = path
+            .parent()
+            .ok_or_else(|| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
     }
 
     // -- Preview ------------------------------------------------------------
@@ -927,6 +962,15 @@ where
             .append_user_message(&inputs.project_id, prompt, &material_ids)
             .map_err(AppError::from_core)?;
         inputs.turn_id = Some(user_message.id);
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "turn accepted conversation_id={} message_id={} chars={}",
+                inputs.project_id,
+                inputs.turn_id.as_ref().expect("turn id"),
+                prompt.chars().count()
+            ),
+        );
         Ok(inputs)
     }
 
@@ -935,6 +979,20 @@ where
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let model = inputs
+            .model
+            .as_ref()
+            .map(|model| format!("{}/{}", model.provider_id, model.model_id))
+            .unwrap_or_else(|| "default".to_owned());
+        let started = std::time::Instant::now();
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "turn started conversation_id={} turn_id={} model={model}",
+                project_id,
+                turn_id.as_deref().unwrap_or("none")
+            ),
+        );
         match self.run_agent_with_inputs(inputs) {
             Ok(result) => {
                 let creation_ids: Vec<CreationId> = result
@@ -969,6 +1027,21 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &text, status, &creation_ids)
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "INFO",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status={} creations={} duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        if status == MessageStatus::Ok {
+                            "completed"
+                        } else {
+                            "failed"
+                        },
+                        creation_ids.len(),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: if status == MessageStatus::Ok {
                         "completed".to_owned()
@@ -987,6 +1060,15 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &text, MessageStatus::Cancelled, &[])
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status=cancelled duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: "cancelled".to_owned(),
                     turn_id: turn_id.clone(),
@@ -1001,6 +1083,15 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &err.message, MessageStatus::Failed, &[])
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "ERROR",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status=failed duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: "failed".to_owned(),
                     turn_id,
@@ -1055,8 +1146,42 @@ where
             return Err(AppError::invalid("Escribí qué querés crear."));
         }
         let project_id = parse_project_id(project_id)?;
-        // The global model selection applies to the next prompt (design §12).
-        let model = self.selected_model_ref()?;
+        // An explicit conversation model is captured before the user message
+        // is persisted; otherwise retain the established global default.
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&project_id)
+            .ok();
+        let model = match project.and_then(|project| project.model) {
+            Some(model)
+                if self
+                    .model_list()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|available| {
+                        available.provider_id == model.provider_id
+                            && available.model_id == model.model_id
+                    }) =>
+            {
+                Some(ModelRef {
+                    provider_id: model.provider_id,
+                    model_id: model.model_id,
+                })
+            }
+            Some(model) => {
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "conversation model unavailable conversation_id={} model={}/{} falling_back=global",
+                        project_id, model.provider_id, model.model_id
+                    ),
+                );
+                self.selected_model_ref()?
+            }
+            None => self.selected_model_ref()?,
+        };
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
         Ok(AgentRunInputs {
             project_id,
@@ -1110,7 +1235,7 @@ where
         if selected.requires_choice {
             return Err(AppError::new(
                 ErrorCode::ModelUnavailable,
-                "No encontramos un modelo para usar. Elegí uno en Conectá tu IA.",
+                "No encontramos un modelo para usar. Elegí uno en los detalles de la conversación.",
             ));
         }
         Ok(Some(ModelRef {
@@ -1130,6 +1255,14 @@ where
             AgentStatus::Ready => "ready",
             AgentStatus::Failed => "failed",
         }
+    }
+
+    pub fn session_logs(&self) -> Vec<crate::session_log::SessionLogEntry> {
+        crate::session_log::list()
+    }
+
+    pub fn clear_session_logs(&self) {
+        crate::session_log::clear();
     }
 
     // -- Provider ------------------------------------------------------------
@@ -1231,6 +1364,81 @@ where
             .map_err(AppError::from_provider)
     }
 
+    /// Selects a model for exactly one conversation. This does not mutate the
+    /// global fallback and is rejected while that conversation has a live run.
+    pub fn conversation_model_select(
+        &self,
+        project_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let models = self.model_list()?;
+        if !models
+            .iter()
+            .any(|model| model.provider_id == provider_id && model.model_id == model_id)
+        {
+            return Err(AppError::new(
+                ErrorCode::ModelUnavailable,
+                "Ese modelo ya no está disponible.",
+            ));
+        }
+        let lock = self.agent.project_lock(project_id);
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    "Esperá a que termine la solicitud antes de cambiar el modelo.",
+                ));
+            }
+        };
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_project_model(
+                &pid,
+                Some(project_core::ConversationModel {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                }),
+            )
+            .map_err(AppError::from_core)?;
+        crate::session_log::record(
+            "INFO",
+            format!("conversation model changed id={project_id} model={provider_id}/{model_id}"),
+        );
+        Ok(())
+    }
+
+    /// Clears this conversation's explicit model so future turns use the
+    /// global configured default. Existing terminal turns remain unchanged.
+    pub fn conversation_model_clear(&self, project_id: &str) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let lock = self.agent.project_lock(project_id);
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    "Esperá a que termine la solicitud antes de cambiar el modelo.",
+                ));
+            }
+        };
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_project_model(&pid, None)
+            .map_err(AppError::from_core)?;
+        crate::session_log::record(
+            "INFO",
+            format!("conversation model cleared id={project_id} fallback=global"),
+        );
+        Ok(())
+    }
+
     pub fn model_get_selected(&self) -> AppResult<SelectedModelView> {
         let selected = self
             .provider
@@ -1264,6 +1472,13 @@ where
             .publication
             .publish(&pid)
             .map_err(AppError::from_publication)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "creation shared conversation_id={project_id} creation_id={}",
+                creation_id.unwrap_or("latest")
+            ),
+        );
         Ok(PublicationView {
             state: "published".to_owned(),
             public_url: publication.public_url,
@@ -1314,6 +1529,7 @@ where
         self.publication
             .unpublish(&pid)
             .map_err(AppError::from_publication)?;
+        crate::session_log::record("INFO", format!("conversation unshared id={project_id}"));
         Ok(PublicationView {
             state: "local".to_owned(),
             public_url: None,
