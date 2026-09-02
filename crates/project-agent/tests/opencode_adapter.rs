@@ -247,6 +247,23 @@ fn artifact_kind_mapping_and_outputs_only() {
 }
 
 #[test]
+fn session_relative_html_paths_are_workspace_web_artifacts() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["busy", "idle"]);
+    server
+        .set_diff_body(r#"[{"path":"rosco.html","byte_size":24},{"path":"app.js","byte_size":8}]"#);
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.artifacts.len(), 2);
+    assert_eq!(task.artifacts[0].path, "workspace/rosco.html");
+    assert_eq!(task.artifacts[0].kind, ArtifactKind::Web);
+    assert_eq!(task.artifacts[1].path, "workspace/app.js");
+    assert_eq!(task.artifacts[1].kind, ArtifactKind::Other);
+}
+
+#[test]
 fn status_stopped_ready_stopped() {
     let server = FakeServer::start();
     let engine = engine_for(&server);

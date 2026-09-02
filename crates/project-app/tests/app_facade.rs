@@ -604,6 +604,67 @@ fn send_message_persists_user_and_assistant_messages() {
 }
 
 #[test]
+fn publish_promotes_the_generated_web_creation_as_the_public_entry() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Rosco").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "index.html",
+        b"<html><body>JUEGO</body></html>",
+    );
+    engine.set_message("Listo. Creé el recurso usando el archivo que adjuntaste.".into());
+    let run = app.send_message(&p.id, "creá el juego", &[]).expect("send");
+    assert_eq!(run.registered_creation_ids.len(), 1);
+    let cid = &run.registered_creation_ids[0];
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.messages[1].creation_ids, vec![cid.clone()]);
+    assert_eq!(view.creations[0].visibility, "private");
+
+    app.publish_creation(&p.id, Some(cid)).expect("share");
+    let after = app.open_project(&p.id).expect("open");
+    assert_eq!(after.creations[0].id, *cid);
+    assert_eq!(after.creations[0].visibility, "public");
+
+    let published = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("publish")
+        .join("index.html");
+    let html = fs::read_to_string(&published).expect("published html");
+    assert!(html.contains("JUEGO"), "{html}");
+    assert!(
+        !html.contains("Material del proyecto"),
+        "published root must be the creation, not the empty materials landing"
+    );
+}
+
+#[test]
+fn publish_without_creation_id_still_promotes_the_latest_web() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>actividad</h1>");
+    app.run_agent(&p.id, "crea", &[]).expect("run");
+    app.publish(&p.id).expect("publish");
+    let html = fs::read_to_string(
+        tmp.path()
+            .join("projects")
+            .join(&p.id)
+            .join("publish")
+            .join("index.html"),
+    )
+    .expect("html");
+    assert!(html.contains("actividad"), "{html}");
+    assert!(!html.contains("Material del proyecto"), "{html}");
+}
+
+#[test]
 fn failed_run_persists_failed_assistant_message() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());

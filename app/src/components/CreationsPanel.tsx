@@ -8,7 +8,7 @@ import EmptyState from "./ui/EmptyState";
 import ErrorNotice from "./ui/ErrorNotice";
 
 export interface CreationCardShareProps {
-  onShare: () => void;
+  onShare: (creationId: string) => void;
   shared: boolean;
   busy: boolean;
 }
@@ -92,7 +92,7 @@ export function CreationCard(props: CreationCardProps) {
             type="button"
             className="secondary"
             disabled={share.busy || share.shared}
-            onClick={() => void share.onShare()}
+            onClick={() => void share.onShare(creation.id)}
           >
             {share.shared
               ? messages.sharing.shared

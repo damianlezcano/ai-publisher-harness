@@ -116,6 +116,11 @@ function MessageBubble({
   }
 
   const isError = message.status === "failed" || message.status === "cancelled";
+  const text = message.text.trim();
+  const hasCreations = message.creationIds.length > 0;
+  if (!isError && text === "" && !hasCreations) {
+    return null;
+  }
 
   return (
     <div className={`message message-assistant${isError ? " message-error" : ""}`}>
@@ -128,8 +133,8 @@ function MessageBubble({
         </p>
       ) : (
         <>
-          <p className="message-text">{message.text}</p>
-          {message.creationIds.length > 0 && (
+          {text !== "" && <p className="message-text">{message.text}</p>}
+          {hasCreations && (
             <div className="message-creations">
               {message.creationIds.map((id) => {
                 const creation = creationById.get(id);

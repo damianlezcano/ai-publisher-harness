@@ -124,6 +124,7 @@ describe("CreationsPanel", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
     expect(onShare).toHaveBeenCalledTimes(1);
+    expect(onShare).toHaveBeenCalledWith(creation.id);
   });
 });
 
@@ -148,6 +149,7 @@ describe("CreationCard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
     expect(onShare).toHaveBeenCalledTimes(1);
+    expect(onShare).toHaveBeenCalledWith(creation.id);
   });
 
   it("omits Compartir when share is not provided", () => {

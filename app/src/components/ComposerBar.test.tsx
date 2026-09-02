@@ -167,9 +167,6 @@ describe("ComposerBar", () => {
   it("requiresChoice (aiUsable=false) disables the composer", async () => {
     setupApiMock({ selected: requiresChoiceModel });
     render(<ComposerBar {...base} aiUsable={false} />);
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Elegí un modelo de pago conectado."),
-    );
     expect(screen.getByLabelText("Pedido a la IA")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Enviar" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Adjuntar" })).toBeDisabled();
@@ -211,41 +208,14 @@ describe("ComposerBar", () => {
     expect(base.onMaterialsChanged).toHaveBeenCalled();
   });
 
-  it("model selector renders option names with Gratis suffix and does NOT render raw provider_id/model_id text; selecting calls api.modelSelect", async () => {
-    const connectedProviders: ProviderSummary[] = [
-      {
-        id: "openai",
-        name: "OpenAI",
-        authMethods: [],
-        connected: true,
-        connectionLabel: null,
-        highlighted: false,
-      },
-    ];
-    setupApiMock({
-      models: [freeModel, paidModel],
-      providers: connectedProviders,
-      selected: selectedFreeModel,
-    });
+  it("does not render a model selector; attachment, prompt and send only", async () => {
+    setupApiMock({ selected: selectedFreeModel });
     render(<ComposerBar {...base} />);
-    await waitFor(() => {
-      const options = screen.getAllByRole("option");
-      expect(options.map((o) => o.textContent)).toContain("Big Pickle / Gratis");
-      expect(options.map((o) => o.textContent)).toContain("GPT-4 / De pago");
-    });
-    expect(screen.queryByText("opencode")).not.toBeInTheDocument();
-    expect(screen.queryByText("big-pickle")).not.toBeInTheDocument();
-    expect(screen.queryByText("openai")).not.toBeInTheDocument();
-    expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
-
-    const select = screen.getByLabelText("Modelo") as HTMLSelectElement;
-    await userEvent.selectOptions(select, "openai::gpt-4");
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("model_select", {
-        providerId: "openai",
-        modelId: "gpt-4",
-      }),
-    );
+    expect(screen.getByLabelText("Pedido a la IA")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adjuntar" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Modelo")).not.toBeInTheDocument();
+    expect(screen.queryByText("Big Pickle / Gratis")).not.toBeInTheDocument();
   });
 
   it("shareAction node renders when provided", () => {

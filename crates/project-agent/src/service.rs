@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::AgentResult;
 use crate::error::AgentError;
-use crate::model::{AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask};
+use crate::model::{
+    AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact, ArtifactKind,
+    artifact_kind_from_path,
+};
 use crate::port::AgentEngine;
 use crate::registrar::CreationRegistrar;
 
@@ -94,9 +97,12 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             return Err(AgentError::TaskFailed("task did not complete".into()));
         }
 
+        let mut artifacts = merge_artifacts(task.artifacts.clone(), &workspace_dir);
+        artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
+        let skip_sidecars = sidecar_paths_of_web_entry(&artifacts);
         let mut registered = Vec::new();
-        for artifact in &task.artifacts {
-            if is_materials_artifact_path(&artifact.path) {
+        for artifact in &artifacts {
+            if skip_sidecars.contains(&artifact.path) {
                 continue;
             }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
@@ -190,12 +196,13 @@ fn provision_attachments(workspace_dir: &Path, request: &AgentRequest) -> AgentR
 
 /// Spanish plain-language instruction injected into every agent run.
 ///
-/// It keeps the assistant reply human-facing for non-technical teachers and
-/// forbids leaking implementation details such as paths, shell commands,
-/// Node/npm, /tmp, localhost, ports, file extensions, or internal names.
+/// It keeps the assistant reply human-facing for non-technical teachers,
+/// tells the engine to write a web creation EducAI can register, and forbids
+/// leaking implementation details or telling the user to open files manually.
 fn build_instruction() -> &'static str {
     "Respondé siempre en el mismo idioma que el usuario (español), con un tono simple y amigable para una docente sin conocimientos técnicos.\n\
-     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el juego de Pasapalabra.\" No describas cómo se construyó.\n\
+     Cuando crees una actividad interactiva, escribila como un recurso web estático en el directorio de trabajo, con index.html como entrada (y CSS/JS al lado si hace falta). EducAI la va a mostrar en el chat con botones Abrir y Compartir: no le pidas a la persona que abra archivos a mano, que haga doble clic, ni que use el explorador.\n\
+     Decí primero y de forma clara qué creaste, por ejemplo: \"Listo. Creé el recurso usando el archivo que adjuntaste.\" No describas cómo se construyó.\n\
      NUNCA mencionés: rutas de archivos, comandos de shell o terminal, Node/npm, /tmp, localhost, puertos, extensiones de archivo como detalle de implementación, nombres internos de herramientas/proveedores/modelos, ni ningún detalle de implementación o construcción.\n\
      Cuando uses un archivo adjunto, referilo únicamente como \"el archivo que adjuntaste\".\n\
      Mantené las respuestas breves."
@@ -250,6 +257,131 @@ fn is_materials_artifact_path(artifact_path: &str) -> bool {
     relative == "materials" || relative.starts_with("materials/")
 }
 
+fn is_standalone_document(kind: ArtifactKind) -> bool {
+    matches!(
+        kind,
+        ArtifactKind::Document
+            | ArtifactKind::Spreadsheet
+            | ArtifactKind::Presentation
+            | ArtifactKind::Pdf
+            | ArtifactKind::Text
+    )
+}
+
+fn workspace_dir_of(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let relative = normalized.trim_start_matches('/');
+    match Path::new(relative).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            parent.to_string_lossy().replace('\\', "/")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Paths that belong to a web bundle (same directory tree as the web entry)
+/// and should not be registered as separate Creations. Documents stay separate.
+fn sidecar_paths_of_web_entry(artifacts: &[Artifact]) -> HashSet<String> {
+    let web = artifacts
+        .iter()
+        .find(|a| {
+            a.kind == ArtifactKind::Web
+                && Path::new(&a.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("index.html"))
+        })
+        .or_else(|| artifacts.iter().find(|a| a.kind == ArtifactKind::Web));
+    let Some(web) = web else {
+        return HashSet::new();
+    };
+    let web_dir = workspace_dir_of(&web.path);
+    let prefix = if web_dir.is_empty() {
+        String::new()
+    } else {
+        format!("{web_dir}/")
+    };
+    artifacts
+        .iter()
+        .filter(|a| a.path != web.path && !is_standalone_document(a.kind))
+        .filter(|a| {
+            if prefix.is_empty() {
+                workspace_dir_of(&a.path) == web_dir || a.path.starts_with("workspace/")
+            } else {
+                a.path == web_dir || a.path.starts_with(&prefix)
+            }
+        })
+        .map(|a| a.path.clone())
+        .collect()
+}
+
+fn merge_artifacts(from_diff: Vec<Artifact>, workspace_dir: &Path) -> Vec<Artifact> {
+    let mut by_path: HashMap<String, Artifact> = HashMap::new();
+    for artifact in from_diff {
+        by_path.insert(artifact.path.clone(), artifact);
+    }
+    for scanned in scan_workspace_artifacts(workspace_dir) {
+        by_path.entry(scanned.path.clone()).or_insert(scanned);
+    }
+    let mut artifacts: Vec<Artifact> = by_path.into_values().collect();
+    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+    artifacts
+}
+
+fn scan_workspace_artifacts(workspace_dir: &Path) -> Vec<Artifact> {
+    let mut out = Vec::new();
+    collect_workspace_files(workspace_dir, workspace_dir, &mut out);
+    out
+}
+
+fn collect_workspace_files(workspace_dir: &Path, dir: &Path, out: &mut Vec<Artifact>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') {
+            continue;
+        }
+        if meta.is_dir() {
+            if name_str == "materials" && dir == workspace_dir {
+                continue;
+            }
+            collect_workspace_files(workspace_dir, &path, out);
+            continue;
+        }
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(workspace_dir) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty()
+            || relative
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            continue;
+        }
+        let path = format!("workspace/{relative}");
+        out.push(Artifact {
+            path: path.clone(),
+            kind: artifact_kind_from_path(&path),
+            byte_size: meta.len(),
+            sha256: None,
+        });
+    }
+}
+
 /// Read `workspace_dir/<path>` after stripping a leading `workspace/` prefix.
 ///
 /// Traversal (`..`), empty segments, absolute paths, and symlink escapes are
@@ -299,9 +431,12 @@ mod tests {
         let instruction = build_instruction();
         assert!(instruction.contains("español"));
         assert!(instruction.contains("docente"));
-        assert!(instruction.contains("Listo. Creé el juego de Pasapalabra."));
+        assert!(instruction.contains("Listo. Creé el recurso usando el archivo que adjuntaste."));
         assert!(instruction.contains("el archivo que adjuntaste"));
         assert!(instruction.contains("NUNCA mencionés"));
+        assert!(instruction.contains("index.html"));
+        assert!(instruction.contains("Abrir y Compartir"));
+        assert!(instruction.contains("doble clic"));
     }
 
     #[test]

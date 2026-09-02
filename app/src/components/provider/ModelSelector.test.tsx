@@ -100,7 +100,9 @@ describe("ModelSelector", () => {
       providerId: "openai",
       modelId: "gpt-4o",
     });
-    await waitFor(() => expect(screen.getByText("De pago")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("De pago", { selector: ".model-badge" })).toBeInTheDocument(),
+    );
   });
 
   it("requires an explicit choice when the stored model disappeared", async () => {

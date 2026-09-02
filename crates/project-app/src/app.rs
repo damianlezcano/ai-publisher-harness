@@ -930,7 +930,8 @@ where
                     .iter()
                     .map(|id| parse_creation_id(id))
                     .collect::<AppResult<Vec<_>>>()?;
-                let text = result.task.message.clone().unwrap_or_default();
+                let text =
+                    assistant_reply_text(result.task.message.as_deref(), !creation_ids.is_empty());
                 self.projects
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1203,6 +1204,19 @@ where
     // -- Publication -------------------------------------------------------
 
     pub fn publish(&self, project_id: &str) -> AppResult<PublicationView> {
+        self.publish_creation(project_id, None)
+    }
+
+    /// Publishes the project. When `creation_id` is set, that Creation is the
+    /// share target (marked public; other public webs are demoted). When it is
+    /// omitted, the latest web Creation (else the latest Creation) is promoted
+    /// so Compartir does not snapshot an empty "Material del proyecto" page.
+    pub fn publish_creation(
+        &self,
+        project_id: &str,
+        creation_id: Option<&str>,
+    ) -> AppResult<PublicationView> {
+        self.prepare_share_visibility(project_id, creation_id)?;
         let pid = parse_project_id(project_id)?;
         let publication = self
             .publication
@@ -1254,6 +1268,68 @@ where
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir el enlace."))
     }
 
+    /// Explicit product-layer visibility decision for Compartir (ADR-0004).
+    /// M3 still copies only public creations; this is the higher-layer mark.
+    fn prepare_share_visibility(
+        &self,
+        project_id: &str,
+        preferred_creation_id: Option<&str>,
+    ) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let preferred = match preferred_creation_id {
+            Some(id) => Some(parse_creation_id(id)?),
+            None => None,
+        };
+        let mut projects = self.projects.lock().unwrap_or_else(|e| e.into_inner());
+        let project = projects.open_project(&pid).map_err(AppError::from_core)?;
+        if project.creations.is_empty() {
+            return Ok(());
+        }
+        let target_id = if let Some(cid) = preferred {
+            if !project.creations.iter().any(|c| c.id == cid) {
+                return Err(AppError::new(
+                    ErrorCode::NotFound,
+                    "No se encontró esa creación.",
+                ));
+            }
+            cid
+        } else if let Some(web) = project
+            .creations
+            .iter()
+            .rev()
+            .find(|c| c.kind == CreationKind::Web)
+        {
+            web.id.clone()
+        } else {
+            project.creations.last().expect("non-empty").id.clone()
+        };
+        let target_is_web = project
+            .creations
+            .iter()
+            .find(|c| c.id == target_id)
+            .is_some_and(|c| c.kind == CreationKind::Web);
+
+        let mut changes: Vec<(CreationId, CreationVisibility)> = Vec::new();
+        for creation in &project.creations {
+            if creation.id == target_id {
+                if creation.visibility != CreationVisibility::Public {
+                    changes.push((creation.id.clone(), CreationVisibility::Public));
+                }
+            } else if target_is_web
+                && creation.kind == CreationKind::Web
+                && creation.visibility == CreationVisibility::Public
+            {
+                changes.push((creation.id.clone(), CreationVisibility::Private));
+            }
+        }
+        for (id, visibility) in changes {
+            projects
+                .set_creation_visibility(&pid, &id, visibility)
+                .map_err(AppError::from_core)?;
+        }
+        Ok(())
+    }
+
     // -- Status ------------------------------------------------------------
 
     pub fn app_status(&self) -> AppStatusView {
@@ -1289,6 +1365,15 @@ fn ensure_app_data_dir(data_dir: &Path) -> AppResult<()> {
 
 fn parse_creation_id(id: &str) -> AppResult<CreationId> {
     CreationId::parse(id).map_err(|_| AppError::invalid("Esa creación no es válida."))
+}
+
+fn assistant_reply_text(message: Option<&str>, _has_creations: bool) -> String {
+    let trimmed = message.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        "Listo.".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn parse_material_id(id: &str) -> AppResult<MaterialId> {

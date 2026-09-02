@@ -57,7 +57,7 @@ describe("ShareControl", () => {
     const { rerender } = renderControl(local, onRefresh);
 
     await user.click(screen.getByRole("button", { name: messages.sharing.shareAction }));
-    expect(invokeMock).toHaveBeenCalledWith("publish", { projectId });
+    expect(invokeMock).toHaveBeenCalledWith("publish", { projectId, creationId: null });
 
     gate.resolve(published);
     await waitFor(() => expect(onRefresh).toHaveBeenCalled());

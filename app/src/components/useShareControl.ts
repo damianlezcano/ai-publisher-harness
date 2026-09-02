@@ -22,7 +22,7 @@ export interface ShareControlState {
   menuOpen: boolean;
   setMenuOpen: (value: boolean | ((prev: boolean) => boolean)) => void;
   shared: boolean;
-  publish: () => Promise<void>;
+  publish: (creationId?: string) => Promise<void>;
   unpublish: () => Promise<void>;
   copy: () => Promise<void>;
   open: () => Promise<void>;
@@ -43,11 +43,11 @@ export function useShareControl({
 
   const shared = publication.state === "published" && publication.publicUrl !== null;
 
-  async function publish() {
+  async function publish(creationId?: string) {
     setBusy("publishing");
     setError(null);
     try {
-      await api.publish(projectId);
+      await api.publish(projectId, creationId);
       await onRefresh();
       setMenuOpen(true);
     } catch (err) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ProviderSummary } from "../../types";
 import ProviderCard from "./ProviderCard";
+import ModelSelector from "./ModelSelector";
 import Dialog from "../ui/Dialog";
 import { messages } from "../../messages";
 
@@ -15,6 +16,7 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [othersOpen, setOthersOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [modelRefreshKey, setModelRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -52,6 +54,7 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
 
   const changed = () => {
     onChanged();
+    setModelRefreshKey((k) => k + 1);
     void load();
   };
 
@@ -63,6 +66,8 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
       closeButton
     >
       <p className="muted">{messages.provider.privacyNote}</p>
+
+      <ModelSelector refreshKey={modelRefreshKey} />
 
       {loadingError && (
         <p className="error" role="alert">

@@ -1,7 +1,7 @@
 //! OpenCode `serve` adapter: AgentEngine over a shared OpenCodeBackend.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ use crate::AgentResult;
 use crate::error::AgentError;
 use crate::model::{
     AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact,
-    ArtifactKind, TaskStatus,
+    TaskStatus, artifact_kind_from_path,
 };
 use crate::port::AgentEngine;
 
@@ -87,9 +87,10 @@ impl OpenCodeAgentEngine {
         &self,
         session_id: &str,
         before_assistant_count: usize,
-    ) -> AgentResult<(String, Option<String>)> {
+    ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
+        let mut idle_without_text_since: Option<Instant> = None;
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
             if !(200..300).contains(&status) {
@@ -102,9 +103,21 @@ impl OpenCodeAgentEngine {
                 "idle" | "done" | "complete" | "completed" | "success" => {
                     let messages = self.fetch_message_list(session_id)?;
                     if assistant_message_count(&messages) > before_assistant_count {
-                        let message = last_assistant_text_from_messages(&messages);
+                        let message = nonempty_assistant_text(&messages);
                         if message.is_some() {
-                            return Ok((phase, message));
+                            let artifacts = self.fetch_artifacts(session_id)?;
+                            return Ok((phase, message, artifacts));
+                        }
+                        // Empty assistant shells (tool-call placeholders) are
+                        // not a completed reply. Keep polling for real text, or
+                        // finish once files exist and the empty shell has sat
+                        // idle briefly (file-only creations).
+                        let artifacts = self.fetch_artifacts(session_id)?;
+                        if !artifacts.is_empty() {
+                            let started = idle_without_text_since.get_or_insert_with(Instant::now);
+                            if started.elapsed() >= Duration::from_secs(2) {
+                                return Ok((phase, None, artifacts));
+                            }
                         }
                     }
                     // The sidecar may have marked idle before the new assistant
@@ -251,8 +264,7 @@ impl AgentEngine for OpenCodeAgentEngine {
         }
 
         match self.poll_session(&session.id, before_assistant_count) {
-            Ok((_phase, message)) => {
-                let artifacts = self.fetch_artifacts(&session.id)?;
+            Ok((_phase, message, artifacts)) => {
                 log_event("task completed");
                 Ok(AgentTask {
                     id: format!("{}-task", session.id),
@@ -357,6 +369,10 @@ fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
     last
 }
 
+fn nonempty_assistant_text(messages: &[Value]) -> Option<String> {
+    last_assistant_text_from_messages(messages).filter(|text| !text.trim().is_empty())
+}
+
 fn assistant_message_count(messages: &[Value]) -> usize {
     messages
         .iter()
@@ -378,13 +394,18 @@ fn assistant_message_count(messages: &[Value]) -> usize {
 
 fn message_text(message: &Value) -> Option<String> {
     if let Some(text) = message.get("content").and_then(Value::as_str) {
-        return Some(text.to_owned());
+        return if text.trim().is_empty() {
+            None
+        } else {
+            Some(text.to_owned())
+        };
     }
     let parts = message.get("parts")?.as_array()?;
     let mut chunks = Vec::new();
     for part in parts {
         if part.get("type").and_then(Value::as_str) == Some("text")
             && let Some(text) = part.get("text").and_then(Value::as_str)
+            && !text.trim().is_empty()
         {
             chunks.push(text);
         }
@@ -430,7 +451,7 @@ fn artifacts_from_diff(value: &Value) -> Vec<Artifact> {
             .or_else(|| entry.get("hash"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let kind = artifact_kind(&path);
+        let kind = artifact_kind_from_path(&path);
         artifacts.push(Artifact {
             path,
             kind,
@@ -441,39 +462,58 @@ fn artifacts_from_diff(value: &Value) -> Vec<Artifact> {
     artifacts
 }
 
+/// Normalize a session-diff path into the internal `workspace/...` contract.
+///
+/// The OpenCode session directory *is* the project `workspace/`, so real diffs
+/// return session-relative paths (`index.html`, `juego/app.js`) rather than
+/// `workspace/index.html`. Both forms are accepted. Project-root trees
+/// (`inputs/`, `outputs/`, `publish/`) and metadata are rejected.
 fn normalize_output_path(raw: &str) -> Option<String> {
     let path = raw.replace('\\', "/");
+    let path = path.trim_start_matches("file://");
+    if path.is_empty() {
+        return None;
+    }
+    // Absolute paths are only accepted when they include the session
+    // `workspace/` segment; `/etc/passwd` must never become a creation.
+    if path.starts_with('/') {
+        let idx = path.find("/workspace/")?;
+        return validate_workspace_artifact_path(&path[idx + 1..]);
+    }
     let path = path.trim_start_matches("./");
-    let path = path.trim_start_matches('/');
+    let relative = if path.starts_with("workspace/") {
+        path.to_owned()
+    } else if is_project_root_path(path) {
+        return None;
+    } else {
+        format!("workspace/{path}")
+    };
+    validate_workspace_artifact_path(&relative)
+}
+
+fn is_project_root_path(path: &str) -> bool {
+    path == "project.json"
+        || path.starts_with("inputs/")
+        || path.starts_with("outputs/")
+        || path.starts_with("publish/")
+        || path == "inputs"
+        || path == "outputs"
+        || path == "publish"
+}
+
+fn validate_workspace_artifact_path(path: &str) -> Option<String> {
     if !path.starts_with("workspace/") {
         return None;
     }
-    if path.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+    let rest = &path["workspace/".len()..];
+    if rest.is_empty()
+        || rest
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        || rest == "materials"
+        || rest.starts_with("materials/")
+    {
         return None;
     }
     Some(path.to_owned())
-}
-
-fn artifact_kind(path: &str) -> ArtifactKind {
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let lower = file_name.to_ascii_lowercase();
-    if lower == "index.html" {
-        return ArtifactKind::Web;
-    }
-    let ext = Path::new(&lower)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    match ext {
-        "docx" => ArtifactKind::Document,
-        "xlsx" => ArtifactKind::Spreadsheet,
-        "pptx" => ArtifactKind::Presentation,
-        "pdf" => ArtifactKind::Pdf,
-        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" => ArtifactKind::Image,
-        "md" | "txt" => ArtifactKind::Text,
-        _ => ArtifactKind::Other,
-    }
 }

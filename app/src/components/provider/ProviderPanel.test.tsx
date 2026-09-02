@@ -47,9 +47,32 @@ const detail: ProviderDetail = {
   connections: [],
 };
 
+function modelCommands(cmd: string): Promise<unknown> | undefined {
+  if (cmd === "model_get_selected") {
+    return Promise.resolve({
+      model: {
+        providerId: "opencode",
+        modelId: "big-pickle",
+        name: "big-pickle",
+        free: true,
+        recommended: true,
+        deprecated: false,
+      },
+      notice: null,
+      requiresChoice: false,
+    });
+  }
+  if (cmd === "model_list") {
+    return Promise.resolve([]);
+  }
+  return undefined;
+}
+
 beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation((cmd: string) => {
+    const models = modelCommands(cmd);
+    if (models) return models;
     if (cmd === "provider_list") {
       return Promise.resolve([openaiSummary, googleSummary]);
     }
@@ -62,23 +85,6 @@ beforeEach(() => {
     if (cmd === "provider_test_connection") {
       return Promise.resolve({ outcome: "connected", message: "Conectado." });
     }
-    if (cmd === "model_get_selected") {
-      return Promise.resolve({
-        model: {
-          providerId: "opencode",
-          modelId: "big-pickle",
-          name: "big-pickle",
-          free: true,
-          recommended: true,
-          deprecated: false,
-        },
-        notice: null,
-        requiresChoice: false,
-      });
-    }
-    if (cmd === "model_list") {
-      return Promise.resolve([]);
-    }
     return Promise.reject(new Error(`unexpected invoke ${cmd}`));
   });
 });
@@ -88,6 +94,7 @@ describe("ProviderPanel", () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
     expect(await screen.findByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Modelo")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -132,6 +139,8 @@ describe("ProviderPanel", () => {
 
   it("shows a human error when the key is invalid", async () => {
     invokeMock.mockImplementation((cmd: string) => {
+      const models = modelCommands(cmd);
+      if (models) return models;
       if (cmd === "provider_list") return Promise.resolve([openaiSummary]);
       if (cmd === "provider_detail") return Promise.resolve(detail);
       if (cmd === "provider_connect_key") {
@@ -156,6 +165,8 @@ describe("ProviderPanel", () => {
   it("allows disconnecting after connecting (refreshed detail)", async () => {
     let connected = false;
     invokeMock.mockImplementation((cmd: string) => {
+      const models = modelCommands(cmd);
+      if (models) return models;
       if (cmd === "provider_list") return Promise.resolve([openaiSummary]);
       if (cmd === "provider_detail") {
         return Promise.resolve(
@@ -183,6 +194,8 @@ describe("ProviderPanel", () => {
   it("runs the OAuth flow: begin, open, poll to complete, then disconnect", async () => {
     let completed = false;
     invokeMock.mockImplementation((cmd: string) => {
+      const models = modelCommands(cmd);
+      if (models) return models;
       if (cmd === "provider_list") return Promise.resolve([openaiWithOauth]);
       if (cmd === "provider_detail") {
         return Promise.resolve(

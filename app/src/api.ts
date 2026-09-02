@@ -61,7 +61,8 @@ export const api = {
   agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
     invoke<void>("agent_send", { projectId, prompt, attachmentIds }),
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),
-  publish: (projectId: string) => invoke<PublicationView>("publish", { projectId }),
+  publish: (projectId: string, creationId?: string | null) =>
+    invoke<PublicationView>("publish", { projectId, creationId: creationId ?? null }),
   unpublish: (projectId: string) => invoke<PublicationView>("unpublish", { projectId }),
   publicationStatus: (projectId: string) =>
     invoke<PublicationView>("publication_status", { projectId }),
