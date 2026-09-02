@@ -356,6 +356,10 @@ impl FakeServer {
         self.script().diff_body = body.to_owned();
     }
 
+    pub fn set_diff_status(&self, status: u16) {
+        self.script().diff_status = status;
+    }
+
     pub fn set_messages_body(&self, body: &str) {
         self.script().messages_body = body.to_owned();
     }

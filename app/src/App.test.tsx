@@ -601,6 +601,48 @@ describe("App", () => {
     );
   });
 
+  it("re-enables the composer after a rejected agent_send and does not restore working on re-entry", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      agentSendError: { code: "credential_revoked", message: "raw" },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Creá algo");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Necesitás volver a conectar tu cuenta.", {
+          selector: ".provider-status-banner p",
+        }),
+      ).toBeInTheDocument(),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
+
+    const sendsBeforeRetry = invokeMock.mock.calls.filter(
+      (call) => call[0] === "agent_send",
+    ).length;
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Reintentar ahora");
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send").length).toBe(
+        sendsBeforeRetry + 1,
+      ),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
+  });
+
   it("shows a guided toast when opening a conversation fails", async () => {
     mockBackend({ openError: { code: "open_failed", message: "detalle interno" } });
     render(<App />);

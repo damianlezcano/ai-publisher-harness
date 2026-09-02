@@ -125,7 +125,11 @@ impl OpenCodeAgentEngine {
                             Some(fetched) => fetched.elapsed() >= ARTIFACT_REFRESH,
                         };
                         if should_fetch {
-                            idle_artifacts = self.fetch_artifacts(session_id)?;
+                            // A transient /diff failure must not abort an
+                            // in-progress ack wait; retry until grace expires.
+                            if let Ok(artifacts) = self.fetch_artifacts(session_id) {
+                                idle_artifacts = artifacts;
+                            }
                             last_artifact_fetch = Some(Instant::now());
                         }
                         if !idle_artifacts.is_empty() {
@@ -146,7 +150,9 @@ impl OpenCodeAgentEngine {
                         match idle_since {
                             None => idle_since = Some(Instant::now()),
                             Some(started) if started.elapsed() >= grace => {
-                                idle_artifacts = self.fetch_artifacts(session_id)?;
+                                if let Ok(artifacts) = self.fetch_artifacts(session_id) {
+                                    idle_artifacts = artifacts;
+                                }
                                 return Ok((phase, message, idle_artifacts));
                             }
                             Some(_) => {}

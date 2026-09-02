@@ -91,17 +91,20 @@ impl CreationRegistrar for FilesystemCreationRegistrar {
                     .map(|c| c.id)
             });
         let created = if let Some(id) = existing_id {
-            wipe_creation_output_dir(&self.base, project_id, id.as_str())?;
-            service
+            let updated = service
                 .replace_creation_content(
                     &pid,
                     &id,
                     CreationContent {
                         bytes,
-                        file_name: stored_file_name,
+                        file_name: stored_file_name.clone(),
                     },
                 )
-                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?
+                .map_err(|err| AgentError::RegistrationFailed(err.to_string()))?;
+            // Prune leftovers only after the new bytes are stored so a CAS
+            // reject cannot leave project.json pointing at an empty tree.
+            prune_stale_creation_outputs(&self.base, project_id, id.as_str(), &stored_file_name)?;
+            updated
         } else {
             let request = CreateCreation {
                 display_name,
@@ -191,7 +194,12 @@ fn fallback_display_name(file_name: &str, kind: CreationKind) -> String {
     safe_file_name(stem)
 }
 
-fn wipe_creation_output_dir(base: &Path, project_id: &str, creation_id: &str) -> AgentResult<()> {
+fn prune_stale_creation_outputs(
+    base: &Path,
+    project_id: &str,
+    creation_id: &str,
+    keep_file_name: &str,
+) -> AgentResult<()> {
     if creation_id.is_empty()
         || creation_id.contains(['/', '\\', '\0'])
         || creation_id == "."
@@ -213,6 +221,9 @@ fn wipe_creation_output_dir(base: &Path, project_id: &str, creation_id: &str) ->
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.file_name().and_then(|n| n.to_str()) == Some(keep_file_name) {
+            continue;
+        }
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(_) => continue,
@@ -499,5 +510,31 @@ mod tests {
         assert!(!dest.join("aux.js").exists());
         assert!(!dest.join("files").exists());
         assert!(!dest.join("node_modules").exists());
+    }
+
+    #[test]
+    fn prune_after_replace_keeps_the_new_primary_and_drops_stale_sidecars() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let creation_id = "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22";
+        let dest = tmp
+            .path()
+            .join("projects")
+            .join("proj")
+            .join("outputs")
+            .join(creation_id);
+        fs::create_dir_all(&dest).expect("outputs");
+        fs::write(dest.join("index.html"), b"new").expect("primary");
+        fs::write(dest.join("stale.css"), b"old").expect("stale");
+        fs::create_dir_all(dest.join("old-assets")).expect("stale dir");
+        fs::write(dest.join("old-assets/x.js"), b"x").expect("stale nested");
+
+        prune_stale_creation_outputs(tmp.path(), "proj", creation_id, "index.html").expect("prune");
+
+        assert_eq!(
+            fs::read_to_string(dest.join("index.html")).expect("kept"),
+            "new"
+        );
+        assert!(!dest.join("stale.css").exists());
+        assert!(!dest.join("old-assets").exists());
     }
 }

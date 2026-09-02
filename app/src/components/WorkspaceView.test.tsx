@@ -120,6 +120,7 @@ const baseProps = {
   onOpenProvider: vi.fn(),
   onProviderError: vi.fn(),
   onRetryBackend: vi.fn(),
+  onSendEnd: vi.fn(),
 };
 
 function setupApi(
@@ -176,6 +177,7 @@ beforeEach(() => {
   baseProps.onRefresh.mockReset();
   baseProps.onOpenProvider.mockReset();
   baseProps.onProviderError.mockReset();
+  baseProps.onSendEnd.mockReset();
   baseProps.onBack.mockReset();
   getCurrentWebviewMock.mockReset();
   getCurrentWebviewMock.mockReturnValue({
@@ -277,6 +279,7 @@ describe("WorkspaceView", () => {
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() => expect(baseProps.onProviderError).toHaveBeenCalledTimes(1));
+    expect(baseProps.onSendEnd).toHaveBeenCalledWith(projectId);
   });
 
   it("clears the optimistic pending bubble after a send error", async () => {

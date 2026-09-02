@@ -292,6 +292,12 @@ export default function App() {
                 setAgentPhase("working");
                 setAgentMessage(null);
               }}
+              onSendEnd={(id) => {
+                inFlightRef.current.delete(id);
+                if (selectedIdRef.current === id) {
+                  setAgentPhase("idle");
+                }
+              }}
               aiUsable={providerStatus !== "requires-choice" && backendStatus === "ready"}
               backendStatus={backendStatus}
               onRetryBackend={() => setBackendStatus("starting")}
