@@ -263,7 +263,7 @@ describe("App", () => {
     );
 
     const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
-    await userEvent.type(confirmInput, otherSummary.name);
+    await userEvent.type(confirmInput, messages.common.confirmYes);
     await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
 
     await waitFor(() =>
@@ -287,7 +287,7 @@ describe("App", () => {
     );
 
     const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
-    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.type(confirmInput, messages.common.confirmYes);
     await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
 
     await waitFor(() =>
@@ -335,7 +335,7 @@ describe("App", () => {
     );
 
     const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
-    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.type(confirmInput, messages.common.confirmYes);
     await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
 
     await waitFor(() =>
@@ -362,7 +362,7 @@ describe("App", () => {
     );
 
     const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
-    await userEvent.type(confirmInput, baseSummary.name);
+    await userEvent.type(confirmInput, messages.common.confirmYes);
     await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
 
     await waitFor(() =>

@@ -283,7 +283,7 @@ export default function ConversationsSidebar({
         <ConfirmDialog
           title={messages.conversations.deleteConfirmTitle}
           message={messages.conversations.deleteConfirmBody}
-          confirmText={confirmProject.name}
+          confirmPrompt={messages.common.confirmPrompt}
           busy={busy}
           onCancel={() => setConfirmDeleteId(null)}
           onConfirm={() => void commitDelete(confirmProject.id)}

@@ -106,7 +106,9 @@ export const messages = {
     send: "Enviar",
     retry: "Reintentar",
     confirm: "Confirmar",
-    confirmNameLabel: "Nombre para confirmar",
+    confirmYes: "Sí",
+    confirmPrompt: "Para confirmar, escribí Sí.",
+    confirmNameLabel: "Confirmación",
     copied: "Copiado",
   },
 

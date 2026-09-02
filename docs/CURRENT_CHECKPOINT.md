@@ -4,7 +4,47 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO — TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE, M11 NO INICIADO, 2026-09-01)
+## Estado actual (CONFIRMACIÓN DE ELIMINACIÓN CON «SÍ» — CAMBIO FRONTEND BOUNDED, INTEGRADO, 2026-09-01)
+
+- **DELETE-CONFIRMATION «SÍ» (frontend, acotado) INTEGRADO.** Cambio puntual sobre el
+  diálogo compartido `app/src/components/ConfirmDialog.tsx` para la ELIMINACIÓN DE
+  CONVERSACIÓN: ya NO se exige escribir el título exacto de la conversación; ahora se
+  confirma con la afirmación **«Sí»**. `normalizeConfirmation` (trim → toLowerCase →
+  NFD → strip U+0300–U+036f) acepta `Sí`/`sí`/`SI`/`si` y tolera espacios al inicio/final.
+  Cadenas ajenas (`No`, `borrar`, el propio título, `s i`, `siii`, solo-espacios, vacío)
+  NO habilitan el botón. **Enter NO puede saltar la confirmación** (input fuera de
+  `<form>`, botones `type="button"`, `useFocusTrap` solo mapea Escape/Tab); el botón
+  `danger` sigue `disabled={!ready || busy}`; Cancel/Escape/backdrop → `onCancel` nunca
+  `onConfirm`.
+- **SIN FUGA DE ALCANCE / SIN RELAJAR TAREA F.** La regla `ready` quedó:
+  `confirmText !== undefined ? value === confirmText : normalizeConfirmation(value) ===
+  normalizeConfirmation(messages.common.confirmYes)`. El flujo de PROYECTOS
+  (`ProjectsView.tsx`, pasa `confirmText={deleting.name}`) conserva el matching **exacto**
+  original (case/accent/sensitive, sin trim) → byte-idéntico al pre-cambio. El flujo de
+  CONVERSACIÓN (`ConversationsSidebar.tsx`, pasa solo `confirmPrompt`, sin `confirmText`)
+  usa la rama afirmativa. `commitDelete` (guard in-flight/busy, fail-closed, reset solo
+  en éxito) y toda la semántica destructiva/persistencia/unpublish/filesystem de Task F
+  quedaron **intactas** (diff solo frontend, 5 archivos, sin Rust/tauri/api).
+- **A11Y / COPY.** `confirmPrompt` se asocia al input vía `aria-describedby` (`<p
+  id="confirm-prompt">`); foco inicial en el input; `role="dialog" aria-modal` intactos.
+  Copy voseo: `confirmYes: "Sí"`, `confirmPrompt: "Para confirmar, escribí Sí."`,
+  `confirmNameLabel: "Confirmación"` (label sr-only genérico, aceptado).
+- **REVIEWS INDEPENDIENTES (qwen3.8-flash, sesiones FRESH):** primera →
+  **REQUEST_CHANGES** (should-fix scope-leak del matching + should-fix `aria-describedby`;
+  nits de tests); fix acotado aplicado → re-review **APPROVE**. Nota: la sugerencia
+  literal del reviewer (`confirmText === messages.common.confirmYes ? …`) habría roto
+  `ConfirmDialog.test.tsx` (que pasa `confirmText` explícito); se resolvió con la regla
+  explícito=exacto / ausente=afirmativo.
+- **VERDE:** vitest FE **214/214** (21 archivos), `tsc --noEmit` 0, `eslint` 0,
+  `prettier --check` 0, **`./scripts/verify` EXIT=0** (cargo check, contracts M10 +
+  UX_REDESIGN_01, fetch-sidecars).
+- **PENDIENTE (fuera de este cambio acotado):** el AppImage `930ee074…` se construyó
+  desde `773278d` y **NO incluye** este cambio; el próximo AppImage fresco +
+  re-aceptación humana deben incluirlo. El pase grande de corrección de aceptación
+  humana (8 ítems) sigue pendiente y **debe preservar** esta confirmación con «Sí»
+  (ítem 8). M11 **NO INICIADO**. El orquestador rota en este checkpoint.
+
+## Estado previo (APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO — TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE, M11 NO INICIADO, 2026-09-01)
 
 - **APPIMAGE NUEVO POST-T7 REAL = PASS (sesión FRESH, deepseek-v4-flash, validación técnica completa).** AppImage NUEVO construido desde main `773278d` (post-T7 human blocker merge `d6f97ab` + checkpoint `773278d`) con el packaging canónico M10 `scripts/smoke-package appimage`. **EXIT=0 (smoke-package PASS).** Artefacto:
   `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`, **180.816.376 bytes**, **SHA-256 `930ee074bfbe40b4cf1e5c9582c93b884d695d6348bf7521e764ade5b9f6834d`** (NUEVO; difiere del stale T7 `3dba67a8…`), timestamp 2026-09-01 20:47:14 -0300, source commit `773278d`, build via `scripts/smoke-package appimage` (fetch-sidecars → `cargo tauri build --bundles appimage` → fallback documentado a appimagetool), repo limpio (working tree clean) antes del build, sin cambios de producto sin commitear. Sidecars bundlados pineados verificados en el payload extraído: opencode **1.18.25** y cloudflared **2026.8.3** (cloudflared SHA-256 `f29324fe…` idéntico al pin `config/components.json`). **Lanzamiento real en Fedora/Wayland (DISPLAY=:0):** app corre con WebKitNetworkProcess + WebKitWebProcess activos, backend `[agent] starting → ready` SIN falso error de arranque, sin errores en log. **PATH-independencia:** lanzado con PATH sin opencode/cloudflared; el sidecar opencode hijo se ejecuta desde el mount propio del AppImage (`/tmp/.mount_EducAIGcoBlM/usr/bin/opencode`, port 42523). **Frontend embebido correcto:** el binario embebe exactamente `assets/index-Dt0XeFOc.js` + `assets/index-CxEdFXeO.css` (idénticos nombres a los del `dist` generado en este build desde main `773278d`; los markers del fix — CSS `.conversation-menu-dropdown button.danger` / `danger-soft` y JS "Eliminar conversación" / `chat-status.err` — presentes en el dist embebido y `external_directory` en el binario). **`./scripts/verify` EXIT=0** (cargo fmt/clippy/test, FE 202/202, format/lint/typecheck, M10 + UX_REDESIGN_01 contracts, fetch-sidecars --check, cargo check src-tauri, git diff --check). **Targeted Blocker A runtime (probes directos contra el sidecar real empaquetado 1.18.25, 127.0.0.1:42523):** `POST /session` + body JSON `directory` → la sesión queda ligada al mount del AppImage (`/tmp/.mount_EducAIGcoBlM/usr`) — reproduce el bug; `POST /session?directory=%2Ftmp%2Fopencode%2Fpostt7-evidence%2Fws-test` → la sesión queda ligada al workspace EducAI deseado (campo `directory` en `GET /session`). **Secuencia de requests (sin aceptar "hola" único):** 3 prompts en la MISMA sesión ligada (hola → "Hola. ¿En qué puedo ayudarte?"; 2º → "Sí, sigo la conversación. ¿Qué necesitas?"; 3º → "Recibido, tercer mensaje. ¿En qué trabajamos?"), 1 conversación/sesión NUEVA con contexto de adjunto (rosco.txt → "Listo."), todos con `cwd` del message = `/tmp/opencode/postt7-evidence/ws-test`, sin ASK external_directory (permission deny bindeado), sin espera ~120s (respuestas en ~1s), y sin misclasificar fallo en vuelo como arranque. **Targeted Blocker B (vitest `ChatPanel.test.tsx`):** "does not duplicate a persisted failed assistant message as raw error text" PASS + "still renders a failed status line when an earlier failed bubble is not the newest message" PASS (fix de review preservado: burbuja histórica NO suprime fallo nuevo). **Targeted Blocker C (vitest `App.test.tsx` menu + CSS):** menu ⋮ Renombrar/Eliminar con `role=menu`/`menuitem` PASS; CSS `.conversation-menu-dropdown button.danger` con `color: var(--danger)` sobre superficie (contraste legible), hover `--danger-soft`, disabled `--muted`, nowrap + padding compacto, copy español intacto. Limpieza: instancias de prueba del AppImage (nueva y stale T7) terminadas, mounts `/tmp/.mount_EducAI*` removidos, worktrees limpios (solo `main`), branch único `corr/a-creation-contract` preexistente sin tocar. **Status: TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE. NO HUMAN ACCEPTED. M11 NO INICIADO. Gate siguiente y único: HUMAN PRODUCT-OWNER RE-ACCEPTANCE sobre ESTE AppImage nuevo (`930ee074…`).** Limitaciones para validación humana: (1) secuencia real-provider en el AppImage con modelo gratis y adjunto rosco se dejó al escenario §17 humano; (2) la validación de prompts usó el modelo gratis `big-pickle` determinista; (3) la visibilidad/contraste visual final del menú y los flows UI completos se confirman en el escenario humano; (4) no se ejecutó el escenario §17 completo (es humano).
@@ -490,6 +530,12 @@ debe unpublish primero para no dejar entrada stale. Si el autor encontrara una
 referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 
 ## Próximo paso (inmediato)
+
+> **Nota (cambio «Sí» integrado en `main`):** el pase grande de corrección de
+> aceptación humana (8 ítems, NO iniciado en esta sesión) debe **preservar** la nueva
+> confirmación de eliminación de conversación con «Sí» (ítem 8), y el **próximo
+> AppImage fresco** debe construirse desde un `main` que ya la incluya (el actual
+> `930ee074…` es de `773278d` y NO la trae).
 
 **APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO (`930ee074…`, main `773278d`).** Repo en
 `TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE`. El ÚNICO gate siguiente es que el
