@@ -4,81 +4,104 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (PASS CORRECCIÓN PRODUCT/UX CREACIÓN/COMPARTIR/CHAT — AUTOR + REVIEW UX DONE, FALTA REVIEW CÓDIGO/A11Y + MERGE, M11 NO INICIADO, 2026-09-01)
+## Estado actual (PASS CORRECCIÓN PRODUCT/UX CREACIÓN/COMPARTIR/CHAT — COMPLETE, REVIEWS APPROVE, INTEGRADO EN MAIN, M11 NO INICIADO, 2026-09-01)
 
-- **PASS DE ACEPTACIÓN HUMANA (CREACIÓN / SHARE / CHAT UX) EN CURSO — NO ES M11.** Este
-  pass corrige los 7 bloqueadores PRODUCT/UX hallados por el product owner en el
-  AppImage real (asistente generó un Rosco/Pasapalabra desde `datosrosco.txt`, pero
-  solo apareció prosa, la URL pública mostraba "Material del proyecto", el asistente
-  pidió abrir archivos a mano, hubo burbuja vacía "Asistente", toast duplicado
-  "Tu recurso está listo.", y selector de modelo permanente en el composer).
-- **AUTOR (Cursor Grok 4.6 High, FRESH) — COMMIT `3ba7c5a` EN `corr/creation-share-ux-pass`,
-  worktree `../ai-publisher-corr-01-creation-share`, base main `3a7c6d1`. NO INTEGRADO
-  TODAVÍA.** 28 archivos (+823/−263): 3 bloques backend acotados + frontend + docs.
-  **B1 (card de creación):** `opencode.rs` `normalize_output_path` acepta paths
-  session-relative (`rosco.html` → `workspace/rosco.html`) y absolutos solo si contienen
-  `/workspace/`; `service.rs` `merge_artifacts` = diff + workspace scan; cualquier
-  `.html/.htm` es `Web`; el registrar guarda webs como `index.html` y copia sidecars
+- **PASS DE ACEPTACIÓN HUMANA (CREACIÓN / SHARE / CHAT UX) = COMPLETE Y NO ES M11.** Corrige
+  los 7 bloqueadores PRODUCT/UX hallados por el product owner en el AppImage real (asistente
+  generó un Rosco/Pasapalabra desde `datosrosco.txt`, pero solo apareció prosa, la URL
+  pública mostraba "Material del proyecto", el asistente pidió abrir archivos a mano, hubo
+  burbuja vacía "Asistente", toast duplicado "Tu recurso está listo.", y selector de modelo
+  permanente en el composer).
+- **INTEGRADO EN MAIN.** Autor (Cursor Grok 4.6 High FRESH) commit `3ba7c5a` + fix de review
+  `857d98c` en `corr/creation-share-ux-pass` (worktree `../ai-publisher-corr-01-creation-share`,
+  base main `3a7c6d1`). **Merge `ebeac0e` en main** (ort, 30 archivos, +1320/−300).
+  Evidencia durable de reviews en `docs/qwen-review-creation-share.md`,
+  `docs/qwen-rereview-creation-share.md`, `docs/ux-rereview-creation-share.md` (commit `05a2c2a`).
+- **B1 (card de creación):** `opencode.rs` `normalize_output_path` acepta paths session-relative
+  (`rosco.html` → `workspace/rosco.html`) y absolutos solo si contienen `/workspace/`;
+  `service.rs` `merge_artifacts` usa el diff del sidecar cuando trae un archivo registrable y
+  el workspace scan SOLO como fallback si el diff queda vacío (prevención de duplicados M1);
+  cualquier `.html/.htm` es `Web`; el registrar guarda webs como `index.html` y copia sidecars
   (CSS/JS/imágenes) a `outputs/<id>/` — genérico, sin hardcode Pasapalabra.
-  **B2 (Abrir/Compartir = misma creación):** `publish(projectId, creationId?)` fluye de la
-  card → `useShareControl` → Tauri `commands.rs` → `app.rs publish_creation`;
-  Abrir usa el mismo `creation.id` (`preview_open_web`).
+  **B2 (Abrir/Compartir = misma creación):** `publish(projectId, creationId?)` fluye de la card
+  → `useShareControl` → Tauri `commands.rs` → `app.rs publish_creation`; Abrir usa el mismo
+  `creation.id` (`preview_open_web`).
   **B3 (URL pública muestra la creación, no "Material del proyecto"):** `app.rs
-  prepare_share_visibility` marca PÚBLICA la creación objetivo (id preferido, si no el
-  último web, si no la última) y degrada otros webs públicos antes del snapshot; test
-  `app_facade.rs publish_promotes_the_generated_web_creation_as_the_public_entry`
-  assert que `publish/index.html` contiene el markup generado y NO contiene "Material del
-  proyecto". Infraestructura túnel/URL intacta.
-  **B4 (sin abrir-archivo-manual):** `service.rs build_instruction` ahora ordena escribir
-  un recurso web estático con `index.html` como entrada, dice que EducAI mostrará
-  Abrir/Compartir, y prohíbe pedir abrir/doble clic/explorador. Ejemplo: "Listo. Creé el
-  recurso usando el archivo que adjuntaste." (no es swap de texto hardcodeado).
-  **B5 (burbuja vacía):** poll ignora texto asistente vacío; `assistant_reply_text`
-  persiste "Listo." si queda vacío; `ChatPanel.tsx` no renderiza burbuja assistant
-  completada vacía sin creations.
-  **B6 (toast duplicado):** el toast "Tu recurso está listo." se ELIMINÓ (un evento lógico
-  = una notificación; el chat + la card ya comunican readiness; copy "recurso" quedó en el
-  catálogo solo para tests); listener de `agent://task` usa refs + `unlisten` cancelado
+  prepare_share_visibility` marca PÚBLICA la creación objetivo (id preferido, si no el último
+  web, si no la última) y degrada otros webs públicos antes del snapshot; test
+  `app_facade.rs publish_promotes_the_generated_web_creation_as_the_public_entry` assert que
+  `publish/index.html` contiene el markup generado y NO contiene "Material del proyecto".
+  **B4 (sin abrir-archivo-manual):** `service.rs build_instruction` ordena escribir un recurso
+  web estático con `index.html` como entrada, dice que EducAI mostrará Abrir/Compartir, y
+  prohíbe pedir abrir/doble clic/explorador.
+  **B5 (burbuja vacía):** poll ignora texto asistente vacío; `ChatPanel.tsx` no renderiza
+  burbuja assistant completada vacía sin creations; errores/cancel siguen como `role="alert"`.
+  **B6 (toast duplicado):** toast "Tu recurso está listo." ELIMINADO (un evento lógico = una
+  notificación); listener `agent://task` registrado una vez con refs + `unlisten` cancelado
   (sin re-suscripción por `selectedId`).
-  **B7 (modelo a Configuración):** composer = adjuntar/mensaje/enviar (+ slot Compartir
-  existente); `ModelSelector` se movió a `ProviderPanel` (Configuración) con
-  `modelOptionLabel` compartido en `labels.ts`; default free/model discovery del backend
-  intacto (sin hardcode Big Pickle); X de Configuración = `setSettingsOpen(false)` →
-  vuelve EXACTO a la misma conversación (draft/selection conservados).
-- **REVIEW PRODUCT/UX INDEPENDIENTE (Cursor Grok 4.6 High FRESH) = APPROVE** (pane cerrado).
-  B1-B7 PASS, preservaciones OK (ConfirmDialog/ConversationsSidebar intactos → «Sí»
-  conservado; adjuntos/assistant runtime no tocados; sin fuga técnica). 2 residuales NO
-  bloqueantes: (1) si el modelo escribe `index.html` en la raíz del workspace el título de
-  la card cae a "index" (kind + Abrir/Compartir funcionan; un título humano sería mejor);
-  (2) Compartir sigue también en la bottom bar (nivel conversación) además de la card —
-  consistente con este pass.
-- **VERIFICACIÓN EN EL WORKTREE AUTOR (no integrado):** `pnpm format:check/lint/typecheck`
-  OK, **vitest 216/216** (21 archivos), `cargo fmt --check` + `clippy -D warnings` + `cargo
-  test` verdes (60 suites ok), **`./scripts/verify` EXIT=0** (contracts M10 +
-  UX_REDESIGN_01, fetch-sidecars --check, cargo check src-tauri, git diff --check).
-  Evidencia = unit/integración mockeada; NO AppImage real, NO Cloudflare live, NO
-  generación OpenCode live (no se reclama aceptación humana).
-- **PENDIENTE OBLIGATORIO (gate de merge, §21):** (a) REVIEW CÓDIGO/A11Y/CORRECTNESS FRESH
-  `opencode-go/qwen3.8-flash` sobre el diff `3a7c6d1..3ba7c5a` (correctness, estado,
-  registro de Creations, consistencia open/share target, prevención de duplicados,
-  empty-state, Settings/navegación, a11y/keyboard/focus, regresión «Sí», tests, scope);
-  (b) fixes acotados por el MISMO autor si REQUEST_CHANGES; (c) re-review UX acotado solo
-  si cambia comportamiento visible; (d) **MERGE a main** (commit+merge siguiendo política);
-  (e) re-verificar `./scripts/verify` en main; (f) actualizar ESTE checkpoint con el estado
-  final integrado; (g) siguiente gate: **FRESH REAL APPIMAGE BUILD + VERIFICACIÓN TÉCNICA +
-  RE-ACEPTACIÓN HUMANA DEL PRODUCT OWNER**.
-- **POR QUÉ NO SE INTEGRÓ EN ESTA SESIÓN:** el orquestador (deepseek-v4-flash) alcanzó
-  **ROTATE_SESSION_REQUIRED (~106K)** al cerrar la review UX → política §24/scripts/verify:
-  no lanzar nuevo trabajo (la review código/a11y es un worker nuevo). Se rota con este
-  checkpoint. **Próxima sesión FRESH de orquestador debe: lanzar review código/a11y qwen,
-  integrar 3ba7c5a, cerrar worktrees/branches de review, verificar main, y dejar listo el
-  gate AppImage.**
+  **B7 (modelo a Configuración):** composer = adjuntar/mensaje/enviar (+ slot Compartir);
+  `ModelSelector` en `ProviderPanel` (Configuración); default free/model discovery del backend
+  intacto (sin hardcode Big Pickle); X de Configuración = `setSettingsOpen(false)` → vuelve
+  EXACTO a la misma conversación.
+- **REVIEW PRODUCT/UX INDEPENDIENTE (Cursor Grok 4.6 High FRESH) = APPROVE** (pane cerrado,
+  sesión previa). 2 residuales NO bloqueantes: (1) título de card caía a "index" cuando el
+  modelo escribía `index.html` en la raíz → **RESUELTO en el fix de review (m1)**: la raíz
+  `index.html`/`index.htm` ahora se titula "Actividad"; carpetas padre siguen ganando en
+  anidados (`actividad-2/index.html` → "actividad-2"); (2) Compartir sigue también en la
+  bottom bar además de la card — consistente con el pass.
+- **REVIEW CÓDIGO/A11Y/CORRECTNESS FRESH (`opencode-go/qwen3.8-flash`) = REQUEST_CHANGES →
+  APPROVE.** Primer review sobre `3a7c6d1..3ba7c5a`: **M1 MAJOR** (el scan de workspace
+  re-registraba artifacts de turnos previos → cards duplicadas en turnos siguientes y
+  promoción de duplicado stale en el fallback sin-id) + **m1-m7 MINOR** (título "index";
+  sidecar copy podía producir Creation no publicable — reserved roots/stems; `index.html`
+  anidado descartado; scan/copy sin capping ni exclusión de árboles de dependencias; poll de
+  `/diff` cada 20ms con 120s de timeout si vacío; a11y: botones Abrir/Compartir sin nombre
+  accesible por creación; sin cobertura del path filesystem sidecar) + LOW/NIT (L1-L4, N1).
+  **Fix acotado por el MISMO autor (Cursor Grok 4.6 High FRESH, commit `857d98c`, 14 archivos
+  +554/−94):** M1 vía opción (a) — diff del sidecar autoritativo, scan solo si diff vacío
+  (`later_turn_does_not_reregister_prior_workspace_files` + `workspace_scan_registers_when_diff_is_empty`
+  verdes); m1 título humano "Actividad"; m2 `sidecar_component_ok` replica `validate_component`
+  del snapshot (reserved stems a cualquier profundidad, `materials.html`/`files` solo raíz);
+  m3 skip de `index.html` solo en `dest_root`; m4 skip `node_modules/dist/build/target/vendor/venv/
+  __pycache__/coverage/bower_components` + caps profundidad 8 / archivos 500 / bytes 32 MiB;
+  m5 grace idle 2s arranca aunque no haya files y `/diff` se trae una vez al iniciar el grace;
+  m6 `aria-label="{Abrir}: {displayName}"` / `"{Compartir}: {displayName}"` por card; m7 tests
+  real-registrar (`web_sidecar_sibling_is_copied_into_outputs_and_publish`); L1 param muerto
+  eliminado; L2 dead code eliminado (messages.agent.ready, CSS `.composer-model*`); L4 copy
+  best-effort + validación `..` en source; N1 `content:""` cae a `parts`. **L3 NO fixed por
+  diseño** (note de demotion de webs públicas para target no-web, pre-existente LOW, M1 le
+  quita su peor manifestación — aceptado por el revisor). **Re-review FRESH
+  (`opencode-go/qwen3.8-flash`) = APPROVE** (verificado: diff 3ba7c5a..857d98c, invariantes 1-11
+  del diff combinado, targeted tests verdes, `pnpm typecheck` + `cargo fmt --check` + `git diff
+  --check`; residuales no bloqueantes: LOW L3, NIT log del copy error, NIT skip de nombres
+  genéricos).
+- **RE-REVIEW UX ACOTADO (Cursor Grok 4.6 High FRESH) = APPROVE** sobre los DOS cambios de
+  comportamiento visible del fix: (1) título "Actividad" para `index.html` raíz — lenguaje de
+  aula, sin fuga del nombre de archivo, consistente con B1-B3; (2) sin cards duplicadas en
+  turnos siguientes — el docente ve UNA card nueva por actividad, y el fallback latest-Web de
+  Compartir ya no puede promover un re-registro stale. B1-B3 (Abrir/Compartir sobre el mismo
+  artifact registrado; share público de la creación) intactos.
+- **VERIFICACIÓN EN WORKTREE AUTOR (post-fix `857d98c`):** `pnpm format:check/lint/typecheck`
+  OK, **vitest 217/217** (21 archivos), `cargo fmt --check` + `clippy -D warnings` + `cargo
+  test --locked --workspace --all-targets` verdes (584 tests), **`./scripts/verify` EXIT=0**.
+  **VERIFICACIÓN EN MAIN POST-MERGE (`ebeac0e`): `./scripts/verify` EXIT=0** (FE 217/217,
+  cargo verde, contracts M10 + UX_REDESIGN_01, fetch-sidecars --check, cargo check src-tauri,
+  git diff --check). Evidencia = unit/integración mockeada; NO AppImage real, NO Cloudflare
+  live, NO generación OpenCode live (no se reclama aceptación humana).
 - **DELETE-CONFIRMATION «SÍ» = PRESERVADO (commit `3a7c6d1`, intacto en este pass).**
-  `ConfirmDialog.tsx`/`ConversationsSidebar.tsx` sin cambios; `normalizeConfirmation`
+  `ConfirmDialog.tsx`/`ConversationsSidebar.tsx` sin cambios en este diff; `normalizeConfirmation`
   acepta `Sí/sí/SI/si` (+ espacios) y cadenas ajenas nunca confirman; Enter no saltea;
   Cancel nunca borra; flujo de proyectos conserva matching exacto del título.
-- **M11 NO INICIADO.** Sin fuga de alcance: sin redesign de infra de publicación, sin
-  cambios destructivos Task F, sin tocar runtime/session-directory (no reabiertos).
+- **M11 NO INICIADO.** Sin fuga de alcance: sin redesign de infra de publicación, sin cambios
+  destructivos Task F, sin tocar runtime/session-directory (no reabiertos).
+- **PRÓXIMO GATE (siguiente sesión FRESH):** (1) **FRESH REAL APPIMAGE BUILD + VERIFICACIÓN
+  TÉCNICA** desde main `ebeac0e` (`scripts/smoke-package appimage`, sidecars pineados
+  opencode 1.18.25 + cloudflared 2026.8.3, `./scripts/verify` EXIT=0, lanzamiento real
+  Fedora/Wayland); (2) **HUMAN PRODUCT-OWNER RE-ACCEPTANCE** del AppImage fresco (escenario
+  real §17/§15: adjunto rosco + prompt real → creación card [Abrir][Compartir], URL pública
+  con el juego y sin "Material del proyecto", sin burbuja vacía, sin toast duplicado, modelo
+  en Configuración, «Sí» para eliminar). NO iniciar M11. NO afirmar aceptación humana desde
+  OpenCode. Rotación de sesión previa en `3251ffd` (orquestador previo alcanzó ~106K).
 
 ## Estado previo (CONFIRMACIÓN DE ELIMINACIÓN CON «SÍ» — CAMBIO FRONTEND BOUNDED, INTEGRADO, 2026-09-01)
 
@@ -432,7 +455,10 @@ Resta solo la aprobación humana del product owner. NO es M11.**
 ## Worktrees
 
 - `main` → `/home/damian/rh/workspaces/damianlezcano/educai/ai-publisher-harness`
-  (integración, `d6f97ab`; NO es workspace de autor).
+  (integración, `ebeac0e`; NO es workspace de autor).
+- Creation/Share/UX pass: worktree autor `../ai-publisher-corr-01-creation-share`
+  (`corr/creation-share-ux-pass`, commits `3ba7c5a` + `857d98c`). INTEGRADO vía
+  merge `ebeac0e`. A remover + branch a borrar en cierre de sesión.
 - Post-T7 pass: worktree autor `../ai-publisher-corr-01-postt7`
   (`corr/post-t7-blockers`), UX review `../ai-publisher-corr-01-postt7-review`
   (`corr/post-t7-ux-review`), a11y review `../ai-publisher-corr-01-postt7-a11y`
@@ -480,6 +506,20 @@ Resta solo la aprobación humana del product owner. NO es M11.**
 
 ## Model allocation (sesión anterior cerrada)
 
+- **Creation/Share/UX human-acceptance pass (COMPLETE, integrado `ebeac0e`): orquestador
+  `opencode-go/deepseek-v4-flash` (esta sesión, budget CONTINUE al cierre). Autor
+  `cursor-grok-4.6-high` vía Cursor (`corr/creation-share-ux-pass`, commits `3ba7c5a` +
+  fix `857d98c`). Revisor UX independiente `cursor-grok-4.6-high` FRESH (sesión previa,
+  APPROVE). Revisor código/a11y `opencode-go/qwen3.8-flash` FRESH (`creation-share-code-review`,
+  pane `w1F:p1G`, REQUEST_CHANGES con M1 MAJOR + m1-m7 MINOR + LOW/NIT). Fix acotado por
+  autor Cursor Grok 4.6 High FRESH (`creation-share-fix`, pane `w1F:p1H`, commit `857d98c`).
+  Re-review código/a11y `opencode-go/qwen3.8-flash` FRESH (`creation-share-rereview`, pane
+  `w1F:p1J`, APPROVE). Re-review UX acotado `cursor-grok-4.6-high` FRESH
+  (`creation-share-ux-rereview`, pane `w1F:p1K`, APPROVE). Merge `ebeac0e` + evidencia
+  `05a2c2a`, `./scripts/verify` EXIT=0 en main (FE 217/217). Panes reviewers cerrados tras
+  APPROVE; fixer/author a cerrar en cierre de sesión; worktree autor + branch
+  `corr/creation-share-ux-pass` a limpiar. Qwen3.8 Max: 0 sesiones. DeepSeek V4 Pro: 0
+  sesiones.**
 - **Post-T7 human blocker pass (este): orquestador `opencode-go/deepseek-v4-flash`
   (rota en ROTATE_SESSION_REQUIRED 117K tras merge/cleanup). Autor
   `cursor-grok-4.6-high` vía Cursor (`postt7-author`, pane `w1F:p1A`,
@@ -608,31 +648,33 @@ referencia cruzada real no contemplada, debe parar y escalar, no adivinar.
 ## Próximo paso (inmediato)
 
 > **Nota (cambio «Sí» integrado en `main`):** el pase grande de corrección de
-> aceptación humana (8 ítems, NO iniciado en esta sesión) debe **preservar** la nueva
-> confirmación de eliminación de conversación con «Sí» (ítem 8), y el **próximo
-> AppImage fresco** debe construirse desde un `main` que ya la incluya (el actual
-> `930ee074…` es de `773278d` y NO la trae).
+> aceptación humana (7 ítems, COMPLETO en `ebeac0e`) **preservó** la nueva
+> confirmación de eliminación de conversación con «Sí» (ítem 8 del pase previo), y
+> el **próximo AppImage fresco** debe construirse desde un `main` que ya la incluya
+> y también las correcciones Creation/Share/Chat (el actual `930ee074…` es de
+> `773278d` y NO trae este pass).
 
-**APPIMAGE NUEVO POST-T7 CONSTRUIDO Y VERIFICADO (`930ee074…`, main `773278d`).** Repo en
-`TÉCNICAMENTE READY FOR HUMAN RE-ACCEPTANCE`. El ÚNICO gate siguiente es que el
-**product owner re-corra el escenario real §17** sobre ESE AppImage nuevo
-(`app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
-SHA-256 `930ee074bfbe40b4cf1e5c9582c93b884d695d6348bf7521e764ade5b9f6834d`).
-Solo el humano puede marcar HUMAN ACCEPTED. M11 NO iniciar.
+**PASS CREATION/SHARE/CHAT INTEGRADO Y VERIFICADO (`ebeac0e`).** Repo en
+`TÉCNICAMENTE LISTO PARA RE-ACEPTACIÓN HUMANA` en cuanto se construya el AppImage
+fresco. El ÚNICO gate siguiente es: (1) **FRESH REAL APPIMAGE BUILD + VERIFICACIÓN
+TÉCNICA** desde main `ebeac0e`, y (2) que el **product owner re-corra el escenario
+real §17/§15** sobre ESE AppImage nuevo. Solo el humano puede marcar HUMAN
+ACCEPTED. M11 NO iniciar.
 
-1. Construir AppImage NUEVO desde main `d6f97ab` con `scripts/smoke-package
+1. Construir AppImage NUEVO desde main `ebeac0e` con `scripts/smoke-package
    appimage` (fetch-sidecars → `cargo tauri build --bundles appimage`), sidecars
    pineados SIN cambiar (opencode 1.18.25, cloudflared 2026.8.3), `./scripts/verify`
    EXIT=0 contra el artefacto fresco, lanzamiento real en Fedora/Wayland con PATH
    sin sidecars, y luego entregar al product owner.
 2. El product owner re-corre el escenario real §15 sobre el AppImage NUEVO:
-   conversación nueva + adjunto de rosco + prompt real → el asistente responde
-   (Blocker A corregido), el error de asistente aparece UNA sola vez (Blocker B),
-   menú "…" → Eliminar conversación legible y accesible (Blocker C), card de
-   creación [Abrir][Compartir], Abrir funciona, el agente usa el archivo, la
-   creación se actualiza, Compartir produce URL pública usable, renombrar/
-   eliminar conversación, reinicio y delete persistido. Solo el humano acepta el
-   AppImage final. NO afirmar aceptación humana desde OpenCode.
+   conversación nueva + adjunto de rosco + prompt real → el asistente responde y
+   genera la creación; card de creación [Abrir][Compartir] (título humano, no
+   "index"; sin cards duplicadas en turnos siguientes); Abrir funciona; el agente
+   usa el archivo; Compartir produce URL pública usable con EL JUEGO (no "Material
+   del proyecto"); sin burbuja vacía "Asistente"; sin toast duplicado; modelo en
+   Configuración; menú "…" → Eliminar conversación con confirmación «Sí»;
+   renombrar/eliminar conversación, reinicio y delete persistido. Solo el humano
+   acepta el AppImage final. NO afirmar aceptación humana desde OpenCode.
 3. NO iniciar M11. Este pass queda en TÉCNICAMENTE LISTO esperando el AppImage
    nuevo y la re-aceptación humana.
 2. **Seguimiento recomendado NO bloqueante (de las reviews de G):**
@@ -647,6 +689,16 @@ Solo el humano puede marcar HUMAN ACCEPTED. M11 NO iniciar.
      distinta ubicación); enfocar/anunciar el menú revelado.
    - (qwen/UX NIT) `messages.timeline.resourceLabel`, CSS `.message-resource`,
      `humanSize` (export sin uso) quedaron muertos; cleanup de catálogo/CSS.
+   - (re-review code/a11y NIT) `registrar.rs`: el error del copy sidecar
+     best-effort se descarta con `let _ =` sin log; agregar debug/warn.
+   - (re-review code/a11y NIT) Skip lists (`build`, `dist`, `target`,
+     `materials`) a cualquier profundidad podrían excluir una carpeta de
+     actividad con ese nombre; improbable en este dominio, aceptado.
+   - (re-review code/a11y LOW) `app.rs prepare_share_visibility`: Compartir
+     explícito de una card no-web no degrada un Web público existente (la raíz de
+     la URL puede no ser el artifact de la card); M1 le quitó su peor
+     manifestación; revisitar solo si el producto quiere democión de cualquier
+     Web público cuando el target no es Web.
    - (F review) chequeo de existencia de proyecto autoritativo DENTRO del lock
      del agente en `AgentService::run` + test single-instance delete↔agent.
 3. NO iniciar M11. El pass de corrección queda en TÉCNICAMENTE READY FOR HUMAN
