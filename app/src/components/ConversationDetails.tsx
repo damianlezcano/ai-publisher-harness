@@ -89,9 +89,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
             </option>
           ))}
         </select>
-        {active && (
-          <p className="notice">{messages.conversationDetails.activeTurnNotice}</p>
-        )}
+        {active && <p className="notice">{messages.conversationDetails.activeTurnNotice}</p>}
       </section>
       <section className="provider-section">
         <h3>{messages.conversationDetails.filesHeading}</h3>

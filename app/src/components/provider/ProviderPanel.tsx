@@ -113,7 +113,9 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
           </button>
         </div>
         <p className="sr-only" aria-live="polite" aria-atomic="true">
-          {logs.length > 0 ? messages.sessionLogs.latestAnnouncement(logs[logs.length - 1].level) : ""}
+          {logs.length > 0
+            ? messages.sessionLogs.latestAnnouncement(logs[logs.length - 1].level)
+            : ""}
         </p>
         <pre ref={logsRef} className="session-logs">
           {logs.length === 0
