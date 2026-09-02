@@ -215,6 +215,26 @@ describe("ComposerBar", () => {
     expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
   });
 
+  it("clears controlled attachment chips after send while materials remain available", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    const onSend = vi.fn();
+    const onAttachmentIdsChange = vi.fn();
+    render(
+      <ComposerBar
+        {...base}
+        onSend={onSend}
+        attachmentIds={["m1"]}
+        onAttachmentIdsChange={onAttachmentIdsChange}
+      />,
+    );
+    expect(screen.getByText("diagrama.png")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "hola");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(onAttachmentIdsChange).toHaveBeenCalledWith([]);
+    expect(screen.getByText("diagrama.png")).toBeInTheDocument();
+    expect(onSend).toHaveBeenCalledWith("hola", ["m1"]);
+  });
+
   it("paste of an image calls api.materialAddImage + onMaterialsChanged and adds the returned material id", async () => {
     setupApiMock({
       selected: selectedFreeModel,
