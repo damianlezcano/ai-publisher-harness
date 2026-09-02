@@ -206,8 +206,10 @@ pub async fn preview_open_web(
     })
     .await?;
     let token = web.token.clone();
-    let url = web.url.clone();
-    let preview_origin = format!("http://127.0.0.1:{}/preview/{}/", origin_port(&url), token);
+    let preview_origin = format!("http://127.0.0.1:{}/preview/{}/", origin_port(&web.url), token);
+    // Navigate to the creation entrypoint. The preview server also maps the
+    // token root to index.html; this URL is the same artifact Abrir/Compartir use.
+    let url = preview_entrypoint_url(&web.url);
 
     let window = WebviewWindowBuilder::new(
         &app,
@@ -252,6 +254,16 @@ fn origin_port(url: &str) -> String {
         .unwrap_or_default()
 }
 
+fn preview_entrypoint_url(base: &str) -> String {
+    if base.ends_with("index.html") {
+        base.to_owned()
+    } else if base.ends_with('/') {
+        format!("{base}index.html")
+    } else {
+        format!("{base}/index.html")
+    }
+}
+
 /// Closes the isolated web preview by its single-use token (belt-and-suspenders
 /// alongside the window-closed teardown).
 #[tauri::command]
@@ -279,36 +291,33 @@ pub async fn agent_send(
     attachment_ids: Vec<String>,
 ) -> Result<(), AppError> {
     let shared = state.inner().clone();
+    // Persist the user message before this command returns so a second send
+    // cannot race ahead of the first turn, and so the UI can treat the
+    // request as in-flight as soon as `agent_send` resolves.
+    let persist_id = project_id.clone();
+    let persist_prompt = prompt.clone();
+    let persist_attachments = attachment_ids.clone();
+    let inputs = blocking(shared.clone(), move |app| {
+        app.send_message_persist(&persist_id, &persist_prompt, &persist_attachments)
+    })
+    .await?;
+    let _ = app.emit(
+        "agent://task",
+        AgentTaskEvent {
+            project_id: project_id.clone(),
+            status: "working".to_owned(),
+            message: None,
+            registered_creation_ids: Vec::new(),
+        },
+    );
     std::thread::spawn(move || {
-        // Persist the raw user message synchronously before emitting "working".
-        // If the app crashes after this point, the user's prompt is already
-        // durable; the assistant outcome is appended by send_message_run.
-        let event = match shared.send_message_persist(&project_id, &prompt, &attachment_ids) {
-            Ok(inputs) => {
-                let _ = app.emit(
-                    "agent://task",
-                    AgentTaskEvent {
-                        project_id: project_id.clone(),
-                        status: "working".to_owned(),
-                        message: None,
-                        registered_creation_ids: Vec::new(),
-                    },
-                );
-                match shared.send_message_run(inputs) {
-                    Ok(run) => AgentTaskEvent {
-                        project_id,
-                        status: run.status,
-                        message: run.message,
-                        registered_creation_ids: run.registered_creation_ids,
-                    },
-                    Err(err) => AgentTaskEvent {
-                        project_id,
-                        status: "failed".to_owned(),
-                        message: Some(err.message),
-                        registered_creation_ids: Vec::new(),
-                    },
-                }
-            }
+        let event = match shared.send_message_run(inputs) {
+            Ok(run) => AgentTaskEvent {
+                project_id,
+                status: run.status,
+                message: run.message,
+                registered_creation_ids: run.registered_creation_ids,
+            },
             Err(err) => AgentTaskEvent {
                 project_id,
                 status: "failed".to_owned(),

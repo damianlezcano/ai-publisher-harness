@@ -177,9 +177,12 @@ fn web_preview_starts_and_closes_by_token() {
     assert!(web.url.contains(&format!("/preview/{}/", web.token)));
     // The URL is reachable and serves the copy.
     let url = format!("{url_prefix}index.html", url_prefix = web.url);
-    let resp = reqwest::blocking::get(url).unwrap();
+    let resp = reqwest::blocking::get(&url).unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().unwrap(), "<h1>hola</h1>");
+    let root = reqwest::blocking::get(&web.url).unwrap();
+    assert_eq!(root.status(), 200);
+    assert_eq!(root.text().unwrap(), "<h1>hola</h1>");
     // Close tears it down (the server stops and its token is invalidated).
     app.preview_close(&web.token).unwrap();
 }

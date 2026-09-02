@@ -20,11 +20,15 @@ use crate::port::AgentEngine;
 const DEFAULT_TASK: Duration = Duration::from_secs(120);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const IDLE_WITHOUT_TEXT_GRACE: Duration = Duration::from_secs(2);
+const ACK_WITHOUT_ARTIFACTS_GRACE: Duration = Duration::from_secs(15);
+const ARTIFACT_REFRESH: Duration = Duration::from_millis(250);
 const MESSAGE_LIMIT: &str = "1000";
 
 pub struct OpenCodeAgentEngine {
     backend: Arc<OpenCodeBackend>,
     task_timeout: Duration,
+    idle_without_text_grace: Duration,
+    ack_without_artifacts_grace: Duration,
     sessions: Mutex<HashMap<String, String>>,
 }
 
@@ -41,6 +45,8 @@ impl OpenCodeAgentEngine {
         Self {
             backend,
             task_timeout: DEFAULT_TASK,
+            idle_without_text_grace: IDLE_WITHOUT_TEXT_GRACE,
+            ack_without_artifacts_grace: ACK_WITHOUT_ARTIFACTS_GRACE,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -60,6 +66,13 @@ impl OpenCodeAgentEngine {
     pub fn with_timeouts(mut self, startup: Duration, task: Duration) -> Self {
         self.backend_mut().set_startup_timeout(startup);
         self.task_timeout = task;
+        self
+    }
+
+    /// Test seam: shorten idle/ack graces so poller tests stay deterministic.
+    pub fn with_idle_grace(mut self, empty: Duration, ack: Duration) -> Self {
+        self.idle_without_text_grace = empty;
+        self.ack_without_artifacts_grace = ack;
         self
     }
 
@@ -91,7 +104,8 @@ impl OpenCodeAgentEngine {
     ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
-        let mut idle_without_text_since: Option<Instant> = None;
+        let mut idle_since: Option<Instant> = None;
+        let mut last_artifact_fetch: Option<Instant> = None;
         let mut idle_artifacts: Vec<Artifact> = Vec::new();
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
@@ -106,22 +120,40 @@ impl OpenCodeAgentEngine {
                     let messages = self.fetch_message_list(session_id)?;
                     if assistant_message_count(&messages) > before_assistant_count {
                         let message = nonempty_assistant_text(&messages);
-                        if message.is_some() {
-                            let artifacts = self.fetch_artifacts(session_id)?;
-                            return Ok((phase, message, artifacts));
-                        }
-                        // Empty assistant shells (tool-call placeholders) are
-                        // not a completed reply. Keep polling for real text, or
-                        // finish after a short idle grace (file-only creations
-                        // and empty replies). Fetch /diff once when that grace
-                        // starts, not on every 20 ms tick.
-                        match idle_without_text_since {
-                            None => {
-                                idle_artifacts = self.fetch_artifacts(session_id)?;
-                                idle_without_text_since = Some(Instant::now());
+                        let should_fetch = match last_artifact_fetch {
+                            None => true,
+                            Some(fetched) => fetched.elapsed() >= ARTIFACT_REFRESH,
+                        };
+                        if should_fetch {
+                            // A transient /diff failure must not abort an
+                            // in-progress ack wait; retry until grace expires.
+                            if let Ok(artifacts) = self.fetch_artifacts(session_id) {
+                                idle_artifacts = artifacts;
                             }
-                            Some(started) if started.elapsed() >= IDLE_WITHOUT_TEXT_GRACE => {
-                                return Ok((phase, None, idle_artifacts));
+                            last_artifact_fetch = Some(Instant::now());
+                        }
+                        if !idle_artifacts.is_empty() {
+                            return Ok((phase, message, idle_artifacts));
+                        }
+                        // A first nonempty reply (especially a brief "Listo.")
+                        // is not terminal while no files exist: the sidecar
+                        // often marks idle between the first text part and
+                        // tool work. Debounce idle and keep polling.
+                        let grace = match &message {
+                            Some(text) if is_brief_ack(text) => self.ack_without_artifacts_grace,
+                            None => self.idle_without_text_grace,
+                            Some(_) => Duration::ZERO,
+                        };
+                        if grace == Duration::ZERO {
+                            return Ok((phase, message, idle_artifacts));
+                        }
+                        match idle_since {
+                            None => idle_since = Some(Instant::now()),
+                            Some(started) if started.elapsed() >= grace => {
+                                if let Ok(artifacts) = self.fetch_artifacts(session_id) {
+                                    idle_artifacts = artifacts;
+                                }
+                                return Ok((phase, message, idle_artifacts));
                             }
                             Some(_) => {}
                         }
@@ -143,7 +175,10 @@ impl OpenCodeAgentEngine {
                 "aborted" | "cancelled" | "canceled" => {
                     return Err(AgentError::Cancelled);
                 }
-                _ => {}
+                _ => {
+                    idle_since = None;
+                    last_artifact_fetch = None;
+                }
             }
             if Instant::now() >= deadline {
                 return Err(AgentError::Timeout);
@@ -352,6 +387,28 @@ fn session_status_phase(value: &Value, session_id: &str) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
+/// Short acknowledgements that are not a completed turn when no files exist yet.
+/// Generic (not product-specific): a lone "Listo." must not end a creation run.
+fn is_brief_ack(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .trim_end_matches(['.', '!', '?', '…', '。'])
+        .trim()
+        .to_lowercase();
+    matches!(
+        normalized.as_str(),
+        "listo"
+            | "hecho"
+            | "vale"
+            | "ok"
+            | "okay"
+            | "perfecto"
+            | "perfect"
+            | "de acuerdo"
+            | "entendido"
+    )
+}
+
 fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {
     let mut last = None;
     for message in messages {
@@ -524,7 +581,7 @@ fn validate_workspace_artifact_path(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::message_text;
+    use super::{is_brief_ack, message_text};
     use serde_json::json;
 
     #[test]
@@ -543,5 +600,17 @@ mod tests {
             "parts": [{"type": "text", "text": "desde parts"}]
         });
         assert_eq!(message_text(&message).as_deref(), Some("desde content"));
+    }
+
+    #[test]
+    fn brief_ack_detects_listo_and_ignores_real_replies() {
+        assert!(is_brief_ack("Listo."));
+        assert!(is_brief_ack(" listo "));
+        assert!(is_brief_ack("OK"));
+        assert!(!is_brief_ack(
+            "Listo. Creé el recurso usando el archivo que adjuntaste."
+        ));
+        assert!(!is_brief_ack("¡Hola! ¿Cómo estás?"));
+        assert!(!is_brief_ack("done"));
     }
 }

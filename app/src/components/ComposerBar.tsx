@@ -151,10 +151,11 @@ export default function ComposerBar({
   }
 
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      void send();
-    }
+    if (event.key !== "Enter") return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.shiftKey) return;
+    event.preventDefault();
+    void send();
   }
 
   return (

@@ -17,6 +17,8 @@ interface WorkspaceViewProps {
   agentMessage: string | null;
   onBack: () => void;
   onRefresh: () => void | Promise<void>;
+  onSendStart?: () => void;
+  onSendEnd?: (projectId: string) => void;
   aiUsable: boolean;
   backendStatus?: BackendReadiness;
   onRetryBackend?: () => void;
@@ -41,6 +43,8 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     agentPhase,
     agentMessage,
     onRefresh,
+    onSendStart,
+    onSendEnd,
     aiUsable,
     backendStatus = "starting",
     onRetryBackend,
@@ -135,7 +139,18 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     };
   }, []);
 
+  const sendingRef = useRef(false);
+
+  useEffect(() => {
+    if (agentPhase !== "working") {
+      sendingRef.current = false;
+    }
+  }, [agentPhase]);
+
   async function send(text: string, attachmentIds: string[]) {
+    if (sendingRef.current || agentPhase === "working") return;
+    sendingRef.current = true;
+    onSendStart?.();
     setSendError(null);
     setLastAttempt({ text, materialIds: attachmentIds });
     setPendingUser({ text, materialIds: attachmentIds });
@@ -143,6 +158,8 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       await api.agentSend(project.id, text, attachmentIds);
       await onRefresh();
     } catch (err) {
+      sendingRef.current = false;
+      onSendEnd?.(project.id);
       const transient =
         isAppError(err) && err.code === "ai_unavailable" && backendStatus === "starting";
       if (transient) {

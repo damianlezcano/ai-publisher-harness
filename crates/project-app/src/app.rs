@@ -930,7 +930,15 @@ where
                     .iter()
                     .map(|id| parse_creation_id(id))
                     .collect::<AppResult<Vec<_>>>()?;
-                let text = assistant_reply_text(result.task.message.as_deref());
+                let mut text = assistant_reply_text(result.task.message.as_deref());
+                if self
+                    .refresh_published_snapshot(project_id.as_str(), &result.registered)
+                    .is_err()
+                {
+                    text.push_str(
+                        "\n\nEl recurso local se actualizó, pero el enlace compartido no. Volvé a pulsar Compartir.",
+                    );
+                }
                 self.projects
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1225,6 +1233,45 @@ where
             state: "published".to_owned(),
             public_url: publication.public_url,
         })
+    }
+
+    /// When the project is already shared, rebuild the publish snapshot so the
+    /// existing public URL serves the updated Creation (ADR-0004 replace,
+    /// same route). No-op if the project is local or nothing was registered.
+    fn refresh_published_snapshot(
+        &self,
+        project_id: &str,
+        registered_ids: &[String],
+    ) -> AppResult<()> {
+        if registered_ids.is_empty() {
+            return Ok(());
+        }
+        let status = self.publication_status(project_id)?;
+        if status.state != "published" {
+            return Ok(());
+        }
+        let pid = parse_project_id(project_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        // Only rebuild the live URL when this turn updated a Creation that is
+        // already public. A new distinct activity stays private and must not
+        // hijack the existing shared snapshot.
+        let target = registered_ids.iter().rev().find(|id| {
+            project.creations.iter().any(|c| {
+                c.id.as_str() == id.as_str()
+                    && c.kind == CreationKind::Web
+                    && c.visibility == CreationVisibility::Public
+            })
+        });
+        let Some(target) = target else {
+            return Ok(());
+        };
+        self.publish_creation(project_id, Some(target))?;
+        Ok(())
     }
 
     pub fn unpublish(&self, project_id: &str) -> AppResult<PublicationView> {

@@ -1496,10 +1496,31 @@ select {
   width: 100%;
   border-color: transparent;
   background: transparent;
+  color: var(--text);
 }
 
 .share-control-menu button:hover:not(:disabled) {
   background: var(--bg);
+}
+
+.share-control-menu button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.share-control-menu button.danger {
+  background: transparent;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.share-control-menu button.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.share-control-menu button.danger:disabled {
+  color: var(--muted);
 }
 
 .share-control-hint {

@@ -25,6 +25,7 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState<BackendReadiness>("starting");
   const { toasts, show } = useToast();
   const selectedIdRef = useRef(selectedId);
+  const inFlightRef = useRef(new Set<string>());
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -35,9 +36,11 @@ export default function App() {
 
   const refreshConversation = useCallback(async (id: string) => {
     const view = await api.projectOpen(id);
+    if (selectedIdRef.current !== id) return;
     setConversation({ ...view, name: conversationDisplayName(view.name) });
   }, []);
   const refreshConversationRef = useRef(refreshConversation);
+  const refreshConversationsRef = useRef(refreshConversations);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -47,15 +50,28 @@ export default function App() {
     refreshConversationRef.current = refreshConversation;
   }, [refreshConversation]);
 
+  useEffect(() => {
+    refreshConversationsRef.current = refreshConversations;
+  }, [refreshConversations]);
+
+  const refreshSelected = useCallback(async () => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    await Promise.all([refreshConversation(id), refreshConversations()]);
+  }, [refreshConversation, refreshConversations]);
+
   const openConversation = useCallback(
     async (id: string) => {
+      selectedIdRef.current = id;
       setSelectedId(id);
-      setAgentPhase("idle");
+      setAgentPhase(inFlightRef.current.has(id) ? "working" : "idle");
       setAgentMessage(null);
       try {
         const view = await api.projectOpen(id);
+        if (selectedIdRef.current !== id) return;
         setConversation({ ...view, name: conversationDisplayName(view.name) });
       } catch (error) {
+        if (selectedIdRef.current !== id) return;
         setConversation(null);
         show(guidanceFromError(error).title);
       }
@@ -100,6 +116,11 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void api
       .onAgentTask((event) => {
+        if (event.status === "working") {
+          inFlightRef.current.add(event.projectId);
+        } else {
+          inFlightRef.current.delete(event.projectId);
+        }
         const currentId = selectedIdRef.current;
         if (event.projectId !== currentId) return;
         if (event.status === "working") {
@@ -112,9 +133,8 @@ export default function App() {
           setAgentPhase("failed");
           setAgentMessage(event.message ?? messages.agent.taskFailed);
         }
-        if (currentId) {
-          void refreshConversationRef.current(currentId);
-        }
+        void refreshConversationRef.current(currentId);
+        void refreshConversationsRef.current();
       })
       .then((fn) => {
         if (cancelled) {
@@ -256,20 +276,38 @@ export default function App() {
           onDelete={handleDeleteProject}
         />
 
-        {selectedId && conversation ? (
+        {selectedId && conversation && conversation.id === selectedId ? (
           <div className="conversation-main">
             <WorkspaceView
+              key={conversation.id}
               project={conversation}
               agentPhase={agentPhase}
               agentMessage={agentMessage}
               onBack={handleBack}
-              onRefresh={() => void refreshConversation(selectedId)}
+              onRefresh={() => void refreshSelected()}
+              onSendStart={() => {
+                const id = selectedIdRef.current;
+                if (!id) return;
+                inFlightRef.current.add(id);
+                setAgentPhase("working");
+                setAgentMessage(null);
+              }}
+              onSendEnd={(id) => {
+                inFlightRef.current.delete(id);
+                if (selectedIdRef.current === id) {
+                  setAgentPhase("idle");
+                }
+              }}
               aiUsable={providerStatus !== "requires-choice" && backendStatus === "ready"}
               backendStatus={backendStatus}
               onRetryBackend={() => setBackendStatus("starting")}
               onOpenProvider={() => setSettingsOpen(true)}
               onProviderError={handleProviderError}
             />
+          </div>
+        ) : selectedId ? (
+          <div className="conversation-placeholder" aria-busy="true">
+            <p className="muted">{messages.app.loading}</p>
           </div>
         ) : (
           <div className="conversation-placeholder">

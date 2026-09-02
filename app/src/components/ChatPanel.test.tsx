@@ -107,6 +107,61 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByText(messages.timeline.userLabel)).toBeInTheDocument();
   });
 
+  it("renders sequential turns in list order so an older assistant reply cannot follow a newer user message", () => {
+    render(
+      <ChatPanel
+        {...base}
+        materials={[]}
+        messages={[
+          {
+            id: "u1",
+            role: "user",
+            text: "hola!",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:00Z",
+            materialIds: [],
+            creationIds: [],
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            text: "¡Hola! ¿Cómo estás?",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:01Z",
+            materialIds: [],
+            creationIds: [],
+          },
+          {
+            id: "u2",
+            role: "user",
+            text: "creá una actividad",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:02Z",
+            materialIds: [],
+            creationIds: [],
+          },
+          {
+            id: "a2",
+            role: "assistant",
+            text: "Listo. Creé el recurso.",
+            status: "ok",
+            createdAt: "2026-08-28T15:00:03Z",
+            materialIds: [],
+            creationIds: ["c1"],
+          },
+        ]}
+      />,
+    );
+    const log = screen.getByLabelText(messages.assistant.panelLabel);
+    const texts = Array.from(log.querySelectorAll(".message-text")).map((el) => el.textContent);
+    expect(texts).toEqual([
+      "hola!",
+      "¡Hola! ¿Cómo estás?",
+      "creá una actividad",
+      "Listo. Creé el recurso.",
+    ]);
+  });
+
   it("renders material chips on a user message and opens a material on click", async () => {
     invokeMock.mockResolvedValueOnce(undefined);
     render(

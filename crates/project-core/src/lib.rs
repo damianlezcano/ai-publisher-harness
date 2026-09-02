@@ -909,6 +909,37 @@ where
         self.repository.replace(&p, &e)?;
         Ok(c)
     }
+
+    /// Overwrites the files of an existing Creation without changing its id,
+    /// visibility, or revision. Used when a later turn updates the same
+    /// activity instead of minting a duplicate.
+    pub fn replace_creation_content(
+        &mut self,
+        pid: &ProjectId,
+        id: &CreationId,
+        content: CreationContent,
+    ) -> CoreResult<Creation> {
+        if content.file_name.trim().is_empty() {
+            return Err(ProjectCoreError::InvalidCreation(id.as_str().to_owned()));
+        }
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v3()?;
+        let idx = p
+            .creations
+            .iter()
+            .position(|c| &c.id == id)
+            .ok_or_else(|| ProjectCoreError::MissingCreation(id.clone()))?;
+        let s = safe_file_name(&content.file_name);
+        let stored = self.content.store_creation(pid, id, &content, &s)?;
+        ensure_stored_path(&stored.relative_path, "outputs", id.as_str())?;
+        p.creations[idx].relative_path = stored.relative_path;
+        p.creations[idx].byte_size = stored.byte_size;
+        p.updated_at = self.clock.now();
+        let updated = p.creations[idx].clone();
+        self.repository.replace(&p, &e)?;
+        Ok(updated)
+    }
     pub fn list_creations(&self, pid: &ProjectId) -> CoreResult<Vec<Creation>> {
         Ok(self.repository.get(pid)?.creations)
     }
@@ -1675,6 +1706,44 @@ mod tests {
             s.open_project(&pid()).unwrap().creations[0].visibility,
             CreationVisibility::Private
         )
+    }
+    #[test]
+    fn replace_creation_content_keeps_id_and_updates_bytes() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let created = s
+            .create_creation(
+                &pid(),
+                CreateCreation {
+                    display_name: "Activity".into(),
+                    kind: CreationKind::Web,
+                    visibility: CreationVisibility::Private,
+                    content_type: None,
+                    content: CreationContent {
+                        bytes: b"old".to_vec(),
+                        file_name: "index.html".into(),
+                    },
+                    parent_creation_id: None,
+                },
+            )
+            .unwrap();
+        let replaced = s
+            .replace_creation_content(
+                &pid(),
+                &created.id,
+                CreationContent {
+                    bytes: b"new-bytes".to_vec(),
+                    file_name: "index.html".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(replaced.id, created.id);
+        assert_eq!(replaced.display_name, "Activity");
+        assert_eq!(replaced.byte_size, 9);
+        assert_eq!(replaced.revision, 1);
+        assert_eq!(replaced.visibility, CreationVisibility::Private);
+        assert_eq!(s.read_creation(&pid(), &created.id).unwrap(), b"new-bytes");
+        assert_eq!(s.open_project(&pid()).unwrap().creations.len(), 1);
     }
     #[test]
     fn reader_accepts_schema_v1_and_marks_legacy_creations_private() {

@@ -120,16 +120,18 @@ const baseProps = {
   onOpenProvider: vi.fn(),
   onProviderError: vi.fn(),
   onRetryBackend: vi.fn(),
+  onSendEnd: vi.fn(),
 };
 
 function setupApi(
   options: {
     agentSendResult?: unknown;
     agentSendError?: unknown;
+    agentSendPromise?: Promise<unknown>;
     importReport?: MaterialsImportReport;
   } = {},
 ) {
-  const { agentSendResult = undefined, agentSendError, importReport } = options;
+  const { agentSendResult = undefined, agentSendError, agentSendPromise, importReport } = options;
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
       case "model_list":
@@ -159,7 +161,9 @@ function setupApi(
           requiresChoice: false,
         });
       case "agent_send":
-        return agentSendError ? Promise.reject(agentSendError) : Promise.resolve(agentSendResult);
+        if (agentSendError) return Promise.reject(agentSendError);
+        if (agentSendPromise) return agentSendPromise;
+        return Promise.resolve(agentSendResult);
       case "materials_add_from_paths":
         return Promise.resolve(importReport ?? { items: [] });
       default:
@@ -173,6 +177,7 @@ beforeEach(() => {
   baseProps.onRefresh.mockReset();
   baseProps.onOpenProvider.mockReset();
   baseProps.onProviderError.mockReset();
+  baseProps.onSendEnd.mockReset();
   baseProps.onBack.mockReset();
   getCurrentWebviewMock.mockReset();
   getCurrentWebviewMock.mockReturnValue({
@@ -239,6 +244,31 @@ describe("WorkspaceView", () => {
     expect(baseProps.onRefresh).toHaveBeenCalled();
   });
 
+  it("does not start a second agent turn while one send is already in flight", async () => {
+    let release!: () => void;
+    const hung = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setupApi({ agentSendPromise: hung });
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "primero");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send")).toHaveLength(1),
+    );
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "segundo");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send")).toHaveLength(1);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(baseProps.onRefresh).toHaveBeenCalled());
+  });
+
   it("calls onProviderError when a send error guides to connect-ai", async () => {
     setupApi({ agentSendError: { code: "credential_revoked", message: "raw" } });
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
@@ -249,6 +279,7 @@ describe("WorkspaceView", () => {
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() => expect(baseProps.onProviderError).toHaveBeenCalledTimes(1));
+    expect(baseProps.onSendEnd).toHaveBeenCalledWith(projectId);
   });
 
   it("clears the optimistic pending bubble after a send error", async () => {
