@@ -342,7 +342,9 @@ where
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .delete_project(&pid)
-            .map_err(AppError::from_core)
+            .map_err(AppError::from_core)?;
+        crate::session_log::record("INFO", format!("conversation deleted id={id}"));
+        Ok(())
     }
 
     pub fn open_project(&self, id: &str) -> AppResult<ProjectView> {
@@ -392,6 +394,15 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .add_material(&pid, request)
             .map_err(AppError::from_material)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "attachment associated conversation_id={project_id} material_id={} name={} bytes={}",
+                material.id,
+                project_core::safe_file_name(&material.original_file_name),
+                material.byte_size
+            ),
+        );
         Ok(material_view(&material))
     }
 
@@ -968,6 +979,20 @@ where
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let model = inputs
+            .model
+            .as_ref()
+            .map(|model| format!("{}/{}", model.provider_id, model.model_id))
+            .unwrap_or_else(|| "default".to_owned());
+        let started = std::time::Instant::now();
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "turn started conversation_id={} turn_id={} model={model}",
+                project_id,
+                turn_id.as_deref().unwrap_or("none")
+            ),
+        );
         match self.run_agent_with_inputs(inputs) {
             Ok(result) => {
                 let creation_ids: Vec<CreationId> = result
@@ -1002,6 +1027,21 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &text, status, &creation_ids)
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "INFO",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status={} creations={} duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        if status == MessageStatus::Ok {
+                            "completed"
+                        } else {
+                            "failed"
+                        },
+                        creation_ids.len(),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: if status == MessageStatus::Ok {
                         "completed".to_owned()
@@ -1020,6 +1060,15 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &text, MessageStatus::Cancelled, &[])
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status=cancelled duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: "cancelled".to_owned(),
                     turn_id: turn_id.clone(),
@@ -1034,6 +1083,15 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &err.message, MessageStatus::Failed, &[])
                     .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "ERROR",
+                    format!(
+                        "turn terminal conversation_id={} turn_id={} status=failed duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 Ok(AgentRunView {
                     status: "failed".to_owned(),
                     turn_id,
@@ -1362,6 +1420,13 @@ where
             .publication
             .publish(&pid)
             .map_err(AppError::from_publication)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "creation shared conversation_id={project_id} creation_id={}",
+                creation_id.unwrap_or("latest")
+            ),
+        );
         Ok(PublicationView {
             state: "published".to_owned(),
             public_url: publication.public_url,
@@ -1412,6 +1477,7 @@ where
         self.publication
             .unpublish(&pid)
             .map_err(AppError::from_publication)?;
+        crate::session_log::record("INFO", format!("conversation unshared id={project_id}"));
         Ok(PublicationView {
             state: "local".to_owned(),
             public_url: None,

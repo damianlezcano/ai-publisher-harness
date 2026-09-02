@@ -72,6 +72,14 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         let revise_existing = workspace_has_existing_web(&workspace_dir);
         let prompt = provision_attachments(&workspace_dir, &request, revise_existing)?;
 
+        // `/diff` from the real sidecar can be empty for committed files. Keep
+        // the bounded fallback, but fence it to files that did not exist when
+        // this turn began so a failed turn's leftovers are never registered by
+        // a later successful turn.
+        let workspace_before: HashSet<String> = scan_workspace_artifacts(&workspace_dir)
+            .into_iter()
+            .map(|artifact| artifact.path)
+            .collect();
         let session = self.engine.open_session(&AgentProject {
             project_id: request.project_id.clone(),
             directory: workspace_dir.clone(),
@@ -98,7 +106,8 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             return Err(AgentError::TaskFailed("task did not complete".into()));
         }
 
-        let mut artifacts = merge_artifacts(task.artifacts.clone(), &workspace_dir);
+        let mut artifacts =
+            merge_artifacts(task.artifacts.clone(), &workspace_dir, &workspace_before);
         artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
         let skip_sidecars = sidecar_paths_of_web_entry(&artifacts);
         let mut registered = Vec::new();
@@ -355,13 +364,20 @@ const MAX_WORKSPACE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
 /// to a bounded workspace scan only when the diff is empty (B1: files on disk
 /// that `/diff` did not report). Merging the scan into a non-empty diff would
 /// re-register leftover files from earlier turns as new Creations.
-fn merge_artifacts(from_diff: Vec<Artifact>, workspace_dir: &Path) -> Vec<Artifact> {
+fn merge_artifacts(
+    from_diff: Vec<Artifact>,
+    workspace_dir: &Path,
+    workspace_before: &HashSet<String>,
+) -> Vec<Artifact> {
     let mut artifacts: Vec<Artifact> = from_diff
         .into_iter()
         .filter(|artifact| !is_materials_artifact_path(&artifact.path))
         .collect();
     if artifacts.is_empty() {
-        artifacts = scan_workspace_artifacts(workspace_dir);
+        artifacts = scan_workspace_artifacts(workspace_dir)
+            .into_iter()
+            .filter(|artifact| !workspace_before.contains(&artifact.path))
+            .collect();
         artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
     }
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
@@ -592,6 +608,7 @@ mod tests {
                 sha256: None,
             }],
             tmp.path(),
+            &HashSet::new(),
         );
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, "workspace/new.html");
@@ -601,10 +618,22 @@ mod tests {
     fn merge_artifacts_scans_when_diff_is_empty() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
-        let merged = merge_artifacts(Vec::new(), tmp.path());
+        let merged = merge_artifacts(Vec::new(), tmp.path(), &HashSet::new());
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, "workspace/index.html");
         assert_eq!(merged[0].kind, ArtifactKind::Web);
+    }
+
+    #[test]
+    fn workspace_scan_does_not_register_failed_turn_leftovers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("abandoned.html"), b"old").expect("old");
+        let before = scan_workspace_artifacts(tmp.path())
+            .into_iter()
+            .map(|artifact| artifact.path)
+            .collect();
+        let merged = merge_artifacts(Vec::new(), tmp.path(), &before);
+        assert!(merged.is_empty());
     }
 
     #[test]

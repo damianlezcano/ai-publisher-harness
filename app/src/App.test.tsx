@@ -445,7 +445,7 @@ describe("App", () => {
     expect(otherDeleteItem).toBeEnabled();
   });
 
-  it("opens settings from the gear button, shows the model selector there, and restores the conversation on close", async () => {
+  it("opens settings without a competing model selector and restores the conversation on close", async () => {
     mockBackend({ projects: [baseSummary] });
     render(<App />);
     await waitForWorkspace();
@@ -455,7 +455,8 @@ describe("App", () => {
     expect(
       await screen.findByRole("dialog", { name: messages.provider.heading }),
     ).toBeInTheDocument();
-    expect(await screen.findByLabelText(messages.model.label)).toBeInTheDocument();
+    expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
+    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: messages.common.close }));
     await waitFor(() =>

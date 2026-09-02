@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ProviderSummary, SessionLogEntry } from "../../types";
 import ProviderCard from "./ProviderCard";
@@ -16,6 +16,7 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   const [othersOpen, setOthersOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [logs, setLogs] = useState<SessionLogEntry[]>([]);
+  const logsRef = useRef<HTMLPreElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -31,10 +32,11 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     let active = true;
     void (async () => {
       try {
-        const [list, sessionLogs] = await Promise.all([api.providerList(), api.sessionLogs()]);
+        const list = await api.providerList();
+        const sessionLogs = await api.sessionLogs().catch(() => []);
         if (active) {
           setProviders(list);
-          setLogs(sessionLogs);
+          setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
           setLoadingError(null);
         }
       } catch (err) {
@@ -62,6 +64,15 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
     setLogs([]);
   }
 
+  useEffect(() => {
+    const node = logsRef.current;
+    if (node && typeof node.scrollTo === "function") node.scrollTo({ top: node.scrollHeight });
+  }, [logs]);
+
+  async function copyLogs() {
+    await navigator.clipboard?.writeText(logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"));
+  }
+
   return (
     <Dialog
       title={messages.provider.heading}
@@ -74,8 +85,8 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
       <section className="provider-section" aria-label="Logs de esta sesión">
         <h3>Logs de esta sesión</h3>
         <p className="muted">Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni mensajes.</p>
-        <div className="row-actions"><button type="button" className="secondary" onClick={() => void clearLogs()}>Limpiar</button></div>
-        <pre className="session-logs" aria-live="polite">{logs.length === 0 ? "Sin eventos todavía." : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}</pre>
+        <div className="row-actions"><button type="button" className="secondary" onClick={() => void clearLogs()}>Limpiar</button><button type="button" className="secondary" onClick={() => void copyLogs()} disabled={logs.length === 0}>Copiar</button></div>
+        <pre ref={logsRef} className="session-logs" aria-live="polite">{logs.length === 0 ? "Sin eventos todavía." : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}</pre>
       </section>
 
       {loadingError && (

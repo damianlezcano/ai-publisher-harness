@@ -211,7 +211,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       )}
 
       <header className="view-header workspace-header">
-        <h1><button type="button" className="title-button" onClick={() => setDetailsOpen(true)}>{project.name}</button></h1>
+        <h1><button type="button" className="title-button" aria-label="Abrir detalles de la conversación" onClick={() => setDetailsOpen(true)}>{project.name}</button></h1>
       </header>
 
       <div className="workspace-timeline">

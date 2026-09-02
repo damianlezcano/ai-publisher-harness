@@ -10,6 +10,7 @@ pub type SharedState = Arc<AppState>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    project_app::session_log::configure_from_args(std::env::args());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

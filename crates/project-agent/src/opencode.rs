@@ -678,20 +678,20 @@ mod tests {
     #[test]
     fn only_stop_finish_marks_the_latest_assistant_message_terminal() {
         let in_progress = serde_json::json!([
-            {"info":{"role":"assistant","finish":"tool-calls"}}
+            {"info":{"role":"assistant","parentID":"user-1","finish":"tool-calls"}}
         ]);
         let complete = serde_json::json!([
-            {"info":{"role":"assistant","finish":"stop"}}
+            {"info":{"role":"assistant","parentID":"user-1","finish":"stop"}}
         ]);
         assert!(!assistant_message_is_terminal(
             in_progress.as_array().unwrap(),
             0,
-            None,
+            Some("user-1"),
         ));
         assert!(assistant_message_is_terminal(
             complete.as_array().unwrap(),
             0,
-            None,
+            Some("user-1"),
         ));
     }
 

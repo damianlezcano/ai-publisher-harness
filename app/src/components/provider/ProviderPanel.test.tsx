@@ -94,7 +94,7 @@ describe("ProviderPanel", () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
     expect(await screen.findByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
-    expect(await screen.findByLabelText("Modelo")).toBeInTheDocument();
+    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
