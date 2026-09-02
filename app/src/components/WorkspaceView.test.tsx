@@ -190,7 +190,9 @@ describe("WorkspaceView", () => {
     setupApi();
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
     await userEvent.click(screen.getByRole("button", { name: "Detalles de la conversación" }));
-    expect(await screen.findByRole("dialog", { name: "Detalles de la conversación" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("dialog", { name: "Detalles de la conversación" }),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Cerrar" }));
     expect(screen.getByRole("heading", { name: "Fotosíntesis" })).toBeInTheDocument();
   });

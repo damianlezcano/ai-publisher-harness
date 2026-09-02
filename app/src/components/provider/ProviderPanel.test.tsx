@@ -93,7 +93,8 @@ describe("ProviderPanel", () => {
   it("renders current-session logs and clears them", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([]);
-      if (cmd === "session_logs") return Promise.resolve([{ level: "INFO", message: "turn started" }]);
+      if (cmd === "session_logs")
+        return Promise.resolve([{ level: "INFO", message: "turn started" }]);
       if (cmd === "session_logs_clear") return Promise.resolve(undefined);
       return Promise.resolve(undefined);
     });

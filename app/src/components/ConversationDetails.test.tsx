@@ -62,20 +62,37 @@ describe("ConversationDetails", () => {
     const onRefresh = vi.fn();
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<ConversationDetails project={project} active={false} onClose={onClose} onRefresh={onRefresh} />);
+    render(
+      <ConversationDetails
+        project={project}
+        active={false}
+        onClose={onClose}
+        onRefresh={onRefresh}
+      />,
+    );
 
     expect(screen.getByLabelText("Nombre")).toHaveValue("Fotosíntesis");
     expect(await screen.findByRole("option", { name: /Big Pickle/ })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Predeterminado de Configuración" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Predeterminado de Configuración" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("manual.pdf")).toBeInTheDocument();
     expect(screen.getByText("Actividad interactiva")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Nombre"), { target: { value: "Nueva" } });
     await user.click(screen.getByRole("button", { name: "Renombrar" }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("project_rename", { projectId: project.id, name: "Nueva" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_rename", {
+        projectId: project.id,
+        name: "Nueva",
+      }),
+    );
     expect(onRefresh).toHaveBeenCalled();
 
-    await user.selectOptions(screen.getByLabelText("Modelo de esta conversación"), "opencode::big-pickle");
+    await user.selectOptions(
+      screen.getByLabelText("Modelo de esta conversación"),
+      "opencode::big-pickle",
+    );
     expect(invokeMock).toHaveBeenCalledWith("conversation_model_select", {
       projectId: project.id,
       providerId: "opencode",
@@ -87,15 +104,30 @@ describe("ConversationDetails", () => {
     const folders = screen.getAllByRole("button", { name: "Abrir carpeta contenedora" });
     await user.click(folders[0]);
     await user.click(folders[1]);
-    expect(invokeMock).toHaveBeenCalledWith("material_open_folder", { projectId: project.id, materialId: "m1" });
-    expect(invokeMock).toHaveBeenCalledWith("creation_open_folder", { projectId: project.id, creationId: "c1" });
+    expect(invokeMock).toHaveBeenCalledWith("material_open_folder", {
+      projectId: project.id,
+      materialId: "m1",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("creation_open_folder", {
+      projectId: project.id,
+      creationId: "c1",
+    });
     await user.click(screen.getByRole("button", { name: "Cerrar" }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("disables model changes during an active turn", async () => {
-    render(<ConversationDetails project={{ ...project, model: { providerId: "opencode", modelId: "big-pickle" } }} active onClose={() => {}} onRefresh={() => {}} />);
+    render(
+      <ConversationDetails
+        project={{ ...project, model: { providerId: "opencode", modelId: "big-pickle" } }}
+        active
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
     expect(await screen.findByLabelText("Modelo de esta conversación")).toBeDisabled();
-    expect(screen.getByText("Esperá a que termine la solicitud antes de cambiar el modelo.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Esperá a que termine la solicitud antes de cambiar el modelo."),
+    ).toBeInTheDocument();
   });
 });
