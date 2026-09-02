@@ -339,8 +339,7 @@ fn growing_assistant_message_resets_grace_until_stop() {
     ]);
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_millis(150))
-        .with_idle_grace(Duration::from_millis(10), Duration::from_millis(80));
+        .with_timeouts(Duration::from_secs(2), Duration::from_millis(500));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");
@@ -413,8 +412,7 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
     server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(800));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let started = std::time::Instant::now();
@@ -445,8 +443,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
     server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(500));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let started = std::time::Instant::now();
@@ -475,8 +472,7 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
     server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(800));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = std::thread::scope(|scope| {
@@ -505,8 +501,7 @@ fn send_completes_on_explicit_stop_without_files() {
     server.set_diff_body("[]");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(200));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");

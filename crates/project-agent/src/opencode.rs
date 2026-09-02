@@ -19,16 +19,12 @@ use crate::port::AgentEngine;
 
 const DEFAULT_TASK: Duration = Duration::from_secs(120);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const IDLE_WITHOUT_TEXT_GRACE: Duration = Duration::from_secs(2);
-const ACK_WITHOUT_ARTIFACTS_GRACE: Duration = Duration::from_secs(15);
 const ARTIFACT_REFRESH: Duration = Duration::from_millis(250);
 const MESSAGE_LIMIT: &str = "1000";
 
 pub struct OpenCodeAgentEngine {
     backend: Arc<OpenCodeBackend>,
     task_timeout: Duration,
-    idle_without_text_grace: Duration,
-    ack_without_artifacts_grace: Duration,
     sessions: Mutex<HashMap<String, String>>,
 }
 
@@ -45,8 +41,6 @@ impl OpenCodeAgentEngine {
         Self {
             backend,
             task_timeout: DEFAULT_TASK,
-            idle_without_text_grace: IDLE_WITHOUT_TEXT_GRACE,
-            ack_without_artifacts_grace: ACK_WITHOUT_ARTIFACTS_GRACE,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -66,13 +60,6 @@ impl OpenCodeAgentEngine {
     pub fn with_timeouts(mut self, startup: Duration, task: Duration) -> Self {
         self.backend_mut().set_startup_timeout(startup);
         self.task_timeout = task;
-        self
-    }
-
-    /// Test seam: shorten idle/ack graces so poller tests stay deterministic.
-    pub fn with_idle_grace(mut self, empty: Duration, ack: Duration) -> Self {
-        self.idle_without_text_grace = empty;
-        self.ack_without_artifacts_grace = ack;
         self
     }
 
@@ -104,11 +91,7 @@ impl OpenCodeAgentEngine {
     ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
-        let mut idle_since: Option<Instant> = None;
         let mut last_artifact_fetch: Option<Instant> = None;
-        let mut idle_artifacts: Vec<Artifact> = Vec::new();
-        let mut last_progress_signature: Option<(usize, Option<String>, usize, Option<String>)> =
-            None;
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
             if !(200..300).contains(&status) {
@@ -122,16 +105,6 @@ impl OpenCodeAgentEngine {
                     let messages = self.fetch_message_list(session_id)?;
                     let originating_user_id = last_user_message_id(&messages);
                     if assistant_message_count(&messages) > before_assistant_count {
-                        let progress_signature = assistant_progress_signature(
-                            &messages,
-                            before_assistant_count,
-                            originating_user_id.as_deref(),
-                        );
-                        if progress_signature != last_progress_signature {
-                            last_progress_signature = progress_signature;
-                            idle_since = Some(Instant::now());
-                            last_artifact_fetch = None;
-                        }
                         let message = authoritative_assistant_text(
                             &messages,
                             before_assistant_count,
@@ -143,16 +116,15 @@ impl OpenCodeAgentEngine {
                         };
                         if should_fetch {
                             // A transient /diff failure must not abort an
-                            // in-progress ack wait; retry until grace expires.
-                            if let Ok(artifacts) = self.fetch_artifacts(session_id) {
-                                idle_artifacts = artifacts;
-                            }
+                            // A transient /diff failure must not abort polling
+                            // for the terminal assistant message.
+                            let _ = self.fetch_artifacts(session_id);
                             last_artifact_fetch = Some(Instant::now());
                         }
                         // A first nonempty reply (especially a brief "Listo.")
                         // is not terminal while no files exist: the sidecar
                         // often marks idle between the first text part and
-                        // tool work. Debounce idle and keep polling.
+                        // tool work. Keep polling until the terminal marker.
                         // OpenCode 1.18.25 can return an empty status map while
                         // tool work is active. Only the final assistant message
                         // marker, `finish: "stop"`, closes this specific turn.
@@ -167,17 +139,6 @@ impl OpenCodeAgentEngine {
                             if let Ok(artifacts) = self.fetch_artifacts(session_id) {
                                 return Ok((phase, message, artifacts));
                             }
-                        }
-                        let grace = self.ack_without_artifacts_grace;
-                        match idle_since {
-                            None => idle_since = Some(Instant::now()),
-                            Some(started) if started.elapsed() >= grace => {
-                                if let Ok(artifacts) = self.fetch_artifacts(session_id) {
-                                    idle_artifacts = artifacts;
-                                }
-                                return Ok((phase, message, idle_artifacts));
-                            }
-                            Some(_) => {}
                         }
                     }
                     // The sidecar may have marked idle before the new assistant
@@ -203,9 +164,7 @@ impl OpenCodeAgentEngine {
                     return Err(AgentError::Cancelled);
                 }
                 _ => {
-                    idle_since = None;
                     last_artifact_fetch = None;
-                    last_progress_signature = None;
                 }
             }
             if Instant::now() >= deadline {
@@ -476,34 +435,6 @@ fn authoritative_assistant_text(
     }
     last.and_then(message_text)
         .filter(|text| !text.trim().is_empty())
-}
-
-fn assistant_progress_signature(
-    messages: &[Value],
-    before_assistant_count: usize,
-    originating_user_id: Option<&str>,
-) -> Option<(usize, Option<String>, usize, Option<String>)> {
-    let mut assistant_count = 0;
-    let mut latest = None;
-    for message in messages {
-        if message_role(message) != "assistant" {
-            continue;
-        }
-        if assistant_count >= before_assistant_count
-            && message_belongs_to_turn(message, originating_user_id)
-        {
-            latest = Some((
-                message_id(message).map(str::to_owned),
-                message
-                    .get("parts")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len),
-                assistant_finish(message).map(str::to_owned),
-            ));
-        }
-        assistant_count += 1;
-    }
-    latest.map(|(id, parts_len, finish)| (assistant_count, id, parts_len, finish))
 }
 
 fn message_id(message: &Value) -> Option<&str> {
