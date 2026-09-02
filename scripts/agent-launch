@@ -9,9 +9,10 @@ usage() {
   cat <<'EOF'
 Usage: scripts/agent-launch --role ROLE --provider cursor|opencode [options]
 
-Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, high-visual, review, high-review, high-architecture
+Roles: low, medium, medium-fallback, medium-high, medium-high-fallback, high-coding, high-coding-luna, high-visual, review, high-review, high-architecture
   review/high-review use Qwen3.8 Flash / Max respectively; high-review is ESCALATION-ONLY.
   high-visual maps to Cursor Grok 4.6 High (Cursor provider only) for explicit visual-design author tasks.
+  high-coding-luna maps to OpenCode Go GPT-5.6 Luna (OpenCode provider only), assigned only by explicit owner directive.
 Options:
   --worktree PATH  Required for --launch.
   --pane ID        Required for --launch; Herdr pane ID.
@@ -55,6 +56,7 @@ case "$role/$provider" in
   medium-high-fallback/opencode) model=$MEDIUM_HIGH_FALLBACK_OPENCODE_MODEL ;;
   high-coding/cursor) model=$HIGH_CODING_CURSOR_MODEL ;;
   high-coding/opencode) model=$HIGH_CODING_OPENCODE_MODEL ;;
+  high-coding-luna/opencode) model=$HIGH_CODING_LUNA_OPENCODE_MODEL ;;
   high-visual/cursor) model=$HIGH_VISUAL_CURSOR_MODEL ;;
   review/opencode) model=$REVIEW_OPENCODE_MODEL ;;
   high-review/opencode) model=$HIGH_REVIEW_OPENCODE_MODEL ;;
@@ -76,6 +78,7 @@ case "$model" in
   opencode-go/qwen3.8-flash) model_display='Qwen3.8 Flash OpenCode Go' ;;
   opencode-go/qwen3.8-max) model_display='Qwen3.8 Max OpenCode Go' ;;
   opencode-go/kimi-k2.7-code) model_display='Kimi K2.7 Code OpenCode Go' ;;
+  opencode-go/gpt-5.6-luna) model_display='GPT-5.6 Luna OpenCode Go' ;;
   opencode-go/deepseek-v4-pro) model_display='DeepSeek V4 Pro (New) OpenCode Go' ;;
   *) echo "agent-launch: FAIL CLOSED: no active-model display matcher for $model" >&2; exit 3 ;;
 esac

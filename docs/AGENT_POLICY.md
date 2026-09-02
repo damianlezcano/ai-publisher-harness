@@ -16,6 +16,16 @@ builder.
 
 ## Model matrix (owner directive 2026-08-31, supersedes earlier matrices)
 
+> Temporary override (owner directive 2026-09-02, Cursor subscription quota
+> exhausted): for the bounded **Chat Turn Causality / Response Correlation
+> Correction Pass** the primary author is **OpenCode Go GPT-5.6 Luna**
+> (`opencode-go/gpt-5.6-luna`, role `high-coding-luna`) and **no Cursor model
+> is used**. Cursor/Grok and Kimi K2.7 Code are not used for this pass unless an
+> evidenced escalation is justified. Independent Product/UX review uses
+> OpenCode Go DeepSeek V4 Flash or Qwen3.8 Flash; independent Code/Correctness
+> review uses OpenCode Go Qwen3.8 Flash. This override lapses when the pass is
+> integrated and the checkpoint records it.
+
 | Role | Model (CLI id) | Notes |
 | --- | --- | --- |
 | Orchestrator / integration / checkpoints | OpenCode Go DeepSeek V4 Flash (`opencode-go/deepseek-v4-flash`) | Decomposes, coordinates, handoffs, integrates, manages checkpoints. Does NOT implement normal coding tasks itself. |

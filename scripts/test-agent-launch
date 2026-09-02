@@ -18,6 +18,7 @@ for spec in \
   'medium-high opencode opencode-go/deepseek-v4-flash' \
   'medium-high-fallback opencode opencode-go/kimi-k2.7-code' \
   'high-coding opencode opencode-go/kimi-k2.7-code' \
+  'high-coding-luna opencode opencode-go/gpt-5.6-luna' \
   'review opencode opencode-go/qwen3.8-flash' \
   'high-review opencode opencode-go/qwen3.8-max' \
   'high-architecture opencode opencode-go/deepseek-v4-pro'; do
