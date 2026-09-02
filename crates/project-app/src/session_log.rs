@@ -61,10 +61,10 @@ pub fn configure_from_args(args: impl IntoIterator<Item = String>) {
         if arg == "--debug" {
             level = LogLevel::Debug;
         }
-        if arg == "--log-level" {
-            if let Some(value) = args.next() {
-                level = LogLevel::parse(&value);
-            }
+        if arg == "--log-level"
+            && let Some(value) = args.next()
+        {
+            level = LogLevel::parse(&value);
         }
     }
     let _ = MIN_LEVEL.set(level);

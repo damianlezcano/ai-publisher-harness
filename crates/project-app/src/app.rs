@@ -1153,8 +1153,8 @@ where
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .open_project(&project_id)
-            .map_err(AppError::from_core)?;
-        let model = match project.model {
+            .ok();
+        let model = match project.and_then(|project| project.model) {
             Some(model) => Some(ModelRef {
                 provider_id: model.provider_id,
                 model_id: model.model_id,

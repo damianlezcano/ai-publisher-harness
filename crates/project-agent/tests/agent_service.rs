@@ -338,7 +338,7 @@ fn failing_registrar_leaves_workspace_file() {
 }
 
 #[test]
-fn workspace_scan_registers_when_diff_is_empty() {
+fn workspace_scan_does_not_register_preexisting_files_when_diff_is_empty() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let engine = FakeAgentEngine::new();
     engine.set_artifacts(vec![]);
@@ -352,11 +352,9 @@ fn workspace_scan_registers_when_diff_is_empty() {
             attachments: Vec::new(),
         })
         .expect("run");
-    assert_eq!(result.registered.len(), 1);
+    assert!(result.registered.is_empty());
     let records = registrar.records();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].kind, ArtifactKind::Web);
-    assert_eq!(records[0].file_name, "index.html");
+    assert!(records.is_empty());
 }
 
 #[test]

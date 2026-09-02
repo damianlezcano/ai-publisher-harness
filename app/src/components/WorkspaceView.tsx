@@ -211,7 +211,16 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       )}
 
       <header className="view-header workspace-header">
-        <h1><button type="button" className="title-button" aria-label="Abrir detalles de la conversación" onClick={() => setDetailsOpen(true)}>{project.name}</button></h1>
+        <h1>
+          <button
+            type="button"
+            className="title-button"
+            aria-label="Abrir detalles de la conversación"
+            onClick={() => setDetailsOpen(true)}
+          >
+            {project.name}
+          </button>
+        </h1>
       </header>
 
       <div className="workspace-timeline">
@@ -295,7 +304,15 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           }
         />
       </div>
-      {detailsOpen && <ConversationDetails key={project.id} project={project} active={agentPhase === "working"} onClose={() => setDetailsOpen(false)} onRefresh={onRefresh} />}
+      {detailsOpen && (
+        <ConversationDetails
+          key={project.id}
+          project={project}
+          active={agentPhase === "working"}
+          onClose={() => setDetailsOpen(false)}
+          onRefresh={onRefresh}
+        />
+      )}
     </div>
   );
 }

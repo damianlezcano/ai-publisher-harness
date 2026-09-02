@@ -70,7 +70,9 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   }, [logs]);
 
   async function copyLogs() {
-    await navigator.clipboard?.writeText(logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"));
+    await navigator.clipboard?.writeText(
+      logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n"),
+    );
   }
 
   return (
@@ -84,9 +86,28 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
 
       <section className="provider-section" aria-label="Logs de esta sesión">
         <h3>Logs de esta sesión</h3>
-        <p className="muted">Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni mensajes.</p>
-        <div className="row-actions"><button type="button" className="secondary" onClick={() => void clearLogs()}>Limpiar</button><button type="button" className="secondary" onClick={() => void copyLogs()} disabled={logs.length === 0}>Copiar</button></div>
-        <pre ref={logsRef} className="session-logs" aria-live="polite">{logs.length === 0 ? "Sin eventos todavía." : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}</pre>
+        <p className="muted">
+          Información de EducAI durante esta ejecución. No incluye contenido de tus archivos ni
+          mensajes.
+        </p>
+        <div className="row-actions">
+          <button type="button" className="secondary" onClick={() => void clearLogs()}>
+            Limpiar
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void copyLogs()}
+            disabled={logs.length === 0}
+          >
+            Copiar
+          </button>
+        </div>
+        <pre ref={logsRef} className="session-logs" aria-live="polite">
+          {logs.length === 0
+            ? "Sin eventos todavía."
+            : logs.map((entry) => `[${entry.level}] ${entry.message}`).join("\n")}
+        </pre>
       </section>
 
       {loadingError && (

@@ -4,7 +4,15 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (FRESH REAL APPIMAGE POST-MESSAGE-SELECTION CONSTRUIDO DESDE MAIN `5c17e13`/MERGE `9e2c851` — BUILD + VERIFICACIÓN TÉCNICA COMPLETA, TECHNICALLY READY FOR HUMAN RE-ACCEPTANCE, M11 NO INICIADO, 2026-09-02)
+## Estado actual (CONVERSATION UX / PER-CONVERSATION MODEL / SESSION LOGGING / MODEL-SWITCH CAUSALITY PASS — AUTHOR COMPLETE, HUMAN ACCEPTANCE PENDING, M11 NO INICIADO, 2026-09-02)
+
+- **Bounded pass, M11 NOT STARTED.** Findings 1–5: `Procesando tu solicitud…`; title-opened Conversation Details owns rename/model/materials/Creations; optional per-conversation `project.json` model with global fallback; post-send composer chips clear while history/material retention remains; Creation kind labels are not repeated; Configuración has current-session Logs.
+- **Finding 6 root cause/fix:** old polling recomputed the last user ID from mutable sidecar session state. `a61fc08` captures it immediately after `prompt_async`, requires its exact parent plus `finish:"stop"`, and evicts failed/timeout session mappings. `f327c87` fences empty-diff workspace scans to files absent at current-turn start.
+- **Real 1.18.25 trace (isolated XDG):** T1 `ses_f9c6fd94fffeDk0X1ULulz5kZF`, `missing/provider`, start `1788376786616`, FAILED timeout `1788376816726`, user `msg_063902701001RGKM58k04apJTM`; T2 distinct session `ses_f9c6f6398ffe4UdSN2L5FwP9fV`, `opencode/big-pickle`, completed `1788376821440`, user `msg_063909c6f001BEiV69B4gpzETm`, assistant `msg_063909c7c001iFGKDrPWISJPUG`, parent=T2 user, `finish=stop`, greeting only/no artifacts.
+- **Logs:** process-local 500-event buffer, stderr mirror, INFO default and `--debug`/`--log-level`; no persistence and metadata-only redaction. Viewer has levels, autoscroll, Clear, Copy.
+- **Evidence:** FE 228/228; `project-agent --lib` 16/16; adapter 27/27; fmt/check/clippy clean. Final `./scripts/verify` follows this checkpoint update. Author: Codex CLI gpt-5.6-terra, owner OpenAI/ChatGPT account. Commits `a61fc08`, `f327c87`. No human acceptance claimed.
+
+## Estado previo (FRESH REAL APPIMAGE POST-MESSAGE-SELECTION — preservado)
 
 - **FRESH REAL APPIMAGE CONSTRUIDO DESDE MAIN `5c17e13` (checkpoint del merge msg-selection `9e2c851`) = PASS (sesión FRESH, deepseek-v4-flash, orquestador).** El AppImage previo `30238e4f…` era **STALE** (construido desde `f3e9f30`, predata el merge `9e2c851`). Packaging canónico M10 `scripts/smoke-package appimage`. **EXIT=0 (smoke-package PASS)**. Artefacto:
   `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`, **180.881.912 bytes**, **SHA-256 `832408b677be75a7b9c12f53348d7ef032ccdbcfc1e9418a17f98eab668c429d`** (NUEVO, difiere del stale `30238e4f…`), timestamp 2026-09-02 14:57:35 -0300, source commit `5c17e13` (main HEAD, working tree clean antes del build, sin cambios de producto sin commitear). Build via `scripts/smoke-package appimage` (fetch-sidecars → `cargo tauri build --bundles appimage` → fallback documentado a appimagetool tras el error esperado de linuxdeploy en Fedora 44).
