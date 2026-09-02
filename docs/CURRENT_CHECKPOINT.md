@@ -4,7 +4,83 @@
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.
 
-## Estado actual (CONFIRMACIÓN DE ELIMINACIÓN CON «SÍ» — CAMBIO FRONTEND BOUNDED, INTEGRADO, 2026-09-01)
+## Estado actual (PASS CORRECCIÓN PRODUCT/UX CREACIÓN/COMPARTIR/CHAT — AUTOR + REVIEW UX DONE, FALTA REVIEW CÓDIGO/A11Y + MERGE, M11 NO INICIADO, 2026-09-01)
+
+- **PASS DE ACEPTACIÓN HUMANA (CREACIÓN / SHARE / CHAT UX) EN CURSO — NO ES M11.** Este
+  pass corrige los 7 bloqueadores PRODUCT/UX hallados por el product owner en el
+  AppImage real (asistente generó un Rosco/Pasapalabra desde `datosrosco.txt`, pero
+  solo apareció prosa, la URL pública mostraba "Material del proyecto", el asistente
+  pidió abrir archivos a mano, hubo burbuja vacía "Asistente", toast duplicado
+  "Tu recurso está listo.", y selector de modelo permanente en el composer).
+- **AUTOR (Cursor Grok 4.6 High, FRESH) — COMMIT `3ba7c5a` EN `corr/creation-share-ux-pass`,
+  worktree `../ai-publisher-corr-01-creation-share`, base main `3a7c6d1`. NO INTEGRADO
+  TODAVÍA.** 28 archivos (+823/−263): 3 bloques backend acotados + frontend + docs.
+  **B1 (card de creación):** `opencode.rs` `normalize_output_path` acepta paths
+  session-relative (`rosco.html` → `workspace/rosco.html`) y absolutos solo si contienen
+  `/workspace/`; `service.rs` `merge_artifacts` = diff + workspace scan; cualquier
+  `.html/.htm` es `Web`; el registrar guarda webs como `index.html` y copia sidecars
+  (CSS/JS/imágenes) a `outputs/<id>/` — genérico, sin hardcode Pasapalabra.
+  **B2 (Abrir/Compartir = misma creación):** `publish(projectId, creationId?)` fluye de la
+  card → `useShareControl` → Tauri `commands.rs` → `app.rs publish_creation`;
+  Abrir usa el mismo `creation.id` (`preview_open_web`).
+  **B3 (URL pública muestra la creación, no "Material del proyecto"):** `app.rs
+  prepare_share_visibility` marca PÚBLICA la creación objetivo (id preferido, si no el
+  último web, si no la última) y degrada otros webs públicos antes del snapshot; test
+  `app_facade.rs publish_promotes_the_generated_web_creation_as_the_public_entry`
+  assert que `publish/index.html` contiene el markup generado y NO contiene "Material del
+  proyecto". Infraestructura túnel/URL intacta.
+  **B4 (sin abrir-archivo-manual):** `service.rs build_instruction` ahora ordena escribir
+  un recurso web estático con `index.html` como entrada, dice que EducAI mostrará
+  Abrir/Compartir, y prohíbe pedir abrir/doble clic/explorador. Ejemplo: "Listo. Creé el
+  recurso usando el archivo que adjuntaste." (no es swap de texto hardcodeado).
+  **B5 (burbuja vacía):** poll ignora texto asistente vacío; `assistant_reply_text`
+  persiste "Listo." si queda vacío; `ChatPanel.tsx` no renderiza burbuja assistant
+  completada vacía sin creations.
+  **B6 (toast duplicado):** el toast "Tu recurso está listo." se ELIMINÓ (un evento lógico
+  = una notificación; el chat + la card ya comunican readiness; copy "recurso" quedó en el
+  catálogo solo para tests); listener de `agent://task` usa refs + `unlisten` cancelado
+  (sin re-suscripción por `selectedId`).
+  **B7 (modelo a Configuración):** composer = adjuntar/mensaje/enviar (+ slot Compartir
+  existente); `ModelSelector` se movió a `ProviderPanel` (Configuración) con
+  `modelOptionLabel` compartido en `labels.ts`; default free/model discovery del backend
+  intacto (sin hardcode Big Pickle); X de Configuración = `setSettingsOpen(false)` →
+  vuelve EXACTO a la misma conversación (draft/selection conservados).
+- **REVIEW PRODUCT/UX INDEPENDIENTE (Cursor Grok 4.6 High FRESH) = APPROVE** (pane cerrado).
+  B1-B7 PASS, preservaciones OK (ConfirmDialog/ConversationsSidebar intactos → «Sí»
+  conservado; adjuntos/assistant runtime no tocados; sin fuga técnica). 2 residuales NO
+  bloqueantes: (1) si el modelo escribe `index.html` en la raíz del workspace el título de
+  la card cae a "index" (kind + Abrir/Compartir funcionan; un título humano sería mejor);
+  (2) Compartir sigue también en la bottom bar (nivel conversación) además de la card —
+  consistente con este pass.
+- **VERIFICACIÓN EN EL WORKTREE AUTOR (no integrado):** `pnpm format:check/lint/typecheck`
+  OK, **vitest 216/216** (21 archivos), `cargo fmt --check` + `clippy -D warnings` + `cargo
+  test` verdes (60 suites ok), **`./scripts/verify` EXIT=0** (contracts M10 +
+  UX_REDESIGN_01, fetch-sidecars --check, cargo check src-tauri, git diff --check).
+  Evidencia = unit/integración mockeada; NO AppImage real, NO Cloudflare live, NO
+  generación OpenCode live (no se reclama aceptación humana).
+- **PENDIENTE OBLIGATORIO (gate de merge, §21):** (a) REVIEW CÓDIGO/A11Y/CORRECTNESS FRESH
+  `opencode-go/qwen3.8-flash` sobre el diff `3a7c6d1..3ba7c5a` (correctness, estado,
+  registro de Creations, consistencia open/share target, prevención de duplicados,
+  empty-state, Settings/navegación, a11y/keyboard/focus, regresión «Sí», tests, scope);
+  (b) fixes acotados por el MISMO autor si REQUEST_CHANGES; (c) re-review UX acotado solo
+  si cambia comportamiento visible; (d) **MERGE a main** (commit+merge siguiendo política);
+  (e) re-verificar `./scripts/verify` en main; (f) actualizar ESTE checkpoint con el estado
+  final integrado; (g) siguiente gate: **FRESH REAL APPIMAGE BUILD + VERIFICACIÓN TÉCNICA +
+  RE-ACEPTACIÓN HUMANA DEL PRODUCT OWNER**.
+- **POR QUÉ NO SE INTEGRÓ EN ESTA SESIÓN:** el orquestador (deepseek-v4-flash) alcanzó
+  **ROTATE_SESSION_REQUIRED (~106K)** al cerrar la review UX → política §24/scripts/verify:
+  no lanzar nuevo trabajo (la review código/a11y es un worker nuevo). Se rota con este
+  checkpoint. **Próxima sesión FRESH de orquestador debe: lanzar review código/a11y qwen,
+  integrar 3ba7c5a, cerrar worktrees/branches de review, verificar main, y dejar listo el
+  gate AppImage.**
+- **DELETE-CONFIRMATION «SÍ» = PRESERVADO (commit `3a7c6d1`, intacto en este pass).**
+  `ConfirmDialog.tsx`/`ConversationsSidebar.tsx` sin cambios; `normalizeConfirmation`
+  acepta `Sí/sí/SI/si` (+ espacios) y cadenas ajenas nunca confirman; Enter no saltea;
+  Cancel nunca borra; flujo de proyectos conserva matching exacto del título.
+- **M11 NO INICIADO.** Sin fuga de alcance: sin redesign de infra de publicación, sin
+  cambios destructivos Task F, sin tocar runtime/session-directory (no reabiertos).
+
+## Estado previo (CONFIRMACIÓN DE ELIMINACIÓN CON «SÍ» — CAMBIO FRONTEND BOUNDED, INTEGRADO, 2026-09-01)
 
 - **DELETE-CONFIRMATION «SÍ» (frontend, acotado) INTEGRADO.** Cambio puntual sobre el
   diálogo compartido `app/src/components/ConfirmDialog.tsx` para la ELIMINACIÓN DE
