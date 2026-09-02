@@ -102,19 +102,86 @@ describe("ConversationDetails", () => {
     await user.selectOptions(screen.getByLabelText("Modelo de esta conversación"), "");
     expect(invokeMock).toHaveBeenCalledWith("conversation_model_clear", { projectId: project.id });
 
-    const folders = screen.getAllByRole("button", { name: "Abrir carpeta contenedora" });
-    await user.click(folders[0]);
-    await user.click(folders[1]);
-    expect(invokeMock).toHaveBeenCalledWith("material_open_folder", {
+    // One "Abrir carpeta contenedora" per section (materials and creations),
+    // never repeated per individual file.
+    const folderButtons = screen.getAllByRole("button", { name: "Abrir carpeta contenedora" });
+    expect(folderButtons).toHaveLength(2);
+    await user.click(folderButtons[0]);
+    await user.click(folderButtons[1]);
+    expect(invokeMock).toHaveBeenCalledWith("materials_open_folder", {
       projectId: project.id,
-      materialId: "m1",
     });
-    expect(invokeMock).toHaveBeenCalledWith("creation_open_folder", {
+    expect(invokeMock).toHaveBeenCalledWith("creations_open_folder", {
       projectId: project.id,
-      creationId: "c1",
     });
     await user.click(screen.getByRole("button", { name: "Cerrar" }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("opens a text material in the in-app viewer with escaped text", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list") return Promise.resolve([model]);
+      if (command === "provider_list") return Promise.resolve([]);
+      if (command === "preview_data")
+        return Promise.resolve({ contentType: "text/markdown", dataBase64: btoa("<b>Hola</b>") });
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(
+      <ConversationDetails
+        project={project}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Abrir: manual.pdf" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("preview_data", {
+        projectId: project.id,
+        resourceKind: "material",
+        resourceId: "m1",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "manual.pdf" });
+    expect(dialog.querySelector("pre")).toBeInTheDocument();
+    expect(dialog.querySelector("script")).toBeNull();
+  });
+
+  it("shows a PNG material as an image, never as binary text", async () => {
+    const imageProject: ProjectView = {
+      ...project,
+      materials: [
+        {
+          id: "m1",
+          displayName: "diagrama.png",
+          originalFileName: "diagrama.png",
+          kind: "image",
+          byteSize: 42,
+          createdAt: "2026-08-28T15:00:00Z",
+        },
+      ],
+    };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list") return Promise.resolve([model]);
+      if (command === "provider_list") return Promise.resolve([]);
+      if (command === "preview_data")
+        return Promise.resolve({ contentType: "image/png", dataBase64: "ZmFrZQ==" });
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(
+      <ConversationDetails
+        project={imageProject}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Abrir: diagrama.png" }));
+    const dialog = await screen.findByRole("dialog", { name: "diagrama.png" });
+    expect(dialog.querySelector("img")).toBeInTheDocument();
+    expect(dialog.querySelector("pre")).toBeNull();
   });
 
   it("disables model changes during an active turn", async () => {

@@ -46,7 +46,7 @@ export default function Dialog({
             </button>
           )}
         </div>
-        {children}
+        <div className="dialog-body">{children}</div>
       </div>
     </div>
   );

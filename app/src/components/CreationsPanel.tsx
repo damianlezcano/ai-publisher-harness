@@ -112,7 +112,16 @@ export function CreationCard(props: CreationCardProps) {
         <PreviewModal
           title={preview.creation.displayName}
           preview={preview.data}
+          meta={{
+            name: preview.creation.displayName,
+            byteSize: preview.creation.byteSize,
+            kind: preview.creation.kind,
+          }}
           onClose={() => setPreview(null)}
+          onOpenExternal={() => {
+            setPreview(null);
+            void api.creationOpen(projectId, creation.id);
+          }}
         />
       )}
     </div>

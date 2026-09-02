@@ -47,6 +47,7 @@ export const api = {
     invoke<void>("material_open", { projectId, materialId }),
   materialOpenFolder: (projectId: string, materialId: string) =>
     invoke<void>("material_open_folder", { projectId, materialId }),
+  materialsOpenFolder: (projectId: string) => invoke<void>("materials_open_folder", { projectId }),
   previewData: (projectId: string, resourceKind: string, resourceId: string) =>
     invoke<PreviewData>("preview_data", { projectId, resourceKind, resourceId }),
   previewOpenWeb: (projectId: string, creationId: string) =>
@@ -62,6 +63,7 @@ export const api = {
     invoke<void>("creation_open", { projectId, creationId }),
   creationOpenFolder: (projectId: string, creationId: string) =>
     invoke<void>("creation_open_folder", { projectId, creationId }),
+  creationsOpenFolder: (projectId: string) => invoke<void>("creations_open_folder", { projectId }),
   openPublicUrl: (projectId: string) => invoke<void>("open_public_url", { projectId }),
   agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
     invoke<void>("agent_send", { projectId, prompt, attachmentIds }),

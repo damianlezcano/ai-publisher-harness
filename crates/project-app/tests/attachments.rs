@@ -133,6 +133,45 @@ fn attachments_flow_to_the_agent_and_register_creations() {
 }
 
 #[test]
+fn attached_image_is_provisioned_as_creation_input_without_opening() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, engine) = app(tmp.path());
+    let p = app.create_project("P").unwrap();
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/index.html",
+        ArtifactKind::Web,
+    )]);
+    write_artifact(tmp.path(), &p.id, "actividad/index.html", b"<h1>");
+
+    // A real PNG signature so the material resolves as an image kind.
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\nrest-of-png".to_vec();
+    let mid = add_material(&app, tmp.path(), &p.id, "encabezado.png", &png);
+
+    let result = app
+        .run_agent(&p.id, "agregá esta imagen en el encabezado", &[mid])
+        .unwrap();
+    assert_eq!(result.status, "completed");
+    assert_eq!(result.registered_creation_ids.len(), 1);
+    assert_eq!(app.open_project(&p.id).unwrap().creations.len(), 1);
+
+    // The image bytes were written into the workspace materials folder: the
+    // attachment is the turn's input, never opened as a preview.
+    let materials_dir = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("workspace")
+        .join("materials");
+    let entries: Vec<String> = fs::read_dir(&materials_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries.len(), 1, "exactly one provisioned attachment");
+    let provisioned = fs::read(materials_dir.join(&entries[0])).unwrap();
+    assert_eq!(provisioned, png);
+}
+
+#[test]
 fn foreign_material_id_is_rejected_as_attachment_invalid() {
     let tmp = tempfile::tempdir().unwrap();
     let (app, engine) = app(tmp.path());

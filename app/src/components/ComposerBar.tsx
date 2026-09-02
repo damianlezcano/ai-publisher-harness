@@ -45,7 +45,6 @@ export default function ComposerBar({
   const [prompt, setPrompt] = useState("");
   const [internalAttachmentIds, setInternalAttachmentIds] = useState<string[]>([]);
   const [pasteBusy, setPasteBusy] = useState(false);
-  const [showMaterialPicker, setShowMaterialPicker] = useState(false);
 
   const controlled = attachmentIdsProp !== undefined;
   const attachmentIds = controlled ? attachmentIdsProp : internalAttachmentIds;
@@ -83,12 +82,6 @@ export default function ComposerBar({
     setAttachmentIds((prev) => prev.filter((id) => id !== materialId));
   }
 
-  function toggleMaterial(materialId: string) {
-    setAttachmentIds((prev) =>
-      prev.includes(materialId) ? prev.filter((id) => id !== materialId) : [...prev, materialId],
-    );
-  }
-
   async function pickFile() {
     if (composerDisabled) return;
     setPickError(null);
@@ -98,19 +91,9 @@ export default function ComposerBar({
       const material = await api.materialAddFromPath(projectId, path);
       await onMaterialsChanged?.();
       setAttachmentIds((prev) => (prev.includes(material.id) ? prev : [...prev, material.id]));
-      setShowMaterialPicker(false);
     } catch (err) {
       setPickError(err);
     }
-  }
-
-  async function handleAttachClick() {
-    if (composerDisabled) return;
-    if (materials.length === 0) {
-      await pickFile();
-      return;
-    }
-    setShowMaterialPicker((open) => !open);
   }
 
   async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -146,7 +129,6 @@ export default function ComposerBar({
     const ids = attachmentIds;
     setPrompt("");
     setAttachmentIds([]);
-    setShowMaterialPicker(false);
     await onSend(text, ids);
   }
 
@@ -196,9 +178,8 @@ export default function ComposerBar({
             type="button"
             className="ghost composer-attach"
             aria-label={messages.assistant.attachMaterial}
-            aria-expanded={showMaterialPicker}
             disabled={composerDisabled}
-            onClick={() => void handleAttachClick()}
+            onClick={() => void pickFile()}
           >
             <span aria-hidden="true">📎</span>
           </button>
@@ -231,39 +212,6 @@ export default function ComposerBar({
             </button>
           )}
         </div>
-
-        {showMaterialPicker && aiUsable && (
-          <div className="composer-attach-menu">
-            <button
-              type="button"
-              className="ghost composer-add-file"
-              disabled={composerDisabled}
-              onClick={() => void pickFile()}
-            >
-              {messages.material.addFile}
-            </button>
-            {materials.length > 0 && (
-              <ul className="chip-list composer-material-picker">
-                {materials.map((material) => {
-                  const isSelected = attachmentIds.includes(material.id);
-                  return (
-                    <li key={material.id}>
-                      <button
-                        type="button"
-                        className="chip"
-                        aria-pressed={isSelected}
-                        disabled={composerDisabled}
-                        onClick={() => toggleMaterial(material.id)}
-                      >
-                        {material.displayName}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
 
         {shareAction && (
           <div className="composer-secondary">

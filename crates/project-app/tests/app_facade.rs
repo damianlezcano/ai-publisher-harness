@@ -161,6 +161,23 @@ fn owned_material_and_creation_paths_reject_foreign_ids() {
 }
 
 #[test]
+fn folder_open_rejects_invalid_project_before_opening() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+
+    // Malformed ids are rejected before any opener is invoked; the folder-open
+    // command never opens an unvalidated path.
+    assert_eq!(
+        app.open_materials_folder("not-a-uuid").unwrap_err().code,
+        ErrorCode::InvalidInput
+    );
+    assert_eq!(
+        app.open_creations_folder("not-a-uuid").unwrap_err().code,
+        ErrorCode::InvalidInput
+    );
+}
+
+#[test]
 fn delete_unpublishes_before_removing_data() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, _, _) = app(tmp.path());

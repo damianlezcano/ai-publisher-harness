@@ -627,6 +627,41 @@ impl FilesystemProjectContentStore {
         self.validate_read_path(p, &c.relative_path, "outputs", c.id.as_str())
     }
 
+    /// Resolve the validated, canonical `inputs/` directory for a project.
+    ///
+    /// Used by the folder-open action for the "Material subido" section in the
+    /// conversation details. Applies the same symlink/containment discipline as
+    /// `material_path`; the returned directory is guaranteed to be the project's
+    /// canonical `inputs/` root.
+    pub fn materials_dir(&self, p: &ProjectId) -> CoreResult<PathBuf> {
+        self.fixed_root_dir(p, "inputs")
+    }
+
+    /// Resolve the validated, canonical `outputs/` directory for a project.
+    ///
+    /// Used by the folder-open action for the "Creaciones generadas" section in
+    /// the conversation details. Applies the same symlink/containment discipline
+    /// as `creation_path`; the returned directory is guaranteed to be the
+    /// project's canonical `outputs/` root.
+    pub fn creations_dir(&self, p: &ProjectId) -> CoreResult<PathBuf> {
+        self.fixed_root_dir(p, "outputs")
+    }
+
+    /// Resolve a project's canonical fixed root (`inputs` or `outputs`),
+    /// rejecting every intermediate symlink and requiring containment inside
+    /// the canonical project directory.
+    fn fixed_root_dir(&self, p: &ProjectId, root: &str) -> CoreResult<PathBuf> {
+        let canon_project = canon_project_dir(&self.base, p)?;
+        let root_dir = self.project_dir(p).join(root);
+        reject_symlink_path(&root_dir, &self.base)?;
+        let canon_root =
+            fs::canonicalize(&root_dir).map_err(|_| ProjectCoreError::NotFound(p.clone()))?;
+        if !canon_root.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        Ok(canon_root)
+    }
+
     /// Resolve the validated, canonical `outputs/<id>` directory for a creation.
     ///
     /// Used by the preview snapshot step to copy a creation's whole tree (not

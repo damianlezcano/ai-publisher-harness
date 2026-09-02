@@ -497,9 +497,11 @@ select {
   padding: var(--space-5);
   max-width: 420px;
   width: 100%;
+  max-height: min(88vh, 760px);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  overflow: hidden;
 }
 
 .dialog-header {
@@ -507,6 +509,17 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+.dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-right: var(--space-1);
 }
 
 .dialog-header h2 {
@@ -577,9 +590,60 @@ select {
 }
 
 .provider-dialog {
-  max-width: 640px;
-  max-height: 82vh;
-  overflow-y: auto;
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+.conversation-details-dialog {
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+.session-logs {
+  margin: 0;
+  padding: var(--space-3);
+  background: #f1f1f8;
+  border-radius: var(--radius-sm);
+  max-height: 220px;
+  min-height: 72px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-size-meta);
+  line-height: 1.45;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.section-heading h4 {
+  margin: 0;
+}
+
+.section-heading .secondary {
+  font-size: 0.85rem;
+  padding: var(--space-1) 10px;
+}
+
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.item-row .item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.item-row .item-meta {
+  flex: 0 0 auto;
 }
 
 .provider-panel-header {
@@ -763,6 +827,28 @@ select {
 .preview-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.preview-binary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: #fbfbfe;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.preview-binary-title {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.preview-binary-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-meta);
 }
 
 /* -- M9: shared primitives -------------------------------------------------- */
@@ -1232,19 +1318,6 @@ select {
   font-weight: 600;
 }
 
-.composer-attach-menu {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) 0 0;
-}
-
-.composer-add-file {
-  align-self: flex-start;
-  font-size: 0.9rem;
-  padding: var(--space-1) var(--space-2);
-}
-
 .composer-secondary {
   display: flex;
   align-items: center;
@@ -1257,10 +1330,6 @@ select {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-}
-
-.composer-material-picker {
-  margin: 0;
 }
 
 .composer-import-status,

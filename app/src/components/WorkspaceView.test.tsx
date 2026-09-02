@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import WorkspaceView from "./WorkspaceView";
 import { messages } from "../messages";
 import type {
@@ -17,9 +18,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: vi.fn(),
 }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const invokeMock = vi.mocked(invoke);
 const getCurrentWebviewMock = vi.mocked(getCurrentWebview);
+const openDialogMock = vi.mocked(openDialog);
 
 function mockDragDrop(): {
   dropHandler: (event: { payload: { type: string; paths?: string[] } }) => void;
@@ -129,9 +132,16 @@ function setupApi(
     agentSendError?: unknown;
     agentSendPromise?: Promise<unknown>;
     importReport?: MaterialsImportReport;
+    addFromPathMaterial?: MaterialView;
   } = {},
 ) {
-  const { agentSendResult = undefined, agentSendError, agentSendPromise, importReport } = options;
+  const {
+    agentSendResult = undefined,
+    agentSendError,
+    agentSendPromise,
+    importReport,
+    addFromPathMaterial = materials[0],
+  } = options;
   invokeMock.mockImplementation((cmd: string) => {
     switch (cmd) {
       case "model_list":
@@ -166,6 +176,8 @@ function setupApi(
         return Promise.resolve(agentSendResult);
       case "materials_add_from_paths":
         return Promise.resolve(importReport ?? { items: [] });
+      case "material_add_from_path":
+        return Promise.resolve(addFromPathMaterial);
       default:
         return Promise.resolve(undefined);
     }
@@ -174,6 +186,7 @@ function setupApi(
 
 beforeEach(() => {
   invokeMock.mockReset();
+  openDialogMock.mockReset();
   baseProps.onRefresh.mockReset();
   baseProps.onOpenProvider.mockReset();
   baseProps.onProviderError.mockReset();
@@ -233,13 +246,12 @@ describe("WorkspaceView", () => {
 
   it("sends a prompt with attachment ids and refreshes the conversation", async () => {
     setupApi();
+    openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
 
     await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
 
     await userEvent.click(screen.getByRole("button", { name: messages.assistant.attachMaterial }));
-    const materialButton = screen.getByRole("button", { name: materials[0].displayName });
-    await userEvent.click(materialButton);
 
     const textarea = screen.getByLabelText("Pedido a la IA");
     await userEvent.type(textarea, "Creá una actividad");
@@ -253,6 +265,64 @@ describe("WorkspaceView", () => {
       }),
     );
     expect(baseProps.onRefresh).toHaveBeenCalled();
+  });
+
+  it("uses an attached image as turn input without opening any preview", async () => {
+    setupApi({ addFromPathMaterial: materials[0] });
+    openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    await userEvent.click(screen.getByRole("button", { name: messages.assistant.attachMaterial }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument(),
+    );
+
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    await userEvent.type(textarea, "agregá esta imagen en el encabezado");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+        projectId,
+        prompt: "agregá esta imagen en el encabezado",
+        attachmentIds: ["m1"],
+      }),
+    );
+    // The turn input flow must never trigger the manual preview/open actions.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "material_open",
+      expect.objectContaining({ projectId }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "preview_data",
+      expect.objectContaining({ projectId }),
+    );
+  });
+
+  it("clears the draft after send and never re-suggests the previous attachment", async () => {
+    setupApi({ addFromPathMaterial: materials[0] });
+    openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    await userEvent.click(screen.getByRole("button", { name: messages.assistant.attachMaterial }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument(),
+    );
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Creá una actividad");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", expect.objectContaining({ projectId })),
+    );
+
+    // After send the composer draft is clean: no chip from the previous turn and
+    // the attach action does not open a stale material suggestion list.
+    expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.material.addFile)).not.toBeInTheDocument();
   });
 
   it("does not start a second agent turn while one send is already in flight", async () => {

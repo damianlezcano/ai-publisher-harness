@@ -939,6 +939,80 @@ fn traversal_in_path_cannot_escape_project() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn materials_and_creations_folders_resolve_to_owned_fixed_roots() {
+    let base = tmp_dir("fixed-root-folders");
+    let mut svc = make_service(&base);
+    let p = svc.create_project("Test").unwrap();
+
+    // A fresh project already has its fixed roots; both resolve canonically.
+    let store = FilesystemProjectContentStore::new(&base);
+    let project_dir = base.join("projects").join(p.id.as_str());
+    let inputs = store.materials_dir(&p.id).unwrap();
+    assert!(inputs.starts_with(&project_dir), "inputs: {inputs:?}");
+    assert_eq!(
+        inputs.file_name().map(|n| n.to_string_lossy().into_owned()),
+        Some("inputs".to_owned())
+    );
+    let outputs = store.creations_dir(&p.id).unwrap();
+    assert!(outputs.starts_with(&project_dir), "outputs: {outputs:?}");
+    assert_eq!(
+        outputs
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned()),
+        Some("outputs".to_owned())
+    );
+
+    // After storing a material and a creation, the fixed roots still resolve.
+    let mut store = FilesystemProjectContentStore::new(&base);
+    let mid = project_core::MaterialId::parse(M).unwrap();
+    store
+        .store_material(
+            &p.id,
+            &mid,
+            &MaterialContent {
+                bytes: b"hola".to_vec(),
+            },
+            "note.txt",
+        )
+        .unwrap();
+    let cid = project_core::CreationId::parse(C).unwrap();
+    store
+        .store_creation(
+            &p.id,
+            &cid,
+            &CreationContent {
+                bytes: b"<h1>".to_vec(),
+                file_name: "index.html".into(),
+            },
+            "index.html",
+        )
+        .unwrap();
+    let inputs = store.materials_dir(&p.id).unwrap();
+    let outputs = store.creations_dir(&p.id).unwrap();
+    assert!(inputs.starts_with(&project_dir), "inputs: {inputs:?}");
+    assert!(outputs.starts_with(&project_dir), "outputs: {outputs:?}");
+
+    // A foreign/nonexistent project is rejected before any open is attempted.
+    let foreign = ProjectId::parse("0198e4a6-6e70-7c01-8c0e-8b6fd26f1f99").unwrap();
+    assert!(
+        matches!(
+            store.materials_dir(&foreign),
+            Err(ProjectCoreError::NotFound(_) | ProjectCoreError::StorageUnavailable)
+        ),
+        "foreign materials dir must be rejected, got: {:?}",
+        store.materials_dir(&foreign)
+    );
+    assert!(
+        matches!(
+            store.creations_dir(&foreign),
+            Err(ProjectCoreError::NotFound(_) | ProjectCoreError::StorageUnavailable)
+        ),
+        "foreign creations dir must be rejected, got: {:?}",
+        store.creations_dir(&foreign)
+    );
+}
+
+#[test]
 fn symlink_escape_from_project_is_rejected() {
     let base = tmp_dir("symlink-escape");
     let target_dir = tmp_dir("symlink-target-content");

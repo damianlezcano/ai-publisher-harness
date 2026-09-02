@@ -261,6 +261,11 @@ export const messages = {
     },
   },
 
+  preview: {
+    binaryHint: "No podemos previsualizar este tipo de archivo.",
+    openExternal: "Abrir con la aplicación",
+  },
+
   sharing: {
     panelLabel: "Compartir",
     shared: "Compartido",

@@ -68,4 +68,49 @@ describe("PreviewModal", () => {
     unmount();
     expect(trigger).toHaveFocus();
   });
+
+  it("shows metadata plus an external-open action instead of rendering binary as text", () => {
+    render(
+      <PreviewModal
+        title="notas.pdf"
+        preview={{ contentType: "application/pdf", dataBase64: btoa("%PDF-1.7") }}
+        meta={{ name: "notas.pdf", byteSize: 8, kind: "pdf" }}
+        onClose={vi.fn()}
+        onOpenExternal={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Documento PDF · 8 B")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Abrir con la aplicación" })).toBeInTheDocument();
+    expect(screen.getByText(/No podemos previsualizar/)).toBeInTheDocument();
+    expect(screen.queryByText("%PDF-1.7")).not.toBeInTheDocument();
+  });
+
+  it("sniffs a real PNG signature even when the declared type is generic", () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    render(
+      <PreviewModal
+        title="foto"
+        preview={{
+          contentType: "application/octet-stream",
+          dataBase64: btoa(String.fromCharCode(...png)),
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(document.querySelector("img")).toBeInTheDocument();
+    expect(document.querySelector("pre")).toBeNull();
+  });
+
+  it("does not render raw HTML; the source is escaped as text", () => {
+    render(
+      <PreviewModal
+        title="pagina.html"
+        preview={{ contentType: "text/html", dataBase64: btoa("<script>alert(1)</script>") }}
+        onClose={vi.fn()}
+      />,
+    );
+    const pre = screen.getByText("<script>alert(1)</script>");
+    expect(pre.tagName).toBe("PRE");
+    expect(document.querySelector("script")).toBeNull();
+  });
 });

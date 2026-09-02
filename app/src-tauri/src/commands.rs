@@ -165,6 +165,17 @@ pub async fn material_open_folder(
 }
 
 #[tauri::command]
+pub async fn materials_open_folder(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.open_materials_folder(&project_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn creation_set_visibility(
     state: State<'_, SharedState>,
     project_id: String,
@@ -197,6 +208,17 @@ pub async fn creation_open_folder(
 ) -> Result<(), AppError> {
     blocking(state.inner().clone(), move |app| {
         app.open_creation_folder(&project_id, &creation_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn creations_open_folder(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<(), AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.open_creations_folder(&project_id)
     })
     .await
 }

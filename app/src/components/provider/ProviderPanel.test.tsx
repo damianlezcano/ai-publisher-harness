@@ -99,7 +99,11 @@ describe("ProviderPanel", () => {
       return Promise.resolve(undefined);
     });
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
-    expect(await screen.findByText("[INFO] turn started")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Configuración" });
+    expect(dialog).toHaveClass("provider-dialog");
+    expect(dialog.querySelector(".dialog-body")).not.toBeNull();
+    const logs = await screen.findByText("[INFO] turn started");
+    expect(logs.closest("pre")).toHaveClass("session-logs");
     await userEvent.click(screen.getByRole("button", { name: "Limpiar" }));
     expect(invokeMock).toHaveBeenCalledWith("session_logs_clear");
     expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();

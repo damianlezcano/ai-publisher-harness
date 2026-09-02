@@ -646,6 +646,34 @@ where
             .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
     }
 
+    /// Opens the project's canonical `inputs/` folder (the shared container of
+    /// all uploaded materials) with the host system default handler. Resolves
+    /// the folder through the content store with the same symlink/containment
+    /// validation as any material path.
+    pub fn open_materials_folder(&self, project_id: &str) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let directory = self
+            .content
+            .materials_dir(&pid)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
+    }
+
+    /// Opens the project's canonical `outputs/` folder (the shared container of
+    /// all generated creations) with the host system default handler. Resolves
+    /// the folder through the content store with the same symlink/containment
+    /// validation as any creation path.
+    pub fn open_creations_folder(&self, project_id: &str) -> AppResult<()> {
+        let pid = parse_project_id(project_id)?;
+        let directory = self
+            .content
+            .creations_dir(&pid)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))?;
+        opener::open(directory)
+            .map_err(|_| AppError::new(ErrorCode::OpenFailed, "No pudimos abrir la carpeta."))
+    }
+
     // -- Creations ---------------------------------------------------------
 
     pub fn set_creation_visibility(

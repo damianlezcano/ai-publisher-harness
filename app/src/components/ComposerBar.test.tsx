@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ComposerBar from "./ComposerBar";
+import { messages } from "../messages";
 import type {
   MaterialAddImageView,
   MaterialView,
@@ -201,18 +202,29 @@ describe("ComposerBar", () => {
     expect(screen.getByRole("button", { name: "Adjuntar" })).toBeDisabled();
   });
 
-  it("attach picker toggles material chips and selected chips are removable", async () => {
+  it("Adjuntar opens the native file dialog and the added file becomes a removable draft chip", async () => {
     setupApiMock({ selected: selectedFreeModel });
+    openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<ComposerBar {...base} />);
     expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Adjuntar" }));
-    const materialButton = screen.getByRole("button", { name: "diagrama.png" });
-    expect(materialButton).toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(materialButton);
-    expect(materialButton).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("material_add_from_path", {
+        projectId,
+        path: "/tmp/diagrama.png",
+      }),
+    );
     expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
     expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
+  });
+
+  it("does not render a persistent material picker that could suggest earlier files", () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    // The attach button must not expand a list of previously uploaded files.
+    expect(screen.queryByText(messages.material.addFile)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
   });
 
   it("clears controlled attachment chips after send while materials remain available", async () => {

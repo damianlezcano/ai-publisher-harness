@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { ModelSummary, ProjectView, ProviderSummary } from "../types";
+import type { ModelSummary, PreviewData, ProjectView, ProviderSummary } from "../types";
 import Dialog from "./ui/Dialog";
-import { kindLabel, modelOptionLabel } from "../labels";
+import PreviewModal from "./PreviewModal";
+import { humanSize, kindLabel, modelOptionLabel } from "../labels";
 import { messages } from "../messages";
 
 interface Props {
@@ -17,6 +18,12 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{
+    title: string;
+    data: PreviewData;
+    meta: { name: string; byteSize: number; kind: string };
+    openExternal: () => void;
+  } | null>(null);
 
   useEffect(() => {
     void Promise.all([api.modelList(), api.providerList()])
@@ -54,8 +61,63 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const connected = new Set(providers.filter((provider) => provider.connected).map((p) => p.id));
   const visibleModels = models.filter((model) => model.free || connected.has(model.providerId));
 
+  async function openMaterial(material: {
+    id: string;
+    displayName: string;
+    kind: string;
+    byteSize: number;
+  }) {
+    setError(null);
+    try {
+      const data = await api.previewData(project.id, "material", material.id);
+      setPreview({
+        title: material.displayName,
+        data,
+        meta: { name: material.displayName, byteSize: material.byteSize, kind: material.kind },
+        openExternal: () => {
+          setPreview(null);
+          void api.materialOpen(project.id, material.id);
+        },
+      });
+    } catch {
+      void api.materialOpen(project.id, material.id);
+    }
+  }
+
+  async function openCreation(creation: {
+    id: string;
+    displayName: string;
+    kind: string;
+    byteSize: number;
+  }) {
+    setError(null);
+    try {
+      if (creation.kind === "web") {
+        await api.previewOpenWeb(project.id, creation.id);
+        return;
+      }
+      const data = await api.previewData(project.id, "creation", creation.id);
+      setPreview({
+        title: creation.displayName,
+        data,
+        meta: { name: creation.displayName, byteSize: creation.byteSize, kind: creation.kind },
+        openExternal: () => {
+          setPreview(null);
+          void api.creationOpen(project.id, creation.id);
+        },
+      });
+    } catch {
+      void api.creationOpen(project.id, creation.id);
+    }
+  }
+
   return (
-    <Dialog title={messages.conversationDetails.title} onClose={onClose} closeButton>
+    <Dialog
+      title={messages.conversationDetails.title}
+      onClose={onClose}
+      className="conversation-details-dialog"
+      closeButton
+    >
       <section className="provider-section">
         <h3>{messages.conversationDetails.conversationHeading}</h3>
         <label htmlFor="conversation-name">{messages.conversationDetails.nameLabel}</label>
@@ -98,39 +160,65 @@ export default function ConversationDetails({ project, active, onClose, onRefres
       </section>
       <section className="provider-section">
         <h3>{messages.conversationDetails.filesHeading}</h3>
-        <h4>{messages.conversationDetails.uploadedHeading}</h4>
+        <div className="section-heading">
+          <h4>{messages.conversationDetails.uploadedHeading}</h4>
+          {project.materials.length > 0 && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void api.materialsOpenFolder(project.id)}
+            >
+              {messages.conversationDetails.openContainingFolder}
+            </button>
+          )}
+        </div>
         {project.materials.length === 0 ? (
           <p className="muted">{messages.conversationDetails.noUploaded}</p>
         ) : (
           <ul className="item-list">
             {project.materials.map((material) => (
               <li key={material.id} className="item-row">
-                <span>{material.displayName}</span>
+                <span className="item-name">{material.displayName}</span>
+                <span className="item-meta">{humanSize(material.byteSize)}</span>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void api.materialOpenFolder(project.id, material.id)}
+                  aria-label={`${messages.common.open}: ${material.displayName}`}
+                  onClick={() => void openMaterial(material)}
                 >
-                  {messages.conversationDetails.openContainingFolder}
+                  {messages.common.open}
                 </button>
               </li>
             ))}
           </ul>
         )}
-        <h4>{messages.conversationDetails.generatedHeading}</h4>
+        <div className="section-heading">
+          <h4>{messages.conversationDetails.generatedHeading}</h4>
+          {project.creations.length > 0 && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void api.creationsOpenFolder(project.id)}
+            >
+              {messages.conversationDetails.openContainingFolder}
+            </button>
+          )}
+        </div>
         {project.creations.length === 0 ? (
           <p className="muted">{messages.conversationDetails.noGenerated}</p>
         ) : (
           <ul className="item-list">
             {project.creations.map((creation) => (
               <li key={creation.id} className="item-row">
-                <span>{kindLabel(creation.kind)}</span>
+                <span className="item-name">{kindLabel(creation.kind)}</span>
+                <span className="item-meta">{humanSize(creation.byteSize)}</span>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void api.creationOpenFolder(project.id, creation.id)}
+                  aria-label={`${messages.common.open}: ${kindLabel(creation.kind)}`}
+                  onClick={() => void openCreation(creation)}
                 >
-                  {messages.conversationDetails.openContainingFolder}
+                  {messages.common.open}
                 </button>
               </li>
             ))}
@@ -141,6 +229,15 @@ export default function ConversationDetails({ project, active, onClose, onRefres
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {preview && (
+        <PreviewModal
+          title={preview.title}
+          preview={preview.data}
+          meta={preview.meta}
+          onClose={() => setPreview(null)}
+          onOpenExternal={preview.openExternal}
+        />
       )}
     </Dialog>
   );
