@@ -40,6 +40,8 @@ pub struct Script {
     pub status_delay: Duration,
     pub status_body_override: Option<String>,
     pub messages_body: String,
+    pub messages_sequence: Vec<String>,
+    pub messages_sequence_index: usize,
     pub diff_status: u16,
     pub diff_body: String,
     pub abort_status: u16,
@@ -214,6 +216,25 @@ fn append_assistant_response(
     response_finish: Option<&str>,
 ) -> String {
     let mut messages: Vec<Value> = serde_json::from_str(current).unwrap_or_default();
+    let user_id = format!(
+        "user-appended-{}",
+        messages
+            .iter()
+            .filter(|message| {
+                message.get("role").and_then(Value::as_str).or_else(|| {
+                    message
+                        .get("info")
+                        .and_then(|info| info.get("role"))
+                        .and_then(Value::as_str)
+                }) == Some("user")
+            })
+            .count()
+            + 1
+    );
+    messages.push(json!({
+        "info": { "id": user_id.clone(), "role": "user" },
+        "parts": [{ "type": "text", "text": "prompt" }]
+    }));
     let text = response_text.map(str::to_owned).unwrap_or_else(|| {
         messages
             .iter()
@@ -243,7 +264,7 @@ fn append_assistant_response(
             .to_owned()
     });
     messages.push(json!({
-        "info": { "id": "msg-appended", "role": "assistant", "finish": response_finish.unwrap_or("stop") },
+        "info": { "id": "msg-appended", "role": "assistant", "parentID": user_id, "finish": response_finish.unwrap_or("stop") },
         "parts": [{ "type": "text", "text": text }]
     }));
     serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())
@@ -271,6 +292,8 @@ impl Default for Script {
             status_delay: Duration::ZERO,
             status_body_override: None,
             messages_body: default_messages(),
+            messages_sequence: Vec::new(),
+            messages_sequence_index: 0,
             diff_status: 200,
             diff_body: "[]".into(),
             abort_status: 204,
@@ -373,6 +396,12 @@ impl FakeServer {
 
     pub fn set_messages_body(&self, body: &str) {
         self.script().messages_body = body.to_owned();
+    }
+
+    pub fn set_messages_sequence(&self, bodies: &[&str]) {
+        let mut script = self.script();
+        script.messages_sequence = bodies.iter().map(|body| (*body).to_owned()).collect();
+        script.messages_sequence_index = 0;
     }
 
     pub fn set_status_delay(&self, delay: Duration) {
@@ -841,7 +870,18 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         && method == "GET"
     {
         state.last_session_id = id.to_owned();
-        let body = state.messages_body.clone();
+        let body = if state.messages_sequence.is_empty() {
+            state.messages_body.clone()
+        } else {
+            let index = state
+                .messages_sequence_index
+                .min(state.messages_sequence.len() - 1);
+            let body = state.messages_sequence[index].clone();
+            if state.messages_sequence_index + 1 < state.messages_sequence.len() {
+                state.messages_sequence_index += 1;
+            }
+            body
+        };
         drop(state);
         write_response(&mut stream, 200, body.as_bytes());
         return;

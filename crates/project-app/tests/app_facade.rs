@@ -785,6 +785,27 @@ fn project_view_includes_messages() {
 }
 
 #[test]
+fn missing_agent_text_does_not_become_misleading_listo() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+
+    let run = app.send_message(&p.id, "hola", &[]).expect("send");
+
+    assert_eq!(run.status, "failed");
+    assert_eq!(
+        run.message.as_deref(),
+        Some("No recibimos una respuesta. Probá de nuevo.")
+    );
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(
+        view.messages[1].text,
+        "No recibimos una respuesta. Probá de nuevo."
+    );
+    assert_ne!(view.messages[1].text, "Listo.");
+}
+
+#[test]
 fn message_append_is_durable_before_agent_run() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());

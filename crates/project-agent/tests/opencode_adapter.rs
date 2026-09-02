@@ -279,14 +279,71 @@ fn send_fetches_assistant_text_from_message_endpoint() {
     let server = FakeServer::start();
     server.set_status_sequence(&["busy", "idle"]);
     server.set_messages_body(
-        r#"[{"role":"assistant","parts":[{"type":"text","text":"hola desde el endpoint"}]}]"#,
+        r#"[{"info":{"id":"old","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"viejo"}]}]"#,
     );
+    server.set_prompt_response_text("hola desde el endpoint");
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");
     assert_eq!(task.status, TaskStatus::Completed);
     assert_eq!(task.message.as_deref(), Some("hola desde el endpoint"));
+}
+
+#[test]
+fn send_selects_only_new_turn_terminal_text_and_excludes_reasoning() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[
+            {"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"pregunta"}]},
+            {"info":{"id":"old","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"respuesta vieja"}]}
+        ]"#,
+    );
+    server.set_prompt_response_text("respuesta final");
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("respuesta final"));
+}
+
+#[test]
+fn sequential_sends_select_each_current_turn_response() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body("[]");
+    server.set_prompt_response_text("primera respuesta");
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+
+    let first = engine.send(&session, &prompt()).expect("first send");
+    assert_eq!(first.message.as_deref(), Some("primera respuesta"));
+
+    server.set_prompt_response_text("segunda respuesta");
+    let second = engine.send(&session, &prompt()).expect("second send");
+    assert_eq!(second.message.as_deref(), Some("segunda respuesta"));
+}
+
+#[test]
+fn growing_assistant_message_resets_grace_until_stop() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_prompt_appends_response(false);
+    server.set_messages_sequence(&[
+        "[]",
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1"},"parts":[]}]"#,
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1"},"parts":[{"type":"step-start"},{"type":"reasoning","text":"pensando"}]}]"#,
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1","finish":"stop"},"parts":[{"type":"step-start"},{"type":"reasoning","text":"pensando"},{"type":"text","text":"¡Hola!"},{"type":"step-finish"}]}]"#,
+    ]);
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_millis(500));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("¡Hola!"));
 }
 
 #[test]
@@ -355,8 +412,7 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
     server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(800));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let started = std::time::Instant::now();
@@ -387,8 +443,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
     server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(500));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let started = std::time::Instant::now();
@@ -417,8 +472,7 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
     server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(800));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = std::thread::scope(|scope| {
@@ -447,8 +501,7 @@ fn send_completes_on_explicit_stop_without_files() {
     server.set_diff_body("[]");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
-        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
-        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(200));
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");
