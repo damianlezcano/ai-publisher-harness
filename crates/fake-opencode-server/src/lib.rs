@@ -34,6 +34,7 @@ pub struct Script {
     pub prompt_called: bool,
     pub prompt_appends_response: bool,
     pub prompt_response_text: Option<String>,
+    pub prompt_response_finish: Option<String>,
     pub status_sequence: Vec<String>,
     pub status_index: usize,
     pub status_delay: Duration,
@@ -207,7 +208,11 @@ fn default_messages() -> String {
 
 /// Append a synthetic assistant response to the message list so that watermark
 /// checks (assistant message count before vs. after prompt_async) see progress.
-fn append_assistant_response(current: &str, response_text: Option<&str>) -> String {
+fn append_assistant_response(
+    current: &str,
+    response_text: Option<&str>,
+    response_finish: Option<&str>,
+) -> String {
     let mut messages: Vec<Value> = serde_json::from_str(current).unwrap_or_default();
     let text = response_text.map(str::to_owned).unwrap_or_else(|| {
         messages
@@ -238,7 +243,7 @@ fn append_assistant_response(current: &str, response_text: Option<&str>) -> Stri
             .to_owned()
     });
     messages.push(json!({
-        "info": { "id": "msg-appended", "role": "assistant" },
+        "info": { "id": "msg-appended", "role": "assistant", "finish": response_finish.unwrap_or("stop") },
         "parts": [{ "type": "text", "text": text }]
     }));
     serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())
@@ -260,6 +265,7 @@ impl Default for Script {
             prompt_called: false,
             prompt_appends_response: true,
             prompt_response_text: None,
+            prompt_response_finish: None,
             status_sequence: vec!["idle".into()],
             status_index: 0,
             status_delay: Duration::ZERO,
@@ -402,6 +408,10 @@ impl FakeServer {
 
     pub fn set_prompt_response_text(&self, text: &str) {
         self.script().prompt_response_text = Some(text.to_owned());
+    }
+
+    pub fn set_prompt_response_finish(&self, finish: &str) {
+        self.script().prompt_response_finish = Some(finish.to_owned());
     }
 
     pub fn set_session_poll_body(&self, body: &str) {
@@ -786,6 +796,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             state.messages_body = append_assistant_response(
                 &state.messages_body,
                 state.prompt_response_text.as_deref(),
+                state.prompt_response_finish.as_deref(),
             );
         }
         let delay = state.prompt_delay;

@@ -322,7 +322,7 @@ fn send_completes_when_status_map_omits_session_key() {
 }
 
 #[test]
-fn send_empty_assistant_without_files_completes_after_idle_grace() {
+fn send_empty_assistant_without_files_completes_on_explicit_stop() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
     server.set_messages_body(
@@ -349,10 +349,10 @@ fn send_empty_assistant_without_files_completes_after_idle_grace() {
 fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
-    server.set_messages_body(
-        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"Listo."}]}]"#,
-    );
+    server.set_messages_body("[]");
+    server.set_prompt_response_text("Listo.");
     server.set_diff_body("[]");
+    server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
         .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
@@ -364,6 +364,9 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
         scope.spawn(|| {
             std::thread::sleep(Duration::from_millis(120));
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
+            server.set_messages_body(
+                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+            );
         });
         engine.send(&session, &prompt()).expect("send")
     });
@@ -380,6 +383,7 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
     server.set_status_sequence(&["idle"]);
     server.set_messages_body("[]");
     server.set_prompt_response_text("Voy a preparar la actividad.");
+    server.set_prompt_response_finish("tool-calls");
     server.set_diff_body("[]");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
@@ -387,17 +391,19 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
         .with_idle_grace(Duration::from_millis(50), Duration::from_millis(500));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
+    let started = std::time::Instant::now();
     let task = std::thread::scope(|scope| {
         scope.spawn(|| {
             std::thread::sleep(Duration::from_millis(120));
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
+            server.set_messages_body(
+                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Actividad creada."}]}]"#,
+            );
         });
         engine.send(&session, &prompt()).expect("send")
     });
-    assert_eq!(
-        task.message.as_deref(),
-        Some("Voy a preparar la actividad.")
-    );
+    assert!(started.elapsed() >= Duration::from_millis(120));
+    assert_eq!(task.message.as_deref(), Some("Actividad creada."));
     assert_eq!(task.artifacts.len(), 1);
 }
 
@@ -405,11 +411,11 @@ fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
 fn send_tolerates_transient_diff_errors_during_ack_wait() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
-    server.set_messages_body(
-        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"Listo."}]}]"#,
-    );
+    server.set_messages_body("[]");
+    server.set_prompt_response_text("Listo.");
     server.set_diff_status(503);
     server.set_diff_body("[]");
+    server.set_prompt_response_finish("tool-calls");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
         .with_base_url(server.base_url())
         .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
@@ -421,6 +427,9 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
             std::thread::sleep(Duration::from_millis(120));
             server.set_diff_status(200);
             server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
+            server.set_messages_body(
+                r#"[{"info":{"id":"msg-final","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+            );
         });
         engine.send(&session, &prompt()).expect("send")
     });
@@ -430,11 +439,11 @@ fn send_tolerates_transient_diff_errors_during_ack_wait() {
 }
 
 #[test]
-fn send_completes_brief_listo_after_ack_grace_when_no_files_appear() {
+fn send_completes_on_explicit_stop_without_files() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
     server.set_messages_body(
-        r#"[{"info":{"id":"msg-1","role":"assistant"},"parts":[{"type":"text","text":"Listo."}]}]"#,
+        r#"[{"info":{"id":"msg-1","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"Listo."}]}]"#,
     );
     server.set_diff_body("[]");
     let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
@@ -443,13 +452,10 @@ fn send_completes_brief_listo_after_ack_grace_when_no_files_appear() {
         .with_idle_grace(Duration::from_millis(50), Duration::from_millis(200));
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
-    let started = std::time::Instant::now();
     let task = engine.send(&session, &prompt()).expect("send");
     assert_eq!(task.status, TaskStatus::Completed);
     assert_eq!(task.message.as_deref(), Some("Listo."));
     assert!(task.artifacts.is_empty());
-    assert!(started.elapsed() >= Duration::from_millis(200));
-    assert!(started.elapsed() < Duration::from_secs(3));
 }
 
 #[test]
