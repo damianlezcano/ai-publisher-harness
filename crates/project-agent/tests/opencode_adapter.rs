@@ -279,14 +279,33 @@ fn send_fetches_assistant_text_from_message_endpoint() {
     let server = FakeServer::start();
     server.set_status_sequence(&["busy", "idle"]);
     server.set_messages_body(
-        r#"[{"role":"assistant","parts":[{"type":"text","text":"hola desde el endpoint"}]}]"#,
+        r#"[{"info":{"id":"old","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"viejo"}]}]"#,
     );
+    server.set_prompt_response_text("hola desde el endpoint");
     let engine = engine_for(&server);
     engine.ensure_ready().expect("ready");
     let session = engine.open_session(&project()).expect("session");
     let task = engine.send(&session, &prompt()).expect("send");
     assert_eq!(task.status, TaskStatus::Completed);
     assert_eq!(task.message.as_deref(), Some("hola desde el endpoint"));
+}
+
+#[test]
+fn send_selects_only_new_turn_terminal_text_and_excludes_reasoning() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body(
+        r#"[
+            {"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"pregunta"}]},
+            {"info":{"id":"old","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"respuesta vieja"}]}
+        ]"#,
+    );
+    server.set_prompt_response_text("respuesta final");
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("respuesta final"));
 }
 
 #[test]

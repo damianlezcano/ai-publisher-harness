@@ -942,7 +942,20 @@ where
                     .iter()
                     .map(|id| parse_creation_id(id))
                     .collect::<AppResult<Vec<_>>>()?;
-                let mut text = assistant_reply_text(result.task.message.as_deref());
+                let mut text = assistant_reply_text(
+                    result.task.message.as_deref(),
+                    !result.registered.is_empty(),
+                );
+                let missing_response = result
+                    .task
+                    .message
+                    .as_deref()
+                    .is_none_or(|message| message.trim().is_empty());
+                let status = if missing_response && result.registered.is_empty() {
+                    MessageStatus::Failed
+                } else {
+                    MessageStatus::Ok
+                };
                 if self
                     .refresh_published_snapshot(project_id.as_str(), &result.registered)
                     .is_err()
@@ -954,13 +967,17 @@ where
                 self.projects
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .append_assistant_message(&project_id, &text, MessageStatus::Ok, &creation_ids)
+                    .append_assistant_message(&project_id, &text, status, &creation_ids)
                     .map_err(AppError::from_core)?;
                 Ok(AgentRunView {
-                    status: "completed".to_owned(),
+                    status: if status == MessageStatus::Ok {
+                        "completed".to_owned()
+                    } else {
+                        "failed".to_owned()
+                    },
                     turn_id: turn_id.clone(),
                     registered_creation_ids: result.registered,
-                    message: result.task.message,
+                    message: Some(text),
                 })
             }
             Err(project_agent::AgentError::Cancelled) => {
@@ -1431,10 +1448,14 @@ fn parse_creation_id(id: &str) -> AppResult<CreationId> {
     CreationId::parse(id).map_err(|_| AppError::invalid("Esa creación no es válida."))
 }
 
-fn assistant_reply_text(message: Option<&str>) -> String {
+fn assistant_reply_text(message: Option<&str>, has_creation: bool) -> String {
     let trimmed = message.unwrap_or("").trim();
     if trimmed.is_empty() {
-        "Listo.".to_owned()
+        if has_creation {
+            "La creación se completó, pero no recibimos una explicación.".to_owned()
+        } else {
+            "No recibimos una respuesta. Probá de nuevo.".to_owned()
+        }
     } else {
         trimmed.to_owned()
     }
