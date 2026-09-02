@@ -327,6 +327,27 @@ fn sequential_sends_select_each_current_turn_response() {
 }
 
 #[test]
+fn growing_assistant_message_resets_grace_until_stop() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_prompt_appends_response(false);
+    server.set_messages_sequence(&[
+        "[]",
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1"},"parts":[]}]"#,
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1"},"parts":[{"type":"step-start"},{"type":"reasoning","text":"pensando"}]}]"#,
+        r#"[{"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"hola"}]},{"info":{"id":"assistant-1","role":"assistant","parentID":"user-1","finish":"stop"},"parts":[{"type":"step-start"},{"type":"reasoning","text":"pensando"},{"type":"text","text":"¡Hola!"},{"type":"step-finish"}]}]"#,
+    ]);
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_millis(150))
+        .with_idle_grace(Duration::from_millis(10), Duration::from_millis(80));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("send");
+    assert_eq!(task.message.as_deref(), Some("¡Hola!"));
+}
+
+#[test]
 fn send_idle_without_new_assistant_message_times_out() {
     // Watermark check: a pre-existing assistant message without a new one after
     // prompt_async must not be mistaken for this turn's completion.

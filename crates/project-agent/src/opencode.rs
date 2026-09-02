@@ -107,6 +107,8 @@ impl OpenCodeAgentEngine {
         let mut idle_since: Option<Instant> = None;
         let mut last_artifact_fetch: Option<Instant> = None;
         let mut idle_artifacts: Vec<Artifact> = Vec::new();
+        let mut last_progress_signature: Option<(usize, Option<String>, usize, Option<String>)> =
+            None;
         loop {
             let (status, body) = self.backend.get(path).map_err(map_backend_error)?;
             if !(200..300).contains(&status) {
@@ -120,6 +122,16 @@ impl OpenCodeAgentEngine {
                     let messages = self.fetch_message_list(session_id)?;
                     let originating_user_id = last_user_message_id(&messages);
                     if assistant_message_count(&messages) > before_assistant_count {
+                        let progress_signature = assistant_progress_signature(
+                            &messages,
+                            before_assistant_count,
+                            originating_user_id.as_deref(),
+                        );
+                        if progress_signature != last_progress_signature {
+                            last_progress_signature = progress_signature;
+                            idle_since = Some(Instant::now());
+                            last_artifact_fetch = None;
+                        }
                         let message = authoritative_assistant_text(
                             &messages,
                             before_assistant_count,
@@ -193,6 +205,7 @@ impl OpenCodeAgentEngine {
                 _ => {
                     idle_since = None;
                     last_artifact_fetch = None;
+                    last_progress_signature = None;
                 }
             }
             if Instant::now() >= deadline {
@@ -463,6 +476,34 @@ fn authoritative_assistant_text(
     }
     last.and_then(message_text)
         .filter(|text| !text.trim().is_empty())
+}
+
+fn assistant_progress_signature(
+    messages: &[Value],
+    before_assistant_count: usize,
+    originating_user_id: Option<&str>,
+) -> Option<(usize, Option<String>, usize, Option<String>)> {
+    let mut assistant_count = 0;
+    let mut latest = None;
+    for message in messages {
+        if message_role(message) != "assistant" {
+            continue;
+        }
+        if assistant_count >= before_assistant_count
+            && message_belongs_to_turn(message, originating_user_id)
+        {
+            latest = Some((
+                message_id(message).map(str::to_owned),
+                message
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
+                assistant_finish(message).map(str::to_owned),
+            ));
+        }
+        assistant_count += 1;
+    }
+    latest.map(|(id, parts_len, finish)| (assistant_count, id, parts_len, finish))
 }
 
 fn message_id(message: &Value) -> Option<&str> {
