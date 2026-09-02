@@ -214,6 +214,25 @@ fn append_assistant_response(
     response_finish: Option<&str>,
 ) -> String {
     let mut messages: Vec<Value> = serde_json::from_str(current).unwrap_or_default();
+    let user_id = format!(
+        "user-appended-{}",
+        messages
+            .iter()
+            .filter(|message| {
+                message.get("role").and_then(Value::as_str).or_else(|| {
+                    message
+                        .get("info")
+                        .and_then(|info| info.get("role"))
+                        .and_then(Value::as_str)
+                }) == Some("user")
+            })
+            .count()
+            + 1
+    );
+    messages.push(json!({
+        "info": { "id": user_id.clone(), "role": "user" },
+        "parts": [{ "type": "text", "text": "prompt" }]
+    }));
     let text = response_text.map(str::to_owned).unwrap_or_else(|| {
         messages
             .iter()
@@ -243,7 +262,7 @@ fn append_assistant_response(
             .to_owned()
     });
     messages.push(json!({
-        "info": { "id": "msg-appended", "role": "assistant", "finish": response_finish.unwrap_or("stop") },
+        "info": { "id": "msg-appended", "role": "assistant", "parentID": user_id, "finish": response_finish.unwrap_or("stop") },
         "parts": [{ "type": "text", "text": text }]
     }));
     serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())

@@ -309,6 +309,24 @@ fn send_selects_only_new_turn_terminal_text_and_excludes_reasoning() {
 }
 
 #[test]
+fn sequential_sends_select_each_current_turn_response() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body("[]");
+    server.set_prompt_response_text("primera respuesta");
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+
+    let first = engine.send(&session, &prompt()).expect("first send");
+    assert_eq!(first.message.as_deref(), Some("primera respuesta"));
+
+    server.set_prompt_response_text("segunda respuesta");
+    let second = engine.send(&session, &prompt()).expect("second send");
+    assert_eq!(second.message.as_deref(), Some("segunda respuesta"));
+}
+
+#[test]
 fn send_idle_without_new_assistant_message_times_out() {
     // Watermark check: a pre-existing assistant message without a new one after
     // prompt_async must not be mistaken for this turn's completion.

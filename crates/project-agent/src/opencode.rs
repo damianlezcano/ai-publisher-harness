@@ -101,7 +101,6 @@ impl OpenCodeAgentEngine {
         &self,
         session_id: &str,
         before_assistant_count: usize,
-        originating_user_id: Option<String>,
     ) -> AgentResult<(String, Option<String>, Vec<Artifact>)> {
         let path = "/session/status";
         let deadline = Instant::now() + self.task_timeout;
@@ -119,6 +118,7 @@ impl OpenCodeAgentEngine {
             match phase.as_str() {
                 "idle" | "done" | "complete" | "completed" | "success" => {
                     let messages = self.fetch_message_list(session_id)?;
+                    let originating_user_id = last_user_message_id(&messages);
                     if assistant_message_count(&messages) > before_assistant_count {
                         let message = authoritative_assistant_text(
                             &messages,
@@ -173,6 +173,7 @@ impl OpenCodeAgentEngine {
                 }
                 "failed" | "error" | "failure" => {
                     let messages = self.fetch_message_list(session_id)?;
+                    let originating_user_id = last_user_message_id(&messages);
                     let text = if assistant_message_count(&messages) > before_assistant_count {
                         authoritative_assistant_text(
                             &messages,
@@ -307,7 +308,6 @@ impl AgentEngine for OpenCodeAgentEngine {
         }
         let before_messages = self.fetch_message_list(&session.id)?;
         let before_assistant_count = assistant_message_count(&before_messages);
-        let originating_user_id = last_user_message_id(&before_messages);
         let path = format!("/session/{}/prompt_async", session.id);
         let (status, _) = self.backend.post(&path, &body).map_err(map_backend_error)?;
         if status != 204 && !(200..300).contains(&status) {
@@ -315,7 +315,7 @@ impl AgentEngine for OpenCodeAgentEngine {
             return Err(AgentError::Http(format!("prompt_async status {status}")));
         }
 
-        match self.poll_session(&session.id, before_assistant_count, originating_user_id) {
+        match self.poll_session(&session.id, before_assistant_count) {
             Ok((_phase, message, artifacts)) => {
                 log_event("task completed");
                 Ok(AgentTask {
