@@ -139,10 +139,18 @@ impl OpenCodeAgentEngine {
                         // is not terminal while no files exist: the sidecar
                         // often marks idle between the first text part and
                         // tool work. Debounce idle and keep polling.
+                        // OpenCode can briefly report idle after emitting an
+                        // assistant part and before its next tool/file event.
+                        // Text is therefore evidence that this turn exists,
+                        // not evidence that it is terminal. Any text gets the
+                        // artifact grace window because it may be an intermediate
+                        // part before the actual creation work.
                         let grace = match &message {
-                            Some(text) if is_brief_ack(text) => self.ack_without_artifacts_grace,
-                            None => self.idle_without_text_grace,
+                            Some(text) if is_brief_ack(text) || is_intermediate_text(text) => {
+                                self.ack_without_artifacts_grace
+                            }
                             Some(_) => Duration::ZERO,
+                            None => self.idle_without_text_grace,
                         };
                         if grace == Duration::ZERO {
                             return Ok((phase, message, idle_artifacts));
@@ -407,6 +415,27 @@ fn is_brief_ack(text: &str) -> bool {
             | "de acuerdo"
             | "entendido"
     )
+}
+
+fn is_intermediate_text(text: &str) -> bool {
+    let normalized = text.trim().to_lowercase();
+    [
+        "voy a ",
+        "voy al ",
+        "voy a preparar",
+        "estoy ",
+        "déjame ",
+        "dejame ",
+        "revisando",
+        "preparando",
+        "creando",
+        "generando",
+        "i'll ",
+        "let me ",
+        "i am ",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
 }
 
 fn last_assistant_text_from_messages(messages: &[Value]) -> Option<String> {

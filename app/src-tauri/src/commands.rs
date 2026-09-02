@@ -25,6 +25,8 @@ use crate::SharedState;
 #[serde(rename_all = "camelCase")]
 pub struct AgentTaskEvent {
     pub project_id: String,
+    /// Stable identity of the persisted user message owning this task.
+    pub turn_id: String,
     /// `working`, `completed`, `failed`, or `cancelled`.
     pub status: String,
     pub message: Option<String>,
@@ -301,10 +303,12 @@ pub async fn agent_send(
         app.send_message_persist(&persist_id, &persist_prompt, &persist_attachments)
     })
     .await?;
+    let turn_id = inputs.turn_id().unwrap_or_default().to_owned();
     let _ = app.emit(
         "agent://task",
         AgentTaskEvent {
             project_id: project_id.clone(),
+            turn_id: turn_id.clone(),
             status: "working".to_owned(),
             message: None,
             registered_creation_ids: Vec::new(),
@@ -314,12 +318,14 @@ pub async fn agent_send(
         let event = match shared.send_message_run(inputs) {
             Ok(run) => AgentTaskEvent {
                 project_id,
+                turn_id: run.turn_id.unwrap_or_default(),
                 status: run.status,
                 message: run.message,
                 registered_creation_ids: run.registered_creation_ids,
             },
             Err(err) => AgentTaskEvent {
                 project_id,
+                turn_id,
                 status: "failed".to_owned(),
                 message: Some(err.message),
                 registered_creation_ids: Vec::new(),

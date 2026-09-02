@@ -589,6 +589,7 @@ fn send_message_persists_user_and_assistant_messages() {
         .send_message(&p.id, "crea una actividad", &[])
         .expect("send");
     assert_eq!(run.status, "completed");
+    assert!(run.turn_id.as_deref().is_some_and(|id| !id.is_empty()));
     assert_eq!(run.registered_creation_ids.len(), 1);
 
     let view = app.open_project(&p.id).expect("open");
@@ -713,6 +714,7 @@ fn failed_run_persists_failed_assistant_message() {
 
     let run = app.send_message(&p.id, "hacé algo", &[]).expect("send");
     assert_eq!(run.status, "failed");
+    assert!(run.turn_id.as_deref().is_some_and(|id| !id.is_empty()));
 
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.messages.len(), 2);

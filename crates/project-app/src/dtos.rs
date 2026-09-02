@@ -135,6 +135,9 @@ pub struct ProjectView {
 pub struct AgentRunView {
     /// `completed`, `failed`, or `cancelled`.
     pub status: String,
+    /// The persisted user message that owns this execution, when the run was
+    /// initiated through the durable chat-send path.
+    pub turn_id: Option<String>,
     pub registered_creation_ids: Vec<String>,
     pub message: Option<String>,
 }

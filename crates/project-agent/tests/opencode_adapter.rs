@@ -375,6 +375,33 @@ fn send_does_not_treat_brief_listo_as_complete_before_artifacts() {
 }
 
 #[test]
+fn send_does_not_treat_intermediate_text_as_terminal_before_artifacts() {
+    let server = FakeServer::start();
+    server.set_status_sequence(&["idle"]);
+    server.set_messages_body("[]");
+    server.set_prompt_response_text("Voy a preparar la actividad.");
+    server.set_diff_body("[]");
+    let engine = OpenCodeAgentEngine::new(PathBuf::from("/usr/bin/true"), unique_config_dir(), 0)
+        .with_base_url(server.base_url())
+        .with_timeouts(Duration::from_secs(2), Duration::from_secs(5))
+        .with_idle_grace(Duration::from_millis(50), Duration::from_millis(500));
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(120));
+            server.set_diff_body(r#"[{"path":"index.html","byte_size":12}]"#);
+        });
+        engine.send(&session, &prompt()).expect("send")
+    });
+    assert_eq!(
+        task.message.as_deref(),
+        Some("Voy a preparar la actividad.")
+    );
+    assert_eq!(task.artifacts.len(), 1);
+}
+
+#[test]
 fn send_tolerates_transient_diff_errors_during_ack_wait() {
     let server = FakeServer::start();
     server.set_status_sequence(&["idle"]);
