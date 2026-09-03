@@ -153,6 +153,27 @@ describe("ProviderPanel", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("traps focus to visible controls, never wrapping into the hidden Logs panel", async () => {
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    const dialog = await screen.findByRole("dialog", { name: "Configuración" });
+
+    // The last visible focusable in the General panel is the "Otros
+    // proveedores" toggle; the Logs panel buttons are mounted but [hidden].
+    const others = screen.getByRole("button", { name: "Otros proveedores (1)" });
+    others.focus();
+    expect(others).toHaveFocus();
+
+    await userEvent.tab();
+
+    const active = document.activeElement as HTMLElement;
+    expect(active).not.toBe(document.body);
+    expect(dialog.contains(active)).toBe(true);
+    expect(active.closest("[hidden]")).toBeNull();
+    // The trap wraps to the first visible control (the header close button),
+    // never to the hidden Logs panel buttons or out of the dialog.
+    expect(screen.getByRole("button", { name: "Cerrar" })).toHaveFocus();
+  });
+
   it("always reopens on the General tab, never remembering Logs", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([]);

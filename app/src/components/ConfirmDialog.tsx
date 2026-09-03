@@ -38,12 +38,7 @@ export default function ConfirmDialog({
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <Dialog
-      title={title}
-      onClose={onCancel}
-      initialFocusRef={inputRef as RefObject<HTMLElement>}
-      className="confirm-dialog"
-    >
+    <Dialog title={title} onClose={onCancel} initialFocusRef={inputRef as RefObject<HTMLElement>}>
       <p>{message}</p>
       {confirmPrompt && <p id="confirm-prompt">{confirmPrompt}</p>}
       <label className="sr-only" htmlFor="confirm-input">

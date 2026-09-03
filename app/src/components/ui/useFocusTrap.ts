@@ -39,7 +39,14 @@ export function useFocusTrap(options: UseFocusTrapOptions): RefObject<HTMLDivEle
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter(
+        (el) =>
+          !el.closest("[hidden]") &&
+          !el.hasAttribute("disabled") &&
+          el.getAttribute("aria-hidden") !== "true",
+      );
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
