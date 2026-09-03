@@ -458,7 +458,14 @@ describe("App", () => {
       await screen.findByRole("dialog", { name: messages.provider.heading }),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText(messages.model.label)).not.toBeInTheDocument();
-    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
+    // Configuración always opens on General; logs require an explicit click.
+    expect(screen.getByRole("tab", { name: messages.provider.tabs.general })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(document.getElementById("settings-panel-logs")).not.toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: messages.provider.tabs.logs }));
+    expect(await screen.findByText("Logs de esta sesión")).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: messages.common.close }));
     await waitFor(() =>

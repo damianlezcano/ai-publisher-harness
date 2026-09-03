@@ -300,6 +300,10 @@ export const messages = {
   provider: {
     panelLabel: "Configuración",
     heading: "Configuración",
+    tabs: {
+      general: "General",
+      logs: "Logs",
+    },
     privacyNote:
       "Tu cuenta y tus claves se guardan de forma segura en tu computadora. Nunca se comparten.",
     featuredHeading: "Recomendados",

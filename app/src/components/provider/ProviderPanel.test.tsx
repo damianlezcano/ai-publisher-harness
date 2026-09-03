@@ -90,7 +90,32 @@ beforeEach(() => {
 });
 
 describe("ProviderPanel", () => {
-  it("renders current-session logs and clears them", async () => {
+  it("opens with the General tab selected and logs never visible by default", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs")
+        return Promise.resolve([{ level: "INFO", message: "turn started" }]);
+      return Promise.resolve(undefined);
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    const dialog = await screen.findByRole("dialog", { name: "Configuración" });
+    expect(dialog).toHaveClass("provider-dialog");
+
+    const generalTab = screen.getByRole("tab", { name: "General" });
+    const logsTab = screen.getByRole("tab", { name: "Logs" });
+    expect(generalTab).toHaveAttribute("aria-selected", "true");
+    expect(logsTab).toHaveAttribute("aria-selected", "false");
+    expect(generalTab).toHaveFocus();
+
+    // Logs content is not visible until the user explicitly selects Logs.
+    const logsPanel = document.getElementById("settings-panel-logs");
+    expect(logsPanel).toHaveAttribute("role", "tabpanel");
+    expect(logsPanel).toHaveAttribute("aria-labelledby", "settings-tab-logs");
+    expect(logsPanel).not.toBeVisible();
+    expect(screen.getByText("Recomendados")).toBeVisible();
+  });
+
+  it("requires an explicit click on Logs to reveal the current-session viewer and clears it", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([]);
       if (cmd === "session_logs")
@@ -99,26 +124,65 @@ describe("ProviderPanel", () => {
       return Promise.resolve(undefined);
     });
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
-    const dialog = await screen.findByRole("dialog", { name: "Configuración" });
-    expect(dialog).toHaveClass("provider-dialog");
-    expect(dialog.querySelector(".dialog-body")).not.toBeNull();
+    await screen.findByRole("dialog", { name: "Configuración" });
+    expect(screen.queryByText("[INFO] turn started")).not.toBeVisible();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
     const logs = await screen.findByText("[INFO] turn started");
     expect(logs.closest("pre")).toHaveClass("session-logs");
+    expect(logs).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Limpiar" }));
     expect(invokeMock).toHaveBeenCalledWith("session_logs_clear");
     expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
+  });
+
+  it("keeps Configuración open and focused when switching tabs, and supports arrow keys", async () => {
+    const onClose = vi.fn();
+    render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
+    await screen.findByRole("dialog", { name: "Configuración" });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("tab", { name: "General" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("always reopens on the General tab, never remembering Logs", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    const { unmount } = render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByRole("dialog", { name: "Configuración" });
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
+    unmount();
+
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByRole("dialog", { name: "Configuración" });
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "false");
+    expect(document.getElementById("settings-panel-logs")).not.toBeVisible();
   });
 
   it("renders as a labelled dialog and closes on Escape", async () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);
     expect(await screen.findByRole("dialog", { name: "Configuración" })).toBeInTheDocument();
-    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "General" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Logs" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the Configuración -> Logs de esta sesión contract visible and bounded", async () => {
+  it("keeps the Configuración -> Logs de esta sesión contract visible and bounded behind an explicit click", async () => {
     const refreshLogs = vi.fn();
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([]);
@@ -136,14 +200,12 @@ describe("ProviderPanel", () => {
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
     const dialog = await screen.findByRole("dialog", { name: "Configuración" });
 
-    // The heading is the first section of the modal body: reachable without
-    // scrolling, never hidden by the provider list.
+    // The logs live in their own tab panel and are hidden by default.
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
     const heading = screen.getByRole("heading", { name: "Logs de esta sesión" });
     const section = heading.closest("section");
     expect(section).toHaveAttribute("aria-label", "Logs de esta sesión");
-    expect(
-      dialog.querySelector(".dialog-body > section[aria-label='Logs de esta sesión']"),
-    ).not.toBeNull();
+    expect(dialog.querySelector("section[aria-label='Logs de esta sesión']")).not.toBeNull();
 
     // Bounded in-memory viewer with the established actions.
     for (const action of ["Limpiar", "Actualizar", "Copiar"]) {
@@ -164,6 +226,8 @@ describe("ProviderPanel", () => {
       return Promise.resolve(undefined);
     });
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByRole("dialog", { name: "Configuración" });
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
     expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
     expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
   });

@@ -495,13 +495,24 @@ select {
   background: var(--surface);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
-  max-width: 420px;
+  max-width: min(420px, calc(100vw - 32px));
   width: 100%;
   max-height: min(88vh, 760px);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   overflow: hidden;
+}
+
+@media (max-width: 520px) {
+  .dialog-backdrop {
+    padding: var(--space-2);
+  }
+
+  .dialog {
+    padding: var(--space-4);
+    max-width: calc(100vw - 16px);
+  }
 }
 
 .dialog-header {
@@ -595,6 +606,83 @@ select {
 
 .conversation-details-dialog {
   max-width: min(560px, calc(100vw - 32px));
+}
+
+/* -- M11+ polish: settings tabs ------------------------------------------------- */
+
+.settings-tabs {
+  display: flex;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-1) 0 0;
+}
+
+.settings-tab {
+  font-size: 0.95rem;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--muted);
+}
+
+.settings-tab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.settings-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  border-bottom-color: var(--surface);
+  font-weight: 600;
+}
+
+.settings-panel {
+  min-width: 0;
+}
+
+/* -- M11+ polish: compact conversation-details resource rows -------------------- */
+
+.item-list li.item-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.item-list li.item-row:hover,
+.item-list li.item-row:focus-within {
+  background: var(--bg);
+}
+
+.item-list li.item-row .item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.95rem;
+}
+
+.item-list li.item-row .item-meta {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+.item-list .item-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.item-list .item-open {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  padding: 2px 10px;
+  min-height: 28px;
 }
 
 .session-logs {

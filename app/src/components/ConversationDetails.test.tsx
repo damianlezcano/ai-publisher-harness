@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import ConversationDetails from "./ConversationDetails";
 import type { ProjectView } from "../types";
+import { humanDate, humanSize } from "../messages";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const invokeMock = vi.mocked(invoke);
@@ -78,7 +79,20 @@ describe("ConversationDetails", () => {
       screen.getByRole("option", { name: "Predeterminado de Configuración" }),
     ).toBeInTheDocument();
     expect(screen.getByText("manual.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Actividad interactiva")).toBeInTheDocument();
+    expect(screen.getByText("Actividad")).toBeInTheDocument();
+
+    // Compact resource rows show a trustworthy date and the file size.
+    const collapse = (text: string) => text.replace(/\s+/g, " ");
+    const materialRow = screen.getByText("manual.pdf").closest("li");
+    expect(materialRow).toHaveClass("item-row");
+    const materialMeta = collapse(materialRow?.querySelector(".item-meta")?.textContent ?? "");
+    expect(materialMeta).toContain(humanSize(project.materials[0].byteSize));
+    expect(materialMeta).toContain(collapse(humanDate(project.materials[0].createdAt)));
+    const creationRow = screen.getByText("Actividad").closest("li");
+    expect(collapse(creationRow?.querySelector(".item-meta")?.textContent ?? "")).toContain(
+      collapse(humanDate(project.creations[0].createdAt)),
+    );
+    expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Nombre"), { target: { value: "Nueva" } });
     await user.click(screen.getByRole("button", { name: "Renombrar" }));

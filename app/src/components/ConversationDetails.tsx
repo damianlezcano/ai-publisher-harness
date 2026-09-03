@@ -3,7 +3,7 @@ import { api, errorMessage } from "../api";
 import type { ModelSummary, PreviewData, ProjectView, ProviderSummary } from "../types";
 import Dialog from "./ui/Dialog";
 import PreviewModal from "./PreviewModal";
-import { humanSize, kindLabel, modelOptionLabel } from "../labels";
+import { humanDate, humanSize, kindLabel, modelOptionLabel } from "../labels";
 import { messages } from "../messages";
 
 interface Props {
@@ -178,16 +178,20 @@ export default function ConversationDetails({ project, active, onClose, onRefres
           <ul className="item-list">
             {project.materials.map((material) => (
               <li key={material.id} className="item-row">
-                <span className="item-name">{material.displayName}</span>
-                <span className="item-meta">{humanSize(material.byteSize)}</span>
-                <button
-                  type="button"
-                  className="secondary"
-                  aria-label={`${messages.common.open}: ${material.displayName}`}
-                  onClick={() => void openMaterial(material)}
-                >
-                  {messages.common.open}
-                </button>
+                <div className="item-row-main">
+                  <span className="item-name">{material.displayName}</span>
+                  <button
+                    type="button"
+                    className="secondary item-open"
+                    aria-label={`${messages.common.open}: ${material.displayName}`}
+                    onClick={() => void openMaterial(material)}
+                  >
+                    {messages.common.open}
+                  </button>
+                </div>
+                <span className="item-meta">
+                  {humanSize(material.byteSize)} · {humanDate(material.createdAt)}
+                </span>
               </li>
             ))}
           </ul>
@@ -210,16 +214,21 @@ export default function ConversationDetails({ project, active, onClose, onRefres
           <ul className="item-list">
             {project.creations.map((creation) => (
               <li key={creation.id} className="item-row">
-                <span className="item-name">{kindLabel(creation.kind)}</span>
-                <span className="item-meta">{humanSize(creation.byteSize)}</span>
-                <button
-                  type="button"
-                  className="secondary"
-                  aria-label={`${messages.common.open}: ${kindLabel(creation.kind)}`}
-                  onClick={() => void openCreation(creation)}
-                >
-                  {messages.common.open}
-                </button>
+                <div className="item-row-main">
+                  <span className="item-name">{creation.displayName}</span>
+                  <button
+                    type="button"
+                    className="secondary item-open"
+                    aria-label={`${messages.common.open}: ${creation.displayName}`}
+                    onClick={() => void openCreation(creation)}
+                  >
+                    {messages.common.open}
+                  </button>
+                </div>
+                <span className="item-meta">
+                  {kindLabel(creation.kind)} · {humanSize(creation.byteSize)} ·{" "}
+                  {humanDate(creation.createdAt)}
+                </span>
               </li>
             ))}
           </ul>
