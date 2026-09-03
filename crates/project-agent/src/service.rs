@@ -699,7 +699,7 @@ mod tests {
         fs::write(tmp.path().join("new.html"), b"new").expect("new");
         let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
             .into_iter()
-            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
+            .map(|a| (a.path, a.sha256.unwrap_or_default()))
             .collect();
         let merged = merge_artifacts(
             vec![Artifact {
@@ -731,7 +731,7 @@ mod tests {
         fs::write(tmp.path().join("index.html"), b"ORIGINAL").expect("old");
         let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
             .into_iter()
-            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
+            .map(|a| (a.path, a.sha256.unwrap_or_default()))
             .collect();
         fs::write(tmp.path().join("index.html"), b"UPDATED").expect("updated");
         // `/diff` is empty for a file the agent edited in place (committed);
@@ -747,7 +747,7 @@ mod tests {
         fs::write(tmp.path().join("abandoned.html"), b"old").expect("old");
         let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
             .into_iter()
-            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
+            .map(|a| (a.path, a.sha256.unwrap_or_default()))
             .collect();
         let merged = merge_artifacts(Vec::new(), tmp.path(), &before);
         assert!(merged.is_empty());
