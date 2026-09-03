@@ -61,7 +61,8 @@ EOF
 chmod +x "$tmp/bin/opencode"
 
 run() {
-  PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" \
+  env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+    PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" \
     "$repo_root/scripts/check-session-budget" "$@"
 }
 
@@ -112,13 +113,49 @@ expect_grep 2 'SESSION_BUDGET: ROTATE_SESSION_REQUIRED (' --session ses_rotate
 # Hard band -> ROTATE_SESSION_REQUIRED_HARD.
 expect_grep 3 'SESSION_BUDGET: ROTATE_SESSION_REQUIRED_HARD' --session ses_hard
 
-# Default resolver: newest session from `opencode session list`.
-PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="ses_under  x" \
-  "$repo_root/scripts/check-session-budget" >/dev/null || {
-  echo "FAIL: default newest-session resolution" >&2
+# An identified OpenCode session is measured exactly when supplied explicitly.
+PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" \
+  "$repo_root/scripts/check-session-budget" --session ses_under >"$tmp/current.out" 2>&1 || {
+  echo "FAIL: explicit current OpenCode identity resolution" >&2
+  cat "$tmp/current.out" >&2
   exit 1
 }
-echo "PASS: default session resolution uses newest session"
+grep -q 'SESSION_SOURCE: explicit --session' "$tmp/current.out"
+grep -q 'SESSION_ID: ses_under' "$tmp/current.out"
+echo "PASS: explicit current OpenCode identity resolution"
+
+# A historical session in the list is never selected implicitly.
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+  PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="ses_hard  old" \
+  "$repo_root/scripts/check-session-budget" >"$tmp/no-current.out" 2>&1 && {
+  echo "FAIL: stale session list must not become current" >&2
+  exit 1
+}
+grep -q 'SESSION_BUDGET: UNKNOWN' "$tmp/no-current.out"
+echo "PASS: stale session list is not current"
+
+# Codex must not fall back to any OpenCode session.
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID PATH="$tmp/bin:$PATH" \
+  FAKE_EXPORT_DIR="$tmp/exports" CODEX_THREAD_ID=codex-current \
+  "$repo_root/scripts/check-session-budget" >"$tmp/codex.out" 2>&1 && {
+  echo "FAIL: Codex without token source must be unknown" >&2
+  exit 1
+}
+grep -q 'PLATFORM: CODEX' "$tmp/codex.out"
+grep -q 'TOKENS: unknown' "$tmp/codex.out"
+echo "PASS: Codex does not inherit OpenCode budget"
+
+# Even a stale OpenCode variable cannot override reliable Codex identity.
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID PATH="$tmp/bin:$PATH" \
+  FAKE_EXPORT_DIR="$tmp/exports" \
+  CODEX_THREAD_ID=codex-current OPENCODE_SESSION_ID=ses_hard \
+  "$repo_root/scripts/check-session-budget" >"$tmp/codex-stale-env.out" 2>&1 && {
+  echo "FAIL: Codex must ignore stale OpenCode identity" >&2
+  exit 1
+}
+grep -q 'PLATFORM: CODEX' "$tmp/codex-stale-env.out"
+grep -q 'SESSION_ID: unavailable' "$tmp/codex-stale-env.out"
+echo "PASS: Codex ignores stale OpenCode identity"
 
 # Malformed export -> FAIL CLOSED.
 expect 4 --session ses_malformed
@@ -130,7 +167,8 @@ expect 4 --session ses_missing_tokens
 expect 4 --session ses_does_not_exist
 
 # No resolvable session -> FAIL CLOSED.
-PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="" \
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+  PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="" \
   "$repo_root/scripts/check-session-budget" >/dev/null 2>&1 && {
   echo "FAIL: empty session list must fail closed" >&2
   exit 1
@@ -138,7 +176,8 @@ PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="" \
 echo "PASS: empty session list fails closed"
 
 # No opencode CLI -> FAIL CLOSED.
-PATH="$tmp/bin/empty" FAKE_EXPORT_DIR="$tmp/exports" \
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+  PATH="$tmp/bin/empty" FAKE_EXPORT_DIR="$tmp/exports" \
   "$repo_root/scripts/check-session-budget" --session ses_under >/dev/null 2>&1 && {
   echo "FAIL: missing opencode CLI must fail closed" >&2
   exit 1

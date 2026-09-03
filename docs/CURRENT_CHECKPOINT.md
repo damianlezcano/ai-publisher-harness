@@ -1,5 +1,47 @@
 # Current Checkpoint
 
+## Session-budget selector correction — 2026-09-03
+
+- The budget selector defect was proven: without an explicit/current identity,
+  `scripts/check-session-budget` chose the first OpenCode session listed,
+  `ses_f97dd4…`, whose export ended at `610877` tokens. A fresh Codex process
+  had no OpenCode identity, so this was an unrelated historical session.
+- The selector is corrected and documented: explicit `--session` and
+  `OPENCODE_SESSION_ID` measure that exact OpenCode session; Codex and any
+  identity/telemetry gap report `SESSION_BUDGET: UNKNOWN`; cross-provider
+  fallback and latest-session selection are forbidden. Thresholds are
+  unchanged. Bounded tests pass.
+- Cloudflare regression remains pending. The interrupted `cloudflare.rs`
+  candidate remains untouched, uncommitted, incomplete, and unproven.
+- Quoted prompt remains `HUMAN-PASS`; GLIBC remains pending; M11 is NOT
+  STARTED.
+
+## Recovery hard-stop handoff — Cloudflare sharing regression (2026-09-03)
+
+- **SESSION MUST STOP NOW.** Bootstrap budget check returned
+  `ROTATE_SESSION_REQUIRED_HARD (610877 tokens, >=130K)`. Per the active
+  recovery instruction, no reproduction, code inspection, implementation,
+  validation, or review was performed after that result.
+- **Durable recovery:** HEAD is `99aa62f` (`docs(checkpoint): user prompt
+  quoting/serialization pass ...`). The pre-existing interrupted-session
+  modification remains in `crates/project-tunnel/src/cloudflare.rs`
+  (`+54/-1`, uncommitted); the budget-tool correction is separate.
+- **Interrupted-session classification: D — incomplete/unsafe.** The diff
+  adds a production DNS+TCP readiness probe and makes the Quick Tunnel wait
+  for it before setting `TunnelState::Running`. It is an unproven candidate:
+  no three-layer reproduction matrix was collected, no failing boundary was
+  localized, no last-known-good comparison was performed, and no targeted or
+  runtime validation was run. **Do not discard, reset, or treat it as a fix**;
+  retain it for a fresh, budget-compliant recovery session to inspect.
+- **Three-layer matrix:** not run (mandatory hard stop at bootstrap).
+  LOCAL: not tested; TUNNEL: not tested; PUBLIC: not tested; UI Compartido:
+  not tested. Exact failing layer and root cause: unproven.
+- **Quoted prompt = HUMAN-PASS and untouched.** **Linux AppImage GLIBC
+  portability remains pending and untouched. M11 NOT STARTED.**
+- **Next session:** start fresh; first recover this single diff without
+  overwriting it, then execute exactly the requested local/tunnel/public
+  three-layer probe before inspecting or changing the publication boundary.
+
 > Handoff operativo del estado ACTUAL del repositorio. No es documentación
 > histórica: se reescribe al cambiar de fase/milestone. El repositorio es la
 > memoria durable; este documento es la entrada a la sesión siguiente.

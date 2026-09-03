@@ -7,20 +7,21 @@ usage() {
   cat <<'EOF'
 Usage: scripts/check-session-budget [--session SESSION_ID]
 
-Deterministic orchestrator context-budget gate for OpenCode sessions.
+Deterministic context-budget gate for a known OpenCode session.
 Reads the live session export (opencode export SESSION_ID) and inspects the
 latest message part tokens.total, which is the current running context size.
+It never treats the latest/first-known session as the current session. Codex
+has no supported local token source here and therefore reports UNKNOWN.
 
 Exit codes (fail-closed):
   0  CONTINUE                    < 80K
   1  CHECKPOINT_WARNING          80K-99,999  (prepare checkpoint)
   2  ROTATE_SESSION_REQUIRED     100K-129,999 (no new bounded task)
   3  ROTATE_SESSION_REQUIRED_HARD >=130K      (no new milestone work)
-  4  FAIL CLOSED                 budget unknown (no CLI, no session,
-                                 malformed/missing export)
+  4  UNKNOWN / FAIL CLOSED       current identity or budget unavailable
 
 Options:
-  --session SESSION_ID  Explicit OpenCode session id (default: newest session).
+  --session SESSION_ID  Explicit OpenCode session id.
   -h, --help            Show this help.
 EOF
 }
@@ -39,16 +40,49 @@ rotate_at=100000
 hard_at=130000
 
 fail_closed() {
-  echo "check-session-budget: FAIL CLOSED: $1" >&2
+  echo "SESSION_BUDGET: UNKNOWN"
+  echo "PLATFORM: ${platform:-UNKNOWN}"
+  echo "SESSION_SOURCE: ${session_source:-unavailable}"
+  echo "SESSION_ID: ${session_id:-unavailable}"
+  echo "TOKENS: unknown"
+  echo "REASON: $1"
   exit 4
 }
 
-command -v opencode >/dev/null 2>&1 || fail_closed "opencode CLI unavailable"
+platform=""
+session_source=""
 
-if [[ -z $session_id ]]; then
-  session_id="$(opencode session list 2>/dev/null | awk '$1 ~ /^ses_/ { print $1; exit }' || true)"
-  [[ -n $session_id ]] || fail_closed "cannot resolve the current OpenCode session"
+ancestor_is_codex() {
+  local pid=${PPID:-}
+  local comm
+  while [[ $pid =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    case "$comm" in
+      codex|codex-cli) return 0 ;;
+    esac
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  done
+  return 1
+}
+
+if [[ -n $session_id ]]; then
+  platform=OPENCODE
+  session_source="explicit --session"
+elif [[ -n ${CODEX_SESSION_ID:-} || -n ${CODEX_THREAD_ID:-} ]] || ancestor_is_codex; then
+  platform=CODEX
+  session_source="Codex process/identity"
+elif [[ -n ${OPENCODE_SESSION_ID:-} ]]; then
+  session_id=$OPENCODE_SESSION_ID
+  platform=OPENCODE
+  session_source="OPENCODE_SESSION_ID"
+else
+  platform=UNKNOWN
+  session_source="unavailable"
 fi
+
+[[ $platform == OPENCODE ]] || fail_closed "current session token count is not available through supported local telemetry"
+command -v opencode >/dev/null 2>&1 || fail_closed "opencode CLI unavailable"
+[[ -n $session_id ]] || fail_closed "current OpenCode session identity unavailable; refusing latest-session fallback"
 
 # Capture the export to a temp file: `opencode export` output is large and
 # `$(...)` can be truncated by the capturing shell, which would fail closed even
@@ -86,15 +120,15 @@ rm -f "$export_tmp"
 [[ -n $budget ]] || fail_closed "export for $session_id has no measurable tokens.total"
 
 if (( budget < warn_at )); then
-  echo "SESSION_BUDGET: CONTINUE (${budget} tokens, < 80K)"
+  echo "SESSION_BUDGET: CONTINUE (${budget} tokens, < 80K)"; echo "PLATFORM: $platform"; echo "SESSION_SOURCE: $session_source"; echo "SESSION_ID: $session_id"; echo "TOKENS: $budget"
   exit 0
 elif (( budget < rotate_at )); then
-  echo "SESSION_BUDGET: CHECKPOINT_WARNING (${budget} tokens, 80K-99,999)"
+  echo "SESSION_BUDGET: CHECKPOINT_WARNING (${budget} tokens, 80K-99,999)"; echo "PLATFORM: $platform"; echo "SESSION_SOURCE: $session_source"; echo "SESSION_ID: $session_id"; echo "TOKENS: $budget"
   exit 1
 elif (( budget < hard_at )); then
-  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED (${budget} tokens, 100K-129,999)"
+  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED (${budget} tokens, 100K-129,999)"; echo "PLATFORM: $platform"; echo "SESSION_SOURCE: $session_source"; echo "SESSION_ID: $session_id"; echo "TOKENS: $budget"
   exit 2
 else
-  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED_HARD (${budget} tokens, >=130K)"
+  echo "SESSION_BUDGET: ROTATE_SESSION_REQUIRED_HARD (${budget} tokens, >=130K)"; echo "PLATFORM: $platform"; echo "SESSION_SOURCE: $session_source"; echo "SESSION_ID: $session_id"; echo "TOKENS: $budget"
   exit 3
 fi

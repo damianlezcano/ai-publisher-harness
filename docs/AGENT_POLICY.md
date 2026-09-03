@@ -81,8 +81,12 @@ session into another task.
 ## Orchestrator context budget
 
 `scripts/check-session-budget` is the executable, deterministic gate. It reads
-the live session (`opencode export <session-id>`, latest message part
-`tokens.total`) and fails closed:
+the exact OpenCode session (`opencode export <session-id>`, latest message part
+`tokens.total`) only when `--session` or `OPENCODE_SESSION_ID` identifies it.
+It never selects a latest/first-known session. Codex has no supported local
+token source in this tool and must report `SESSION_BUDGET: UNKNOWN`; cross-
+provider fallback is forbidden. It fails closed when identity or telemetry is
+unavailable:
 
 - `< 80K` → **CONTINUE** (exit 0).
 - `80K-99,999` → **CHECKPOINT_WARNING** (exit 1): avoid unnecessary repository
