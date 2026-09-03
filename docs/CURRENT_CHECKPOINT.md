@@ -1,5 +1,22 @@
 # Current Checkpoint
 
+## Cloudflare sharing regression recovery — current Codex pass (2026-09-03)
+
+- **Session budget:** `SESSION_BUDGET: UNKNOWN`; `PLATFORM: CODEX`; `SESSION_SOURCE: Codex process/identity`. This is valid telemetry absence, not a hard stop. The selector fix at `ac14c6b` is preserved.
+- **Scope:** bounded Cloudflare sharing regression only. Quoted prompts remain **HUMAN-PASS**; GLIBC remains **pending**; M11 remains **NOT STARTED**.
+- **Three-layer reproduction:**
+  - `LOCAL: PASS` — EducAI-owned origin `127.0.0.1:47787`, route `/`, HTTP 200, expected artifact `<html><body>PROBE-OK</body></html>` served.
+  - `TUNNEL: PASS` — EducAI-owned `cloudflared` PID 284751, version 2026.8.3, target `http://127.0.0.1:47787/`, alive, trycloudflare URL obtained. The log showed degraded QUIC/reconnect messages but active registered connections; no launch failure.
+  - `PUBLIC: PASS` — `https://being-chester-champions-bristol.trycloudflare.com/`, HTTP 200, expected path reached, public body SHA-256 matched the local body.
+  - `UI: Compartido = false` for the current Codex desktop surface only because no visible/capturable EducAI window or badge evidence was available. This is not a reproduced backend/publication failure.
+- **Exact failing boundary:** not reproduced. Existing bounded app-facade evidence also records a real share: `PUBLISH` completed in 7.7907s, returned a trycloudflare URL, and the public route returned HTTP 200 with the expected Creation. Current source has no changed share-state files after the nearest known-good `99f6f7d` sharing pass.
+- **Known-good comparison:** `99f6f7d` is the nearest explicit human-known-good sharing/state pass. `useShareControl`, `PublishPanel`, `App` refresh wiring, and the publication facade remain unchanged relative to that pass; no evidence connects them to the reported symptom.
+- **Interrupted `crates/project-tunnel/src/cloudflare.rs` candidate:** final disposition **DISCARD**. It added production DNS resolution and TCP/443 polling after URL extraction, with repeated 100ms probes and up to 2s per-address connects under the 30s startup deadline. This adds startup latency and false-negative risk, and the reproduced network pass does not require it. Only that pre-existing candidate was reverted; unrelated work was untouched.
+- **Targeted checks:** `cargo test --locked -p project-tunnel --test cloudflare` = 14/14; `cargo test --locked -p project-app --test app_facade` = 43/43; `cargo fmt --all -- --check` and `git diff --check` pass.
+- **Real flow evidence:** current bounded artifacts prove `Compartir`/public serving once. No fresh UI-driven `Dejar de compartir` and `Compartir again` observations were possible because the desktop surface was not capturable. Existing app-facade tests cover publication, unpublication, and republish semantics. Do not represent this as human acceptance.
+- **Review/verify status:** required fresh OpenCode Go reviewers (DeepSeek V4 Flash UX and Qwen 3.8 Flash correctness) were not launched because this session is outside Herdr (`HERDR_ENV` unavailable). `./scripts/verify` = **PASS** (FE 244/244; Rust/workspace and M10 checks green). No implementation fix was needed.
+- **Disposition:** current defect not reproduced; do not invent a Cloudflare workaround. Stop for human re-acceptance after verification and the required independent reviews are completed in an appropriate OpenCode/Herdr session.
+
 ## Session-budget selector correction — 2026-09-03
 
 - The budget selector defect was proven: without an explicit/current identity,
