@@ -144,6 +144,44 @@ fn project_a_b_use_distinct_working_directories() {
 }
 
 #[test]
+fn command_like_user_text_is_sent_literally_and_never_executed() {
+    // A prompt shaped like shell syntax must reach the sidecar as ordinary user
+    // text and MUST NOT be executed by any layer of EducAI.
+    let markers = [
+        "/tmp/educai-should-not-exist",
+        "/tmp/educai-should-not-exist-2",
+    ];
+    for marker in markers {
+        let _ = std::fs::remove_file(marker);
+        assert!(!Path::new(marker).exists(), "marker precondition");
+    }
+
+    let cases = [
+        "$(touch /tmp/educai-should-not-exist)",
+        "hola; touch /tmp/educai-should-not-exist-2",
+    ];
+    for text in cases {
+        let server = FakeServer::start();
+        server.set_status_sequence(&["idle"]);
+        let engine = engine_for(&server);
+        engine.ensure_ready().expect("ready");
+        let session = engine
+            .open_session(&project("proj-7", "/tmp/proj-7/workspace"))
+            .expect("session");
+        let req = AgentPrompt {
+            text: text.to_owned(),
+            model: None,
+        };
+        let task = engine.send(&session, &req).expect("send");
+        assert_eq!(task.status, project_agent::model::TaskStatus::Completed);
+        assert_eq!(server.last_prompt_text().as_deref(), Some(text));
+        // The literal prompt text must not have created any file on this host.
+        assert!(!Path::new("/tmp/educai-should-not-exist").exists());
+        assert!(!Path::new("/tmp/educai-should-not-exist-2").exists());
+    }
+}
+
+#[test]
 fn malicious_diff_paths_are_rejected() {
     let server = FakeServer::start();
     server.set_diff_body(

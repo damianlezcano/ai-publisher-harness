@@ -108,6 +108,46 @@ fn open_session_error_is_session_creation_failed() {
 }
 
 #[test]
+fn send_preserves_quoted_and_special_text_exactly_in_request_body() {
+    // User text is DATA, not syntax: every one of these must reach the OpenCode
+    // `parts[0].text` field byte-for-byte, with no shell quoting, no JSON
+    // re-encoding of the string, and no punctuation stripping.
+    let cases = [
+        "\"hola\"",
+        "'hola'",
+        "hola \"mundo\"",
+        "¿qué significa \"test\"?",
+        "{\"a\":\"b\"}",
+        "$HOME",
+        "$(echo hola)",
+        "`echo hola`",
+        "hola; echo mundo",
+        r"C:\Users\test\archivo.txt",
+        r"C:\\Users\\test\\archivo.txt",
+        "texto con \\ backslash",
+        "\"emoji 😀\"",
+        "línea uno\nlínea \"dos\"\nlínea tres",
+    ];
+    for text in cases {
+        let server = FakeServer::start();
+        let engine = engine_for(&server);
+        engine.ensure_ready().expect("ready");
+        let session = engine.open_session(&project()).expect("session");
+        let req = AgentPrompt {
+            text: text.to_owned(),
+            model: None,
+        };
+        let task = engine.send(&session, &req).expect("send");
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(
+            server.last_prompt_text().as_deref(),
+            Some(text),
+            "prompt {text:?} must reach the request body unchanged"
+        );
+    }
+}
+
+#[test]
 fn send_completes_with_web_and_document_artifacts() {
     let server = FakeServer::start();
     server.set_status_sequence(&["busy", "idle"]);

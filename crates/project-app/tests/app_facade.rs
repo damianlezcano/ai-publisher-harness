@@ -900,6 +900,37 @@ fn message_append_is_durable_before_agent_run() {
 }
 
 #[test]
+fn quoted_and_shell_like_prompts_persist_and_reach_engine_verbatim() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("P").expect("create");
+    engine.set_message("ok".to_owned());
+
+    // User text is DATA: quotes, JSON-like text, and shell-like text must
+    // round-trip through persistence and the engine prompt boundary untouched.
+    let cases = [
+        "\"hola\"",
+        "{\"a\":\"b\"}",
+        "$(touch /tmp/educai-should-not-exist)",
+        r"C:\Users\test\archivo.txt",
+        "línea uno\nlínea \"dos\"",
+    ];
+    for text in cases {
+        let inputs = app.send_message_persist(&p.id, text, &[]).expect("persist");
+        let view = app.open_project(&p.id).expect("open");
+        let last = view.messages.last().expect("last message");
+        assert_eq!(last.text, text, "persisted message must preserve {text:?}");
+        let run = app.send_message_run(inputs).expect("run");
+        assert_eq!(run.status, "completed");
+        let engine_text = engine.last_prompt_text().unwrap_or_default();
+        assert!(
+            engine_text.ends_with(text),
+            "engine prompt must keep user text byte-for-byte as its final segment; got ...{engine_text:?}"
+        );
+    }
+}
+
+#[test]
 fn sequential_sends_keep_distinct_turn_ids_and_ordered_results() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());

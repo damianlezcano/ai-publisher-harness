@@ -267,6 +267,46 @@ describe("WorkspaceView", () => {
     expect(baseProps.onRefresh).toHaveBeenCalled();
   });
 
+  it("sends a fully quoted prompt verbatim as ordinary text", async () => {
+    setupApi();
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    await userEvent.type(textarea, '"hola"');
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    // User text is data, not syntax: the exact quoted string (quotes included)
+    // must be handed to the backend, never stripped or re-quoted.
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+        projectId,
+        prompt: '"hola"',
+        attachmentIds: [],
+      }),
+    );
+  });
+
+  it("sends shell-like user text verbatim without executing it", async () => {
+    setupApi();
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+
+    const textarea = screen.getByLabelText("Pedido a la IA");
+    await userEvent.type(textarea, "$(touch /tmp/educai-should-not-exist)");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+        projectId,
+        prompt: "$(touch /tmp/educai-should-not-exist)",
+        attachmentIds: [],
+      }),
+    );
+  });
+
   it("uses an attached image as turn input without opening any preview", async () => {
     setupApi({ addFromPathMaterial: materials[0] });
     openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");

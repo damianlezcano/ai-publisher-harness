@@ -32,6 +32,10 @@ pub struct Script {
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
+    /// Exact `parts[0].text` of the last `prompt_async` body. Lets tests assert
+    /// that user text is preserved byte-for-byte as data (never shell-escaped,
+    /// re-quoted, or stripped) across the OpenCode request boundary.
+    pub last_prompt_text: Option<String>,
     pub prompt_appends_response: bool,
     pub prompt_response_text: Option<String>,
     pub prompt_response_finish: Option<String>,
@@ -284,6 +288,7 @@ impl Default for Script {
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
             prompt_called: false,
+            last_prompt_text: None,
             prompt_appends_response: true,
             prompt_response_text: None,
             prompt_response_finish: None,
@@ -422,6 +427,11 @@ impl FakeServer {
 
     pub fn prompt_called(&self) -> bool {
         self.script().prompt_called
+    }
+
+    /// Exact text of the last `prompt_async` request body (`parts[0].text`).
+    pub fn last_prompt_text(&self) -> Option<String> {
+        self.script().last_prompt_text.clone()
     }
 
     pub fn set_prompt_status(&self, status: u16) {
@@ -821,6 +831,22 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     {
         state.last_session_id = id.to_owned();
         state.prompt_called = true;
+        if let Ok(value) = serde_json::from_slice::<Value>(&body)
+            && let Some(text) = value
+                .get("parts")
+                .and_then(Value::as_array)
+                .and_then(|parts| {
+                    parts.iter().find_map(|part| {
+                        part.get("type")
+                            .and_then(Value::as_str)
+                            .filter(|kind| *kind == "text")
+                            .and_then(|_| part.get("text"))
+                            .and_then(Value::as_str)
+                    })
+                })
+        {
+            state.last_prompt_text = Some(text.to_owned());
+        }
         if state.prompt_appends_response {
             state.messages_body = append_assistant_response(
                 &state.messages_body,
