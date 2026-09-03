@@ -84,7 +84,7 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         //     update semantics instead of silently going stale.
         let workspace_before: HashMap<String, String> = scan_workspace_artifacts(&workspace_dir)
             .into_iter()
-            .filter_map(|artifact| artifact.sha256.map(|sha| (artifact.path, sha)))
+            .map(|artifact| (artifact.path, artifact.sha256.unwrap_or_default()))
             .collect();
         // User-supplied materials live under `inputs/`. A file whose bytes are
         // byte-identical to a user material is INPUT MATERIAL (the agent copied
@@ -377,6 +377,11 @@ const SKIP_WORKSPACE_DIR_NAMES: &[&str] = &[
 const MAX_WORKSPACE_SCAN_DEPTH: usize = 8;
 const MAX_WORKSPACE_SCAN_FILES: usize = 500;
 const MAX_WORKSPACE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+/// Inputs are the user's uploads under `inputs/<material-id>/`; the walk is
+/// bounded by depth and file count (never by bytes, so a byte-identical copy
+/// of ANY attached material is always classified as input).
+const MAX_INPUT_SCAN_DEPTH: usize = 8;
+const MAX_INPUT_SCAN_FILES: usize = 500;
 
 /// Merge the sidecar diff with the bounded workspace scan.
 ///
@@ -406,8 +411,14 @@ fn merge_artifacts(
         if is_materials_artifact_path(&artifact.path) {
             continue;
         }
+        // A file we cannot fingerprint (unreadable at scan time) is never a
+        // proven turn output: keep the earlier path-fence safety by skipping
+        // sha-less candidates instead of erroring the whole turn.
+        let Some(after_sha) = artifact.sha256.as_deref() else {
+            continue;
+        };
         if let Some(before_sha) = workspace_before.get(&artifact.path)
-            && artifact.sha256.as_deref() == Some(before_sha.as_str())
+            && after_sha == before_sha
         {
             continue;
         }
@@ -424,12 +435,19 @@ fn merge_artifacts(
 /// user input, not a generated output.
 fn collect_user_material_hashes(project_dir: &Path) -> HashSet<String> {
     let mut hashes = HashSet::new();
-    let mut pending = vec![project_dir.join("inputs")];
-    while let Some(dir) = pending.pop() {
+    let mut pending = vec![(project_dir.join("inputs"), 0usize)];
+    let mut files = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        if depth > MAX_INPUT_SCAN_DEPTH || files >= MAX_INPUT_SCAN_FILES {
+            continue;
+        }
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
+            if files >= MAX_INPUT_SCAN_FILES {
+                break;
+            }
             let path = entry.path();
             let Ok(meta) = fs::symlink_metadata(&path) else {
                 continue;
@@ -438,12 +456,13 @@ fn collect_user_material_hashes(project_dir: &Path) -> HashSet<String> {
                 continue;
             }
             if meta.is_dir() {
-                pending.push(path);
+                pending.push((path, depth + 1));
                 continue;
             }
             if meta.is_file()
                 && let Ok(bytes) = fs::read(&path)
             {
+                files += 1;
                 hashes.insert(sha256_hex(&bytes));
             }
         }
