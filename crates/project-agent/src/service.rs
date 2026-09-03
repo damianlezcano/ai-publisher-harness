@@ -11,6 +11,7 @@ use crate::model::{
 };
 use crate::port::AgentEngine;
 use crate::registrar::CreationRegistrar;
+use sha2::{Digest, Sha256};
 
 pub struct AgentRequest {
     pub project_id: String,
@@ -72,14 +73,23 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         let revise_existing = workspace_has_existing_web(&workspace_dir);
         let prompt = provision_attachments(&workspace_dir, &request, revise_existing)?;
 
-        // `/diff` from the real sidecar can be empty for committed files. Keep
-        // the bounded fallback, but fence it to files that did not exist when
-        // this turn began so a failed turn's leftovers are never registered by
-        // a later successful turn.
-        let workspace_before: HashSet<String> = scan_workspace_artifacts(&workspace_dir)
+        // Snapshot the workspace content at turn start. `/diff` from the real
+        // sidecar can be empty for committed files (B1), so the bounded scan
+        // fallback decides what the turn produced. Fencing by PATH + SHA-256
+        // keeps both guarantees:
+        //   - a file left over from an earlier/failed turn is UNCHANGED and is
+        //     never re-registered as a new Creation;
+        //   - an existing Creation edited IN PLACE (same path, new content) is
+        //     detected as an update and re-registered with the established
+        //     update semantics instead of silently going stale.
+        let workspace_before: HashMap<String, String> = scan_workspace_artifacts(&workspace_dir)
             .into_iter()
-            .map(|artifact| artifact.path)
+            .filter_map(|artifact| artifact.sha256.map(|sha| (artifact.path, sha)))
             .collect();
+        // User-supplied materials live under `inputs/`. A file whose bytes are
+        // byte-identical to a user material is INPUT MATERIAL (the agent copied
+        // it into the workspace), never an agent OUTPUT/Creation.
+        let user_material_hashes = collect_user_material_hashes(&project_dir);
         let session = self.engine.open_session(&AgentProject {
             project_id: request.project_id.clone(),
             directory: workspace_dir.clone(),
@@ -116,6 +126,14 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
                 continue;
             }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
+            // A verbatim copy of a user material is input, not a deliverable:
+            // registering it would surface a phantom "Imagen" Creation for a
+            // PNG the user merely attached. Provenance is content-based, never
+            // extension-based: an agent-GENERATED image has a different hash
+            // and still registers normally.
+            if user_material_hashes.contains(&sha256_hex(&bytes)) {
+                continue;
+            }
             let id = match self
                 .registrar
                 .register(&request.project_id, artifact, bytes)
@@ -360,28 +378,87 @@ const MAX_WORKSPACE_SCAN_DEPTH: usize = 8;
 const MAX_WORKSPACE_SCAN_FILES: usize = 500;
 const MAX_WORKSPACE_SCAN_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Use the sidecar diff when it already names a registrable artifact. Fall back
-/// to a bounded workspace scan only when the diff is empty (B1: files on disk
-/// that `/diff` did not report). Merging the scan into a non-empty diff would
-/// re-register leftover files from earlier turns as new Creations.
+/// Merge the sidecar diff with the bounded workspace scan.
+///
+/// The diff is authoritative for the files it names. The scan is NOT limited
+/// to the empty-diff fallback: `/diff` from the real sidecar is empty for
+/// files the agent edited in place, and a path-only fence would silently drop
+/// the update of an existing Creation. Fencing by path + SHA-256 keeps every
+/// guarantee at once:
+///   - NEW files (absent at turn start) are candidates;
+///   - MODIFIED files (present at turn start, different content) are candidates
+///     (in-place Creation updates);
+///   - UNCHANGED files (present at turn start, same content) are never
+///     re-registered, so leftovers from earlier or failed turns stay out.
 fn merge_artifacts(
     from_diff: Vec<Artifact>,
     workspace_dir: &Path,
-    workspace_before: &HashSet<String>,
+    workspace_before: &HashMap<String, String>,
 ) -> Vec<Artifact> {
-    let mut artifacts: Vec<Artifact> = from_diff
+    let mut by_path: HashMap<String, Artifact> = HashMap::new();
+    for artifact in from_diff
         .into_iter()
         .filter(|artifact| !is_materials_artifact_path(&artifact.path))
-        .collect();
-    if artifacts.is_empty() {
-        artifacts = scan_workspace_artifacts(workspace_dir)
-            .into_iter()
-            .filter(|artifact| !workspace_before.contains(&artifact.path))
-            .collect();
-        artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
+    {
+        by_path.insert(artifact.path.clone(), artifact);
     }
+    for artifact in scan_workspace_artifacts(workspace_dir) {
+        if is_materials_artifact_path(&artifact.path) {
+            continue;
+        }
+        if let Some(before_sha) = workspace_before.get(&artifact.path)
+            && artifact.sha256.as_deref() == Some(before_sha.as_str())
+        {
+            continue;
+        }
+        by_path.entry(artifact.path.clone()).or_insert(artifact);
+    }
+    let mut artifacts: Vec<Artifact> = by_path.into_values().collect();
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
     artifacts
+}
+
+/// SHA-256 of the user's immutable material files under `inputs/` (provenance
+/// of INPUT MATERIAL). Attachments are copied there verbatim on import, so a
+/// byte-identical file the agent drops anywhere in the workspace is a copy of
+/// user input, not a generated output.
+fn collect_user_material_hashes(project_dir: &Path) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    let mut pending = vec![project_dir.join("inputs")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if meta.is_file()
+                && let Ok(bytes) = fs::read(&path)
+            {
+                hashes.insert(sha256_hex(&bytes));
+            }
+        }
+    }
+    hashes
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 fn scan_workspace_artifacts(workspace_dir: &Path) -> Vec<Artifact> {
@@ -474,11 +551,12 @@ fn collect_workspace_files(
         let path = format!("workspace/{relative}");
         *file_count += 1;
         *total_bytes = total_bytes.saturating_add(meta.len());
+        let sha256 = fs::read(entry.path()).ok().map(|bytes| sha256_hex(&bytes));
         out.push(Artifact {
             path: path.clone(),
             kind: artifact_kind_from_path(&path),
             byte_size: meta.len(),
-            sha256: None,
+            sha256,
         });
     }
 }
@@ -596,10 +674,14 @@ mod tests {
     }
 
     #[test]
-    fn merge_artifacts_keeps_diff_and_does_not_scan_prior_files() {
+    fn merge_artifacts_keeps_diff_and_does_not_scan_unchanged_prior_files() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("old.html"), b"old").expect("old");
         fs::write(tmp.path().join("new.html"), b"new").expect("new");
+        let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
+            .into_iter()
+            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
+            .collect();
         let merged = merge_artifacts(
             vec![Artifact {
                 path: "workspace/new.html".into(),
@@ -608,7 +690,7 @@ mod tests {
                 sha256: None,
             }],
             tmp.path(),
-            &HashSet::new(),
+            &before,
         );
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, "workspace/new.html");
@@ -618,19 +700,35 @@ mod tests {
     fn merge_artifacts_scans_when_diff_is_empty() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("index.html"), b"<h1>").expect("html");
-        let merged = merge_artifacts(Vec::new(), tmp.path(), &HashSet::new());
+        let merged = merge_artifacts(Vec::new(), tmp.path(), &HashMap::new());
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, "workspace/index.html");
         assert_eq!(merged[0].kind, ArtifactKind::Web);
     }
 
     #[test]
+    fn merge_artifacts_detects_in_place_update_of_an_existing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("index.html"), b"ORIGINAL").expect("old");
+        let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
+            .into_iter()
+            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
+            .collect();
+        fs::write(tmp.path().join("index.html"), b"UPDATED").expect("updated");
+        // `/diff` is empty for a file the agent edited in place (committed);
+        // the scan must still surface the same-path content change.
+        let merged = merge_artifacts(Vec::new(), tmp.path(), &before);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, "workspace/index.html");
+    }
+
+    #[test]
     fn workspace_scan_does_not_register_failed_turn_leftovers() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("abandoned.html"), b"old").expect("old");
-        let before = scan_workspace_artifacts(tmp.path())
+        let before: HashMap<String, String> = scan_workspace_artifacts(tmp.path())
             .into_iter()
-            .map(|artifact| artifact.path)
+            .filter_map(|a| a.sha256.map(|sha| (a.path, sha)))
             .collect();
         let merged = merge_artifacts(Vec::new(), tmp.path(), &before);
         assert!(merged.is_empty());
@@ -645,5 +743,33 @@ mod tests {
         let scanned = scan_workspace_artifacts(tmp.path());
         assert_eq!(scanned.len(), 1);
         assert_eq!(scanned[0].path, "workspace/index.html");
+        assert!(
+            scanned[0].sha256.is_some(),
+            "scan must fingerprint file content for change detection"
+        );
+    }
+
+    #[test]
+    fn scan_fingerprint_changes_with_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("a.html"), b"AAA").expect("a");
+        let first = scan_workspace_artifacts(tmp.path());
+        fs::write(tmp.path().join("a.html"), b"BBB").expect("b");
+        let second = scan_workspace_artifacts(tmp.path());
+        assert_ne!(first[0].sha256, second[0].sha256);
+    }
+
+    #[test]
+    fn user_material_hashes_index_only_input_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("projects/proj-1");
+        fs::create_dir_all(project.join("inputs/abc")).expect("inputs");
+        fs::write(project.join("inputs/abc/encabezado.png"), b"png-bytes").expect("png");
+        fs::create_dir_all(project.join("workspace")).expect("workspace");
+        fs::write(project.join("workspace/index.html"), b"<h1>").expect("html");
+        let hashes = collect_user_material_hashes(&project);
+        assert_eq!(hashes.len(), 1);
+        assert!(hashes.contains(&sha256_hex(b"png-bytes")));
+        assert!(!hashes.contains(&sha256_hex(b"<h1>")));
     }
 }

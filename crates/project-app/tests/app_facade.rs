@@ -1,5 +1,7 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use project_agent::model::{
     AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask,
@@ -1022,4 +1024,193 @@ fn new_distinct_web_does_not_replace_an_already_published_snapshot() {
     assert!(!html.contains("two"), "{html}");
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.creations.len(), 2);
+}
+
+/// Turn-aware engine for the Finding A human scenario. Turn 1 is a plain
+/// creation; from turn 2 on, `send` reproduces the REAL sidecar behavior: the
+/// agent edits the existing `index.html` in place and copies the attached
+/// image into the workspace, while `/diff` reports nothing (empty).
+struct AttachmentEditEngine {
+    inner: FakeAgentEngine,
+    workspace: PathBuf,
+    material_bytes: Vec<u8>,
+    calls: Arc<AtomicU32>,
+}
+
+impl AttachmentEditEngine {
+    fn new(inner: FakeAgentEngine, workspace: PathBuf, material_bytes: Vec<u8>) -> Self {
+        Self {
+            inner,
+            workspace,
+            material_bytes,
+            calls: Arc::new(AtomicU32::new(0)),
+        }
+    }
+}
+
+impl project_agent::AgentEngine for AttachmentEditEngine {
+    fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+        self.inner.ensure_ready()
+    }
+    fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+        self.inner.open_session(project)
+    }
+    fn send(
+        &self,
+        session: &AgentSession,
+        req: &AgentPrompt,
+    ) -> project_agent::AgentResult<AgentTask> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= 1 {
+            fs::write(self.workspace.join("encabezado.png"), &self.material_bytes)
+                .expect("agent copies the attached image into the workspace");
+            fs::write(
+                self.workspace.join("index.html"),
+                b"<html><body>UPDATED</body><img src=\"encabezado.png\"></html>",
+            )
+            .expect("agent edits the existing creation in place");
+        }
+        self.inner.send(session, req)
+    }
+    fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+        self.inner.cancel(session)
+    }
+    fn status(&self) -> AgentStatus {
+        self.inner.status()
+    }
+    fn shutdown(&self) -> project_agent::AgentResult<()> {
+        self.inner.shutdown()
+    }
+}
+
+#[test]
+fn attached_input_image_updates_existing_creation_in_place_without_phantom_image() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\nuser-image".to_vec();
+
+    // Seed the project on the same base so the engine knows the real workspace
+    // directory owned by the created conversation.
+    let (seed, _, _) = app(tmp.path());
+    let p = seed.create_project("Sopa de letras").expect("create");
+    drop(seed);
+
+    let inner = FakeAgentEngine::new();
+    inner.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    inner.set_message("Listo. Creé la sopa de letras.".into());
+    let workspace = tmp.path().join("projects").join(&p.id).join("workspace");
+    let engine = AttachmentEditEngine::new(inner.clone(), workspace, png.clone());
+    let state = AppState::with_components(
+        tmp.path().to_path_buf(),
+        engine,
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "index.html",
+        b"<html><body>ORIGINAL</body></html>",
+    );
+
+    // T1: the existing Creation C1 is created and shared.
+    let first = state
+        .send_message(&p.id, "creá una sopa de letras", &[])
+        .expect("turn 1");
+    assert_eq!(first.registered_creation_ids.len(), 1);
+    let cid = first.registered_creation_ids[0].clone();
+    state.publish_creation(&p.id, Some(&cid)).expect("share");
+    let published = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("publish")
+        .join("index.html");
+    assert!(
+        fs::read_to_string(&published)
+            .expect("first snapshot")
+            .contains("ORIGINAL")
+    );
+
+    // T2: the user attaches an image and asks to put it in the header.
+    let src = tmp.path().join("images.png");
+    fs::write(&src, &png).expect("png");
+    let material = state
+        .add_material_from_path(&p.id, src.to_str().expect("path"))
+        .expect("material");
+    let _ = fs::remove_file(&src);
+    inner.set_artifacts(vec![]); // /diff is empty for the committed in-place edit
+    inner.set_message(
+        "Listo. Agregué la imagen del archivo que adjuntaste arriba del título.".into(),
+    );
+    let second = state
+        .send_message(
+            &p.id,
+            "agregale esta imagen en el encabezado",
+            &[material.id],
+        )
+        .expect("turn 2");
+
+    // A1 stays INPUT material: no phantom "Imagen" Creation; C1 identity holds.
+    assert_eq!(second.registered_creation_ids, vec![cid.clone()]);
+    let view = state.open_project(&p.id).expect("open");
+    assert_eq!(
+        view.creations.len(),
+        1,
+        "attached PNG must not become a Creation"
+    );
+    assert_eq!(view.creations[0].id, cid);
+
+    // C1 is re-registered in place and serves the image as a web sidecar.
+    let outputs_dir = tmp
+        .path()
+        .join("projects")
+        .join(&p.id)
+        .join("outputs")
+        .join(&cid);
+    let html = fs::read_to_string(outputs_dir.join("index.html")).expect("updated html");
+    assert!(html.contains("UPDATED"), "{html}");
+    assert!(!html.contains("ORIGINAL"), "{html}");
+    assert_eq!(
+        fs::read(outputs_dir.join("encabezado.png")).expect("sidecar"),
+        png
+    );
+
+    // Established republish semantics: the shared URL now shows the update.
+    let published_html = fs::read_to_string(&published).expect("refreshed snapshot");
+    assert!(published_html.contains("UPDATED"), "{published_html}");
+    assert!(
+        fs::read(published.parent().unwrap().join("encabezado.png")).expect("published sidecar")
+            == png
+    );
+}
+
+#[test]
+fn agent_generated_image_can_be_a_creation_not_an_input_copy() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let inner = FakeAgentEngine::new();
+    // A standalone generated image (no web entry, no matching material) is a
+    // legitimate agent OUTPUT: the provenance fix must never reject by extension.
+    inner.set_artifacts(vec![artifact("workspace/portada.png", ArtifactKind::Image)]);
+    let engine = AttachmentEditEngine::new(
+        inner.clone(),
+        tmp.path().join("projects").join("p-1").join("workspace"),
+        Vec::new(),
+    );
+    let state = AppState::with_components(
+        tmp.path().to_path_buf(),
+        engine,
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    let p = state.create_project("Imagen").expect("create");
+    write_artifact(tmp.path(), &p.id, "portada.png", b"generated-image-bytes");
+    inner.set_message("Listo. Generé una imagen de portada.".into());
+    let result = state
+        .send_message(&p.id, "creá una imagen de portada", &[])
+        .expect("send");
+    assert_eq!(result.registered_creation_ids.len(), 1);
+    let view = state.open_project(&p.id).expect("open");
+    assert_eq!(view.creations.len(), 1);
+    assert_eq!(view.creations[0].kind, "image");
 }

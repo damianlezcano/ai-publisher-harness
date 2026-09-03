@@ -118,6 +118,56 @@ describe("ProviderPanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the Configuración -> Logs de esta sesión contract visible and bounded", async () => {
+    const refreshLogs = vi.fn();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs") {
+        refreshLogs();
+        return Promise.resolve([
+          { level: "INFO", message: "startup version=0.1.0" },
+          { level: "WARN", message: "conversation unavailable falling_back=global" },
+          { level: "ERROR", message: "turn failed conversation_id=x" },
+        ]);
+      }
+      if (cmd === "session_logs_clear") return Promise.resolve(undefined);
+      return Promise.resolve(undefined);
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    const dialog = await screen.findByRole("dialog", { name: "Configuración" });
+
+    // The heading is the first section of the modal body: reachable without
+    // scrolling, never hidden by the provider list.
+    const heading = screen.getByRole("heading", { name: "Logs de esta sesión" });
+    const section = heading.closest("section");
+    expect(section).toHaveAttribute("aria-label", "Logs de esta sesión");
+    expect(
+      dialog.querySelector(".dialog-body > section[aria-label='Logs de esta sesión']"),
+    ).not.toBeNull();
+
+    // Bounded in-memory viewer with the established actions.
+    for (const action of ["Limpiar", "Actualizar", "Copiar"]) {
+      expect(screen.getByRole("button", { name: action })).toBeInTheDocument();
+    }
+    const pre = screen.getByText(/turn failed conversation_id=x/).closest("pre");
+    expect(pre).toHaveClass("session-logs");
+
+    // Actualizar re-reads the current process buffer (never previous sessions).
+    await userEvent.click(screen.getByRole("button", { name: "Actualizar" }));
+    expect(refreshLogs).toHaveBeenCalled();
+  });
+
+  it("shows the ephemeral empty state when the current process has no events", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    expect(await screen.findByText("Logs de esta sesión")).toBeInTheDocument();
+    expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
+  });
+
   it("closes when the labelled X button is clicked", async () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);

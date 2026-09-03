@@ -453,3 +453,145 @@ fn later_turn_prompt_asks_to_revise_existing_web() {
     let text = engine.last_prompt_text().expect("prompt");
     assert!(text.contains("modificá ESA misma actividad"), "{text}");
 }
+
+/// Models the REAL sidecar behavior for Finding A: the agent edits the existing
+/// `index.html` in place and copies the attached image into the workspace, and
+/// `/diff` reports NOTHING (empty) for the committed in-place edit.
+struct ModifyDuringSendEngine {
+    inner: FakeAgentEngine,
+    workspace: PathBuf,
+    material_bytes: Vec<u8>,
+    updated_html: Vec<u8>,
+}
+
+impl AgentEngine for ModifyDuringSendEngine {
+    fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+        self.inner.ensure_ready()
+    }
+    fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+        self.inner.open_session(project)
+    }
+    fn send(
+        &self,
+        session: &AgentSession,
+        req: &AgentPrompt,
+    ) -> project_agent::AgentResult<AgentTask> {
+        fs::write(self.workspace.join("encabezado.png"), &self.material_bytes)
+            .expect("agent copies the attached image into the workspace");
+        fs::write(self.workspace.join("index.html"), &self.updated_html)
+            .expect("agent edits the existing activity in place");
+        self.inner.send(session, req)
+    }
+    fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+        self.inner.cancel(session)
+    }
+    fn status(&self) -> AgentStatus {
+        self.inner.status()
+    }
+    fn shutdown(&self) -> project_agent::AgentResult<()> {
+        self.inner.shutdown()
+    }
+}
+
+#[test]
+fn attached_image_copy_is_input_not_a_creation_and_in_place_update_is_registered() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\nuser-uploaded-image-bytes".to_vec();
+
+    // Existing Creation C1 from a previous turn: index.html already in the
+    // workspace, and the user's material already imported under inputs/.
+    write_artifact(tmp.path(), "proj-9", "index.html", b"<h1>ORIGINAL</h1>");
+    let inputs_dir = tmp
+        .path()
+        .join("projects/proj-9/inputs/0198e4a6-79b2-7b51-9e68-c2eb7af3db15");
+    fs::create_dir_all(&inputs_dir).expect("inputs dir");
+    fs::write(inputs_dir.join("images.png"), &png).expect("material");
+
+    let inner = FakeAgentEngine::new();
+    inner.set_artifacts(vec![]); // /diff is empty for committed in-place edits
+    let engine = ModifyDuringSendEngine {
+        inner,
+        workspace: tmp.path().join("projects/proj-9/workspace"),
+        material_bytes: png.clone(),
+        updated_html: b"<h1>UPDATED</h1><img src=\"encabezado.png\">".to_vec(),
+    };
+    let registrar = FakeRegistrar::new();
+    let service = AgentService::new(engine, registrar.clone(), tmp.path().to_path_buf());
+    let result = service
+        .run(AgentRequest {
+            project_id: "proj-9".into(),
+            prompt: prompt(),
+            attachments: vec![project_agent::AgentAttachment {
+                display_name: "images.png".into(),
+                kind: "image".into(),
+                bytes: png.clone(),
+            }],
+        })
+        .expect("turn 2");
+
+    // C1 is re-registered with the NEW content (in-place update detected).
+    let records = registrar.records();
+    assert_eq!(
+        records.len(),
+        1,
+        "only the web creation, never a phantom Image"
+    );
+    assert_eq!(records[0].kind, ArtifactKind::Web);
+    assert_eq!(records[0].file_name, "index.html");
+    assert_eq!(
+        records[0].bytes,
+        b"<h1>UPDATED</h1><img src=\"encabezado.png\">"
+    );
+    assert_eq!(result.registered.len(), 1);
+}
+
+#[test]
+fn attached_image_copy_reported_by_diff_is_still_input_not_a_creation() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\nuser-uploaded-image-bytes".to_vec();
+
+    write_artifact(tmp.path(), "proj-10", "index.html", b"<h1>ORIGINAL</h1>");
+    let inputs_dir = tmp
+        .path()
+        .join("projects/proj-10/inputs/0198e4a6-79b2-7b51-9e68-c2eb7af3db15");
+    fs::create_dir_all(&inputs_dir).expect("inputs dir");
+    fs::write(inputs_dir.join("images.png"), &png).expect("material");
+
+    // Here `/diff` DOES report the copied image (the variant where the sidecar
+    // surfaces the new file): the provenance filter must still classify the
+    // byte-identical copy as INPUT and never register it as a Creation.
+    let inner = FakeAgentEngine::new();
+    inner.set_artifacts(vec![artifact(
+        "workspace/encabezado.png",
+        ArtifactKind::Image,
+        png.len() as u64,
+    )]);
+    let engine = ModifyDuringSendEngine {
+        inner,
+        workspace: tmp.path().join("projects/proj-10/workspace"),
+        material_bytes: png.clone(),
+        updated_html: b"<h1>UPDATED</h1><img src=\"encabezado.png\">".to_vec(),
+    };
+    let registrar = FakeRegistrar::new();
+    let service = AgentService::new(engine, registrar.clone(), tmp.path().to_path_buf());
+    let result = service
+        .run(AgentRequest {
+            project_id: "proj-10".into(),
+            prompt: prompt(),
+            attachments: vec![project_agent::AgentAttachment {
+                display_name: "images.png".into(),
+                kind: "image".into(),
+                bytes: png,
+            }],
+        })
+        .expect("turn 2");
+
+    let records = registrar.records();
+    assert_eq!(
+        records.len(),
+        1,
+        "no standalone Image creation for the input copy"
+    );
+    assert_eq!(records[0].kind, ArtifactKind::Web);
+    assert_eq!(result.registered.len(), 1);
+}
