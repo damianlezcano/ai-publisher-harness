@@ -32,9 +32,10 @@ pub struct Script {
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
-    /// Exact `parts[0].text` of the last `prompt_async` body. Lets tests assert
-    /// that user text is preserved byte-for-byte as data (never shell-escaped,
-    /// re-quoted, or stripped) across the OpenCode request boundary.
+    /// Exact text of the first `type:"text"` part in the last `prompt_async`
+    /// body. Lets tests assert that user text is preserved byte-for-byte as
+    /// data (never shell-escaped, re-quoted, or stripped) across the OpenCode
+    /// request boundary.
     pub last_prompt_text: Option<String>,
     pub prompt_appends_response: bool,
     pub prompt_response_text: Option<String>,
@@ -429,7 +430,8 @@ impl FakeServer {
         self.script().prompt_called
     }
 
-    /// Exact text of the last `prompt_async` request body (`parts[0].text`).
+    /// Exact text of the first `type:"text"` part in the last `prompt_async`
+    /// request body.
     pub fn last_prompt_text(&self) -> Option<String> {
         self.script().last_prompt_text.clone()
     }
