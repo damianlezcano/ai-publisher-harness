@@ -1,5 +1,42 @@
 # Current Checkpoint
 
+## Cross-platform distribution portability — IN PROGRESS (2026-09-03)
+
+- **Scope:** dedicated packaging/platform pass only. Quoted prompts and
+  sharing/lifecycle/observability remain **HUMAN-PASS and untouched**. **M11
+  NOT STARTED.**
+- **Bootstrap:** clean source HEAD `1ec23ed`; development host Fedora 44,
+  glibc 2.43. Existing AppImage
+  `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`
+  is 180,963,832 bytes, SHA-256
+  `fd483807c59121daf83d4f3efdaad3236f9b607a963caaf652c53783a7ca771e`.
+- **Linux root cause proved:** the Fedora Tauri/linuxdeploy AppDir copied the
+  Fedora WebKitGTK/GTK/GLib dependency closure into `usr/lib`; AppImage does
+  not virtualize glibc. The executable requires GLIBC 2.39; bundled
+  WebKitGTK, JavaScriptCore, GLib, GnuTLS, Pixman and related libraries require
+  GLIBC 2.43. The new extraction gate rejects the old artifact with named
+  offenders and policy maximum GLIBC 2.39.
+- **Linux policy/build:** Ubuntu 24.04 (glibc 2.39 + WebKitGTK 4.1) is selected;
+  Ubuntu 22.04 was rejected because its standard packages do not provide that
+  WebKitGTK ABI. `packaging/linux/Containerfile` and
+  `./scripts/package linux-appimage` create the controlled build root; no
+  Fedora runtime library is an input. A freshly built baseline artifact and
+  real Ubuntu/KDE Neon/Fedora matrix remain pending.
+- **Windows policy/build:** one native x64 NSIS installer, built natively on a
+  Windows 11 x64/MSVC runner—no Linux cross-compile. The manifest separately
+  pins OpenCode 1.18.25 Windows x64 ZIP (SHA-256
+  `831e213e…08416`) and cloudflared 2026.8.3 Windows AMD64 EXE (SHA-256
+  `83e726ed…4eaae`); `packaging/windows/build.ps1` verifies and packages them.
+  Resolver support handles `.exe`/MSVC suffixes while owned-PID process and
+  safe opener abstractions remain unchanged. No Windows machine is available
+  in this checkout: **TECHNICALLY READY FOR WINDOWS RUNTIME VALIDATION**, not
+  HUMAN-PASS; no Windows artifact SHA yet.
+- **Automated evidence so far:** manifest + Windows packaging contracts PASS;
+  project-app sidecar tests 8/8 PASS; old Fedora artifact GLIBC rejection PASS.
+  Full `./scripts/verify`, fresh controlled Linux artifact, platform runtime
+  validation, and required fresh OpenCode Go/Qwen 3.8 Flash review remain
+  pending this checkpoint update.
+
 ## Runtime process lifecycle + sharing observability PASS (2026-09-03)
 
 - **Cloudflare successful human run:** the product owner confirmed a clean manual

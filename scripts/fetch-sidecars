@@ -4,7 +4,7 @@
 # Default mode (network): for each component, download from its official pinned
 # source, verify the pinned SHA-256 (fail closed: partial artifacts deleted,
 # never install an unverified binary), and install to
-# sidecars/<bundleName>-<target_triple>.
+# sidecars/<bundleName>-<target_triple>[.exe].
 #
 # --check mode (offline, deterministic): validate the manifest shape,
 # schemaVersion, per-component fields, format, and sha256 format. No network.
@@ -19,7 +19,14 @@ manifest="$repo_root/config/components.json"
 # Tauri bundle.externalBin appends "-<target_triple>" to each configured path and
 # expects the source file to already be triple-suffixed. Matches TARGET_TRIPLE in
 # crates/project-app/src/sidecar.rs.
-triple="x86_64-unknown-linux-gnu"
+platform="${1:-linux-x86_64}"
+check_only=0
+[[ "$platform" == "--check" ]] && { platform="linux-x86_64"; check_only=1; }
+case "$platform" in
+  linux-x86_64) triple="x86_64-unknown-linux-gnu"; extension="" ;;
+  windows-x86_64) triple="x86_64-pc-windows-msvc"; extension=".exe" ;;
+  *) echo "$SCRIPT: usage: $0 [linux-x86_64|windows-x86_64|--check]" >&2; exit 2 ;;
+esac
 workdir="$(mktemp -d)"
 
 trap 'rm -rf "$workdir"' EXIT
@@ -69,8 +76,8 @@ else:
             value = comp.get(field)
             if not isinstance(value, str) or not value.strip():
                 problems.append(f"{label}.{field}: missing or empty")
-        if comp.get("format") not in ("binary", "tar.gz"):
-            problems.append(f"{label}.format: must be one of binary|tar.gz")
+        if comp.get("format") not in ("binary", "tar.gz", "zip"):
+            problems.append(f"{label}.format: must be one of binary|tar.gz|zip")
         sha = comp.get("sha256")
         if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
             problems.append(f"{label}.sha256: must be exactly 64 lowercase hex characters")
@@ -88,7 +95,7 @@ elif mode == "tsv":
     for comp in components:
         if not isinstance(comp, dict):
             continue
-        print("\t".join((comp["name"], comp["version"], comp["source"],
+        print("\t".join((comp["name"], comp["platform"], comp["version"], comp["source"],
                          comp["sha256"], comp["format"], comp["bundleName"])))
 PY
 }
@@ -100,7 +107,7 @@ check_mode() {
 
 fetch_one() {
   local name="$1" version="$2" source="$3" expected="$4" format="$5" bundle_name="$6"
-  local dest_dir="$sidecars_dir" dest="$sidecars_dir/$bundle_name-$triple"
+  local dest_dir="$sidecars_dir" dest="$sidecars_dir/$bundle_name-$triple$extension"
   local artifact="$workdir/artifact-$bundle_name" actual candidate tmpdir count
 
   printf '%s: fetching %s %s (%s)\n' "$SCRIPT" "$name" "$version" "$source"
@@ -124,18 +131,22 @@ fetch_one() {
     chmod +x "$dest.tmp.$$"
     mv -f "$dest.tmp.$$" "$dest"
     printf '%s: installed %s %s to %s\n' "$SCRIPT" "$name" "$version" "$dest"
-  elif [[ "$format" == "tar.gz" ]]; then
+  elif [[ "$format" == "tar.gz" || "$format" == "zip" ]]; then
     tmpdir="$(mktemp -d "$dest_dir/.tmp.XXXXXX")"
-    if ! tar -xzf "$artifact" -C "$tmpdir"; then
+    if [[ "$format" == "tar.gz" ]]; then
+      tar -xzf "$artifact" -C "$tmpdir"
+    else
+      unzip -q "$artifact" -d "$tmpdir"
+    fi || {
       rm -rf "$tmpdir"
       fail "extraction failed for $name from $source"
-    fi
-    count="$(find "$tmpdir" -type f -name "$name" | wc -l)"
+    }
+    count="$(find "$tmpdir" -type f \( -name "$name" -o -name "$name.exe" \) | wc -l)"
     if (( count != 1 )); then
       rm -rf "$tmpdir"
       fail "expected exactly one file named '$name' inside tar.gz for $name, found $count"
     fi
-    candidate="$(find "$tmpdir" -type f -name "$name" | head -n 1)"
+    candidate="$(find "$tmpdir" -type f \( -name "$name" -o -name "$name.exe" \) | head -n 1)"
     cp "$candidate" "$dest.tmp.$$"
     chmod +x "$dest.tmp.$$"
     mv -f "$dest.tmp.$$" "$dest"
@@ -148,24 +159,20 @@ fetch_mode() {
   require_cmd curl
   require_cmd sha256sum
   require_cmd tar
+  [[ "$platform" != "windows-x86_64" ]] || require_cmd unzip
 
   run_manifest_py tsv > "$workdir/components.tsv"
 
   sidecars_dir="$repo_root/sidecars"
   mkdir -p "$sidecars_dir"
 
-  while IFS=$'\t' read -r name version source expected format bundle_name; do
-    [[ -n "$name" ]] || continue
+  while IFS=$'\t' read -r name component_platform version source expected format bundle_name; do
+    [[ "$component_platform" == "$platform" ]] || continue
     fetch_one "$name" "$version" "$source" "$expected" "$format" "$bundle_name"
   done < "$workdir/components.tsv"
 }
 
-mode="${1:-fetch}"
-case "$mode" in
-  --check) check_mode ;;
-  fetch) fetch_mode ;;
-  *)
-    echo "$SCRIPT: usage: $0 [--check]" >&2
-    exit 2
-    ;;
-esac
+if (( check_only )); then
+  check_mode
+fi
+fetch_mode

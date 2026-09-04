@@ -42,7 +42,7 @@ security-invariant concern, not a convenience detail.
 
 3. **Pinned component manifest.** A committed `config/components.json`
    (schema-versioned) is the single source of truth for what gets bundled:
-   `name`, `platform` (`linux-x86_64`), pinned `version`, official `source`
+  `name`, `platform` (`linux-x86_64` or `windows-x86_64`), pinned `version`, official `source`
    URL, and a `sha256` checksum per component. Exact versions are human-approved
    at implementation time; no `latest` tracking.
 
@@ -56,7 +56,8 @@ security-invariant concern, not a convenience detail.
 5. **Packaging targets and versioning.** `bundle.targets` is set to
    `["appimage", "rpm"]` (Linux x86_64; Fedora-first per PLATFORM_POLICY).
    `bundle.externalBin` references the two sidecars. App/crate version is bumped
-   to `0.1.0`. Windows/macOS remain deferred (native CI later).
+   to `0.1.0`. Windows uses native x64 NSIS packaging with `.exe` sidecars;
+   macOS remains deferred.
 
 ## Consequences
 

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fail closed when any ELF shipped by an AppImage needs a newer GLIBC than the
+# declared Ubuntu 24.04 baseline (2.39).  AppImage does not virtualize glibc.
+set -euo pipefail
+
+artifact="${1:?usage: scripts/check-appimage-glibc ARTIFACT [MAX_GLIBC]}"
+maximum="${2:-2.39}"
+[[ -f "$artifact" ]] || { echo "check-appimage-glibc: FAIL: artifact not found: $artifact" >&2; exit 2; }
+artifact="$(realpath "$artifact")"
+command -v readelf >/dev/null || { echo "check-appimage-glibc: FAIL: readelf is required" >&2; exit 2; }
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+( cd "$workdir" && "$artifact" --appimage-extract >/dev/null )
+root="$workdir/squashfs-root"
+[[ -d "$root" ]] || { echo "check-appimage-glibc: FAIL: extraction did not create squashfs-root" >&2; exit 1; }
+
+failed=0
+while IFS= read -r -d '' file; do
+  readelf -h "$file" >/dev/null 2>&1 || continue
+  required="$(readelf --version-info "$file" 2>/dev/null | rg -o 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -n 1 || true)"
+  [[ -n "$required" ]] || continue
+  if [[ "$(printf '%s\n%s\n' "$required" "$maximum" | sort -V | tail -n 1)" != "$maximum" ]]; then
+    printf 'check-appimage-glibc: FAIL: %s requires GLIBC_%s; supported maximum is GLIBC_%s\n' "${file#$root/}" "$required" "$maximum" >&2
+    failed=1
+  fi
+done < <(find "$root" -type f -print0)
+
+(( failed == 0 )) || exit 1
+echo "check-appimage-glibc: PASS: all shipped ELF files require GLIBC <= $maximum"

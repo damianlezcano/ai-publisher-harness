@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Supported distribution entry point. Linux builds never consume Fedora system
+# libraries: compilation and bundling happen inside the pinned Ubuntu root.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${1:-}" in
+  linux-appimage)
+    command -v podman >/dev/null || { echo 'package: FAIL: Podman is required for linux-appimage' >&2; exit 2; }
+    podman build --quiet --file "$root/packaging/linux/Containerfile" --tag educai-linux-portable:ubuntu-24.04 "$root"
+    podman run --rm --userns=keep-id -v "$root:/workspace:Z" -w /workspace educai-linux-portable:ubuntu-24.04 \
+      /workspace/packaging/linux/build-linux-appimage
+    ;;
+  windows)
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) powershell -ExecutionPolicy Bypass -File "$root/packaging/windows/build.ps1" ;;
+      *) echo 'package: FAIL: Windows artifacts are built natively on a Windows x64 runner; run packaging/windows/build.ps1 there.' >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo 'usage: scripts/package {linux-appimage|windows}' >&2; exit 2 ;;
+esac

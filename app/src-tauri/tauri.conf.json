@@ -28,7 +28,8 @@
     "active": true,
     "targets": [
       "appimage",
-      "rpm"
+      "rpm",
+      "nsis"
     ],
     "externalBin": [
       "../../sidecars/opencode",

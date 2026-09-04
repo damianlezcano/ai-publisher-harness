@@ -1,0 +1,19 @@
+# Controlled Linux packaging root. Ubuntu 24.04 provides glibc 2.39 and the
+# WebKitGTK 4.1 development ABI required by Tauri 2. Fedora host libraries are
+# never installed into or read by this build root.
+FROM ubuntu:24.04
+ARG NODE_VERSION=22.14.0
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl file git pkg-config build-essential libssl-dev \
+    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+    librsvg2-dev patchelf squashfs-tools xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+RUN curl -fsSLO https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz && \
+    tar -xJf node-v${NODE_VERSION}-linux-x64.tar.xz -C /opt && \
+    ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/node /usr/local/bin/node && \
+    ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/npm /usr/local/bin/npm && \
+    ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/npx /usr/local/bin/npx && \
+    corepack enable && rm node-v${NODE_VERSION}-linux-x64.tar.xz
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1
+ENV PATH=/root/.cargo/bin:$PATH

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /workspace
+./scripts/fetch-sidecars linux-x86_64
+pnpm --dir app install --frozen-lockfile
+( cd app/src-tauri && cargo tauri build --bundles appimage )
+artifact="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | head -n 1)"
+[[ -n "$artifact" ]] || { echo 'build-linux-appimage: FAIL: no AppImage produced' >&2; exit 1; }
+./scripts/check-appimage-glibc "$artifact" 2.39
+sha256sum "$artifact"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manual packaging smoke test for M10 (Fedora Linux x86_64, graphical session).
+# Manual packaging smoke test for the controlled Linux AppImage track.
 #
 # NOT part of `scripts/verify`. Fetches pinned sidecars, builds AppImage + RPM,
 # inspects the AppImage payload for bundled sidecars, and prints manual demo steps.
@@ -72,7 +72,7 @@ run_tauri_build() {
 
 if [[ "$mode" == "appimage" || "$mode" == "all" ]]; then
   rm -rf "$appimage_dir"
-  echo "$SCRIPT: building AppImage bundle"
+  echo "$SCRIPT: building AppImage bundle (for release use ./scripts/package linux-appimage)"
   # tauri-bundler runs linuxdeploy for the AppImage. On Fedora 44 linuxdeploy is
   # incompatible (its bundled strip cannot read `.relr.dyn` sections and its
   # bundled patchelf 0.8 corrupts Bun-style sidecar binaries), so the linuxdeploy
@@ -111,6 +111,7 @@ if [[ "$mode" == "appimage" || "$mode" == "all" ]]; then
     echo "$SCRIPT: note: multiple AppImages found; inspecting ${appimages[0]}" >&2
   fi
   echo "$SCRIPT: found AppImage: $appimage"
+  "$repo_root/scripts/check-appimage-glibc" "$appimage" 2.39
 else
   appimage=""
 fi

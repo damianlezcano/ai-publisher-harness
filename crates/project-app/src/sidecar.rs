@@ -13,8 +13,12 @@ use std::path::{Path, PathBuf};
 pub const EDUCAI_SIDECAR_DIR: &str = "EDUCAI_SIDECAR_DIR";
 
 /// Tauri's `bundle.externalBin` names bundled binaries with a host target
-/// triple suffix (e.g. `opencode-x86_64-unknown-linux-gnu`). M10 is Linux
-/// x86_64 first.
+/// triple suffix (e.g. `opencode-x86_64-unknown-linux-gnu`). This must agree
+/// with Tauri's native bundle target; it is deliberately bounded here rather
+/// than leaked into domain/process code.
+#[cfg(target_os = "windows")]
+const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+#[cfg(not(target_os = "windows"))]
 const TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
 /// Where a sidecar was located: a bundled absolute path, or a bare name to be
@@ -58,15 +62,29 @@ pub fn resolve_sidecar_from_env(name: &str, install_dir: &Path, path_var: &str) 
 /// Looks for an executable regular `name` (and its target-triple-suffixed
 /// variant) directly under `dir`, returning the absolute bundled path on a hit.
 fn bundled_in(dir: &Path, name: &str) -> Option<PathBuf> {
-    let plain = dir.join(name);
-    if is_executable_regular_file(&plain) {
-        return Some(absolute(plain));
-    }
-    let suffixed = dir.join(format!("{name}-{TARGET_TRIPLE}"));
-    if is_executable_regular_file(&suffixed) {
-        return Some(absolute(suffixed));
+    for candidate in bundled_candidates(name) {
+        let path = dir.join(candidate);
+        if is_executable_regular_file(&path) {
+            return Some(absolute(path));
+        }
     }
     None
+}
+
+fn bundled_candidates(name: &str) -> Vec<String> {
+    let suffix = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    bundled_candidates_for(name, TARGET_TRIPLE, suffix)
+}
+
+fn bundled_candidates_for(name: &str, target_triple: &str, suffix: &str) -> Vec<String> {
+    vec![
+        format!("{name}{suffix}"),
+        format!("{name}-{target_triple}{suffix}"),
+    ]
 }
 
 /// `true` when `path` exists, is a regular file (not a symlink or directory),
@@ -98,4 +116,25 @@ fn executable_permissions(_meta: &fs::Metadata) -> bool {
 /// path even when the caller passes a relative install directory.
 fn absolute(path: PathBuf) -> PathBuf {
     std::path::absolute(&path).unwrap_or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundled_candidates_for;
+
+    #[test]
+    fn windows_bundle_candidates_use_exe_and_msvc_suffix() {
+        assert_eq!(
+            bundled_candidates_for("cloudflared", "x86_64-pc-windows-msvc", ".exe"),
+            ["cloudflared.exe", "cloudflared-x86_64-pc-windows-msvc.exe"]
+        );
+    }
+
+    #[test]
+    fn linux_bundle_candidates_keep_linux_names() {
+        assert_eq!(
+            bundled_candidates_for("cloudflared", "x86_64-unknown-linux-gnu", ""),
+            ["cloudflared", "cloudflared-x86_64-unknown-linux-gnu"]
+        );
+    }
 }

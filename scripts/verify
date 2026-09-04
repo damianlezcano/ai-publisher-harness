@@ -32,7 +32,7 @@ for file in \
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget; do
+for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/test-distribution-contracts scripts/package; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -250,6 +250,9 @@ if [[ -x scripts/fetch-sidecars ]]; then
   printf 'verify: ./scripts/fetch-sidecars --check\n'
   ./scripts/fetch-sidecars --check
 fi
+
+printf 'verify: ./scripts/test-distribution-contracts\n'
+./scripts/test-distribution-contracts
 
 m10_version='0.1.0'
 

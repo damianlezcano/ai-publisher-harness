@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Offline contracts for the two official distribution tracks.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+fail() { echo "test-distribution-contracts: FAIL: $*" >&2; exit 1; }
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+components = json.loads(Path("config/components.json").read_text())["components"]
+for platform, expected in {
+    "linux-x86_64": {"opencode", "cloudflared"},
+    "windows-x86_64": {"opencode", "cloudflared"},
+}.items():
+    actual = {c["name"] for c in components if c["platform"] == platform}
+    if actual != expected:
+        raise SystemExit(f"{platform}: expected {expected}, got {actual}")
+    for c in (c for c in components if c["platform"] == platform):
+        if len(c["sha256"]) != 64:
+            raise SystemExit(f"{platform}/{c['name']}: invalid checksum")
+
+tauri = json.loads(Path("app/src-tauri/tauri.conf.json").read_text())
+if "nsis" not in tauri["bundle"]["targets"]:
+    raise SystemExit("Tauri NSIS target is missing")
+PY
+rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
+rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
+echo 'test-distribution-contracts: PASS'
