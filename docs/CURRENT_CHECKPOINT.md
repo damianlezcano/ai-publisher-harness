@@ -34,8 +34,9 @@
 - **Reviewer:** fresh OpenCode Go / Qwen 3.8 Flash review of `43fb8db` returned
   **REQUEST_CHANGES**: fail-closed GLIBC tool dependency/zero-ELF handling,
   legacy fetch command compatibility, reproducibility wording/checksum detail,
-  and documented Windows PowerShell fetch duplication. Bounded fixes in
-  progress; fresh re-review required.
+  and documented Windows PowerShell fetch duplication. Bounded fixes committed
+  as `d271003`; a fresh independent OpenCode Go / Qwen 3.8 Flash re-review of
+  `1ec23ed..d271003` returned **APPROVE**.
 - **Automated evidence so far:** manifest + Windows packaging contracts PASS;
   project-app sidecar tests 8/8 PASS; old Fedora artifact GLIBC rejection PASS.
   Full `./scripts/verify`, fresh controlled Linux artifact, platform runtime
