@@ -43,7 +43,14 @@ for name in ("node", "npm", "npx", "corepack"):
         raise SystemExit(f"Containerfile: /usr/local/bin/{name} must be linked from the pinned Node distribution")
 if node_run.index("/usr/local/bin/corepack") > node_run.index("corepack enable"):
     raise SystemExit("Containerfile: corepack enable must run after the corepack symlink")
+if "RUSTUP_HOME=/opt/rustup" not in cf or "CARGO_HOME=/opt/cargo" not in cf:
+    raise SystemExit("Containerfile: Rust homes must live in /opt for the keep-id run user")
+if "/opt/cargo/bin" not in cf:
+    raise SystemExit("Containerfile: PATH must expose /opt/cargo/bin")
+if "/root/.cargo" in cf:
+    raise SystemExit("Containerfile: must not rely on /root/.cargo (keep-id run cannot read root's home)")
 PY
 rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
+rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux controlled build must be non-interactive (CI=true)'
 rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
 echo 'test-distribution-contracts: PASS'

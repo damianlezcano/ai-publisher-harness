@@ -18,5 +18,7 @@ RUN curl -fsSLO https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
     ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/npx /usr/local/bin/npx && \
     ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/corepack /usr/local/bin/corepack && \
     corepack enable && rm node-v${NODE_VERSION}-linux-x64.tar.xz
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1
-ENV PATH=/root/.cargo/bin:$PATH
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1 && \
+    chown -R ubuntu:ubuntu "$RUSTUP_HOME" "$CARGO_HOME"
+ENV PATH=/opt/cargo/bin:$PATH

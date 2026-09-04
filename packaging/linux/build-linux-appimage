@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd /workspace
+export CI=true
 ./scripts/fetch-sidecars linux-x86_64
 pnpm --dir app install --frozen-lockfile
 ( cd app/src-tauri && cargo tauri build --bundles appimage )
