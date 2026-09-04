@@ -49,6 +49,10 @@ if "/opt/cargo/bin" not in cf:
     raise SystemExit("Containerfile: PATH must expose /opt/cargo/bin")
 if "/root/.cargo" in cf:
     raise SystemExit("Containerfile: must not rely on /root/.cargo (keep-id run cannot read root's home)")
+if "tauri-cli" not in cf or "--version 2.11.4" not in cf or "/opt/tauri-cli" not in cf:
+    raise SystemExit("Containerfile: Tauri CLI must be pinned and installed into /opt/tauri-cli")
+if "/opt/tauri-cli/bin" not in cf:
+    raise SystemExit("Containerfile: PATH must expose /opt/tauri-cli/bin")
 PY
 rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
 rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux controlled build must be non-interactive (CI=true)'

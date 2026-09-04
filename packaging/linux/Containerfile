@@ -20,5 +20,6 @@ RUN curl -fsSLO https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
     corepack enable && rm node-v${NODE_VERSION}-linux-x64.tar.xz
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1 && \
-    chown -R ubuntu:ubuntu "$RUSTUP_HOME" "$CARGO_HOME"
-ENV PATH=/opt/cargo/bin:$PATH
+    "$CARGO_HOME/bin/cargo" install tauri-cli --locked --version 2.11.4 --root /opt/tauri-cli && \
+    chown -R ubuntu:ubuntu "$RUSTUP_HOME" "$CARGO_HOME" /opt/tauri-cli
+ENV PATH=/opt/tauri-cli/bin:/opt/cargo/bin:$PATH
