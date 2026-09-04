@@ -9,6 +9,7 @@ pnpm --dir app install --frozen-lockfile
 # executables: ldd exits 1) once the AppDir is complete, so fall back to
 # appimagetool packaging of that container-assembled AppDir (same documented
 # pattern as scripts/smoke-package).
+rm -rf app/src-tauri/target/release/bundle/appimage
 if ! ( cd app/src-tauri && cargo tauri build --bundles appimage ); then
   echo 'build-linux-appimage: note: tauri linuxdeploy step failed; packaging AppDir with appimagetool' >&2
 fi
