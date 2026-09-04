@@ -162,12 +162,19 @@ fn fail_reason(err: &TunnelError) -> &'static str {
 }
 
 /// Diagnostic detail for the error stage log. Safe: only process-level
-/// metadata (never credentials, prompts, or artifact contents).
+/// metadata (never credentials, prompts, or artifact contents). Binary paths
+/// are trimmed to the bare name to honor the crate's no-paths log contract.
 fn fail_detail(err: &TunnelError) -> String {
     match err {
         TunnelError::StartFailed(reason) => format!("start failed: {reason}"),
         TunnelError::StopFailed(reason) => format!("stop failed: {reason}"),
-        TunnelError::BinaryNotFound(name) => format!("binary not found: {name}"),
+        TunnelError::BinaryNotFound(name) => {
+            let name = std::path::Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("cloudflared");
+            format!("binary not found: {name}")
+        }
         other => other.to_string(),
     }
 }

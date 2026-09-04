@@ -600,7 +600,10 @@ fn app_shutdown_is_idempotent_and_stops_owned_children() {
 }
 
 /// A successful share must record the stage lifecycle in order:
-/// requested -> prepared -> ready.
+/// requested -> prepared -> ready. All stage events carry the conversation id,
+/// so the assertions are filtered by this test's unique project to stay
+/// hermetic against the process-global session log (parallel integration
+/// tests also publish into the same buffer).
 #[test]
 fn share_stage_logs_record_lifecycle_in_order() {
     project_app::session_log::configure_from_args(["--debug".to_owned()]);
@@ -609,9 +612,11 @@ fn share_stage_logs_record_lifecycle_in_order() {
     let p = app.create_project("Fotosíntesis").expect("create");
     app.publish(&p.id).expect("publish");
 
+    let conversation = format!("conversation_id={}", p.id);
     let share_events: Vec<String> = project_app::session_log::list()
         .into_iter()
         .map(|entry| entry.message)
+        .filter(|message| message.contains(&conversation))
         .filter(|message| message.starts_with("[share]") || message.starts_with("[publish]"))
         .collect();
     assert!(

@@ -1502,12 +1502,30 @@ where
                 creation_id.unwrap_or("latest")
             ),
         );
-        self.prepare_share_visibility(project_id, creation_id)?;
-        let pid = parse_project_id(project_id)?;
+        self.prepare_share_visibility(project_id, creation_id).map_err(|error| {
+            crate::session_log::record(
+                "ERROR",
+                format!(
+                    "[share] failed stage=local_publish_prepare conversation_id={project_id} error={error}"
+                ),
+            );
+            error
+        })?;
+        let pid = parse_project_id(project_id).map_err(|error| {
+            crate::session_log::record(
+                "ERROR",
+                format!(
+                    "[share] failed stage=local_publish_prepare conversation_id={project_id} error={error}"
+                ),
+            );
+            error
+        })?;
         let publication = self.publication.publish(&pid).map_err(|error| {
             let stage = match &error {
                 project_publication::PublicationError::TunnelStart => "tunnel_start",
+                project_publication::PublicationError::TunnelStop => "tunnel_stop",
                 project_publication::PublicationError::PublisherStart => "publisher_start",
+                project_publication::PublicationError::PublisherStop => "publisher_stop",
                 _ => "local_publish",
             };
             crate::session_log::record(
