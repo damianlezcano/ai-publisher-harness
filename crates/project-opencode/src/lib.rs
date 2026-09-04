@@ -56,7 +56,7 @@ fn encode_query_component(value: &str) -> String {
 /// Child environment with the user's environment cleared (by the supervisor)
 /// and replaced by PATH/HOME plus isolated XDG dirs under `config_dir`.
 pub fn build_env(config_dir: &Path) -> Vec<(String, String)> {
-    vec![
+    let mut env = vec![
         ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
         ("HOME".into(), std::env::var("HOME").unwrap_or_default()),
         ("XDG_CONFIG_HOME".into(), config_dir.display().to_string()),
@@ -72,7 +72,26 @@ pub fn build_env(config_dir: &Path) -> Vec<(String, String)> {
             "XDG_STATE_HOME".into(),
             config_dir.join("state").display().to_string(),
         ),
-    ]
+    ];
+    env.extend(windows_systemroot_env());
+    env
+}
+
+/// On Windows the reconstructed child environment must carry the parent
+/// `SYSTEMROOT` value: OpenCode's startup aborts immediately (0xC0000409) when
+/// it is missing after `env_clear`. Only that single variable is forwarded; no
+/// other parent variable is inherited. Non-Windows targets forward nothing.
+#[cfg(windows)]
+fn windows_systemroot_env() -> Vec<(String, String)> {
+    vec![(
+        "SYSTEMROOT".into(),
+        std::env::var("SYSTEMROOT").unwrap_or_default(),
+    )]
+}
+
+#[cfg(not(windows))]
+fn windows_systemroot_env() -> Vec<(String, String)> {
+    Vec::new()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -95,7 +114,9 @@ impl Semver {
 
 #[cfg(test)]
 mod tests {
-    use super::with_directory_query;
+    use super::{build_env, with_directory_query};
+    use std::collections::BTreeSet;
+    use std::path::Path;
 
     #[test]
     fn directory_query_percent_encodes_path_separators() {
@@ -121,6 +142,52 @@ mod tests {
         assert_eq!(
             path,
             "/session?directory=%2Ftmp%2Fa%26b%3Dc%2Bd%20e%2Fcaf%C3%A9"
+        );
+    }
+
+    #[test]
+    fn build_env_preserves_systemroot_only_on_windows() {
+        let config_dir = Path::new("/tmp/educai-env-contract/opencode-config");
+        let env = build_env(config_dir);
+        let keys: BTreeSet<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+
+        let mut expected: BTreeSet<&str> = [
+            "PATH",
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+        ]
+        .into_iter()
+        .collect();
+
+        #[cfg(windows)]
+        {
+            expected.insert("SYSTEMROOT");
+            let parent = std::env::var("SYSTEMROOT").unwrap_or_default();
+            let value = env
+                .iter()
+                .find(|(k, _)| k == "SYSTEMROOT")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(
+                value,
+                Some(parent.as_str()),
+                "SYSTEMROOT must be forwarded verbatim from the parent env"
+            );
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(
+                !keys.contains("SYSTEMROOT"),
+                "SYSTEMROOT must not be forwarded on non-Windows targets"
+            );
+        }
+
+        assert_eq!(
+            keys, expected,
+            "child env must contain exactly the managed keys, never arbitrary parent variables"
         );
     }
 }
