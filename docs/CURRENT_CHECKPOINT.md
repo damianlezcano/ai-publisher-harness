@@ -37,11 +37,11 @@
   and documented Windows PowerShell fetch duplication. Bounded fixes committed
   as `d271003`; a fresh independent OpenCode Go / Qwen 3.8 Flash re-review of
   `1ec23ed..d271003` returned **APPROVE**.
-- **Automated evidence so far:** manifest + Windows packaging contracts PASS;
-  project-app sidecar tests 8/8 PASS; old Fedora artifact GLIBC rejection PASS.
-  Full `./scripts/verify`, fresh controlled Linux artifact, platform runtime
-  validation, and required fresh OpenCode Go/Qwen 3.8 Flash review remain
-  pending this checkpoint update.
+- **Automated evidence:** `./scripts/verify` **PASS** (Rust workspace +
+  clippy/fmt, FE 244/244, sidecar manifest, Windows packaging contracts, Tauri
+  check, diff check; log `/tmp/educai-distribution-verify.log`); project-app
+  sidecar tests 8/8 PASS; old Fedora artifact GLIBC rejection PASS. A fresh
+  controlled Linux artifact and real platform runtime validation remain pending.
 
 ## Runtime process lifecycle + sharing observability PASS (2026-09-03)
 
