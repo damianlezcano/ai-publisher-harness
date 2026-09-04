@@ -20,8 +20,20 @@
   Ubuntu 22.04 was rejected because its standard packages do not provide that
   WebKitGTK ABI. `packaging/linux/Containerfile` and
   `./scripts/package linux-appimage` create the controlled build root; no
-  Fedora runtime library is an input. A freshly built baseline artifact and
-  real Ubuntu/KDE Neon/Fedora matrix remain pending.
+  Fedora runtime library is an input. On the continuation attempt,
+  `./scripts/package linux-appimage` completed the previously interrupted apt
+  install layer (confirming that interruption was environmental) but failed in
+  the next Node layer: `/bin/sh: 1: corepack: not found`. The extracted pinned
+  Node 22.14.0 archive contains the needed binary, but the Containerfile links
+  only `node`, `npm`, and `npx` before invoking `corepack enable`; the bounded
+  fix is to expose that existing `corepack` binary on `PATH`. No build root,
+  dependency baseline, Fedora input, or product behavior change is proposed.
+  Repository policy requires a fresh isolated author plus OpenCode Go Qwen 3.8
+  Flash review for that packaging edit. The required launcher was correctly
+  fail-closed in this Codex session because `scripts/check-session-budget`
+  reports `SESSION_BUDGET: UNKNOWN` / exit 4 for Codex identity telemetry, so
+  no worker/reviewer or packaging edit was started. No fresh artifact exists;
+  the real Ubuntu/KDE Neon/Fedora matrix remains pending.
 - **Windows policy/build:** one native x64 NSIS installer, built natively on a
   Windows 11 x64/MSVC runner—no Linux cross-compile. The manifest separately
   pins OpenCode 1.18.25 Windows x64 ZIP (SHA-256
