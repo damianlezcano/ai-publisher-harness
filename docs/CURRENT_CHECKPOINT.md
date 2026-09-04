@@ -59,9 +59,10 @@
   the spawn paths, correctly out of scope); (3) no negative-test fixture for a
   deliberately broken AppDir (contract pins are string-based). No material
   findings → no review-fix loop needed.
-- **Integration:** `git merge --ff-only 5d28991` onto main — **final integrated
-  main HEAD `5d28991`**, working tree clean (only untracked `.worktrees/`).
-  Provenance preserved: author commit SHA intact, no squash.
+- **Integration:** `git merge --ff-only 5d28991` onto main — author commit
+  integrated with provenance intact (no squash); the final integration HEAD is
+  `66055ed` (author commit `5d28991` + this checkpoint doc). Working tree clean
+  (only untracked `.worktrees/`).
 - **`./scripts/verify` on integrated main EXIT=0** (log
   `/tmp/opencode/verify-webkit-integrated.log`): FE **244/244** in 21 files,
   **Rust 1162 passed in 85 suites**, clippy/fmt clean,
@@ -77,7 +78,8 @@
 - **Final AppImage (human-validation artifact, built from integrated main):**
   `app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage`,
   **148,711,928 bytes**, built 2026-09-04 12:24:53 -0300, source HEAD
-  `5d28991`, **SHA-256
+  `5d28991` (main after the controlled build; checkpoint doc follow-up `66055ed`
+  does not change built source), **SHA-256
   `21d516f7f79e5ea2dbabb4bd66350b5632579f22933e4b7c65847b529df40cf2`**. Payload
   sidecars byte-identical to pins: **opencode 1.18.25** and **cloudflared
   2026.8.3** (verified in extracted payload). This is the ONLY artifact for
