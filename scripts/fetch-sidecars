@@ -22,6 +22,9 @@ manifest="$repo_root/config/components.json"
 platform="${1:-linux-x86_64}"
 check_only=0
 [[ "$platform" == "--check" ]] && { platform="linux-x86_64"; check_only=1; }
+if [[ "$platform" == "fetch" ]]; then
+  platform="${2:-linux-x86_64}"
+fi
 case "$platform" in
   linux-x86_64) triple="x86_64-unknown-linux-gnu"; extension="" ;;
   windows-x86_64) triple="x86_64-pc-windows-msvc"; extension=".exe" ;;

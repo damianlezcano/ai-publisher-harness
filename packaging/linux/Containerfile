@@ -3,13 +3,15 @@
 # never installed into or read by this build root.
 FROM ubuntu:24.04
 ARG NODE_VERSION=22.14.0
+ARG NODE_SHA256=69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl file git pkg-config build-essential libssl-dev \
+    ca-certificates curl file git pkg-config build-essential libssl-dev ripgrep \
     libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
     librsvg2-dev patchelf squashfs-tools xz-utils && \
     rm -rf /var/lib/apt/lists/*
 RUN curl -fsSLO https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz && \
+    echo "${NODE_SHA256}  node-v${NODE_VERSION}-linux-x64.tar.xz" | sha256sum -c - && \
     tar -xJf node-v${NODE_VERSION}-linux-x64.tar.xz -C /opt && \
     ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/node /usr/local/bin/node && \
     ln -s /opt/node-v${NODE_VERSION}-linux-x64/bin/npm /usr/local/bin/npm && \

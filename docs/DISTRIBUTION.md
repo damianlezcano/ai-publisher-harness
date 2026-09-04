@@ -22,8 +22,10 @@ On Linux with Podman:
 ./scripts/package linux-appimage
 ```
 
-This pins Ubuntu 24.04, Node 22.14.0, Rust 1.97.1, the repository lockfiles,
-and the checksum-verified Linux sidecars. The output is under
+This controls the Ubuntu 24.04 baseline, verifies the Node 22.14.0 archive,
+uses Rust 1.97.1 and the repository lockfiles, and checksum-verifies Linux
+sidecars. Apt security updates and the Ubuntu image digest must be recorded in
+the release metadata until a CI image digest is frozen. The output is under
 `app/src-tauri/target/release/bundle/appimage/`; record its source HEAD, size,
 SHA-256, tool versions, and GLIBC-gate result in release metadata.
 
@@ -38,6 +40,9 @@ The command downloads only the pinned Windows OpenCode 1.18.25 archive and
 cloudflared 2026.8.3 executable, checks their SHA-256 values, and emits one
 NSIS installer under `app/src-tauri/target/release/bundle/nsis/`. No Linux
 binary is reused. Capture its SHA-256 and source HEAD with the release.
+The PowerShell implementation intentionally performs its own checksum-gated
+fetch because the existing fetch helper is Bash and is not a Windows runtime
+prerequisite.
 
 ## Runtime contracts
 

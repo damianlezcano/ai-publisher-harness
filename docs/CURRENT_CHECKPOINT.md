@@ -31,6 +31,11 @@
   safe opener abstractions remain unchanged. No Windows machine is available
   in this checkout: **TECHNICALLY READY FOR WINDOWS RUNTIME VALIDATION**, not
   HUMAN-PASS; no Windows artifact SHA yet.
+- **Reviewer:** fresh OpenCode Go / Qwen 3.8 Flash review of `43fb8db` returned
+  **REQUEST_CHANGES**: fail-closed GLIBC tool dependency/zero-ELF handling,
+  legacy fetch command compatibility, reproducibility wording/checksum detail,
+  and documented Windows PowerShell fetch duplication. Bounded fixes in
+  progress; fresh re-review required.
 - **Automated evidence so far:** manifest + Windows packaging contracts PASS;
   project-app sidecar tests 8/8 PASS; old Fedora artifact GLIBC rejection PASS.
   Full `./scripts/verify`, fresh controlled Linux artifact, platform runtime
