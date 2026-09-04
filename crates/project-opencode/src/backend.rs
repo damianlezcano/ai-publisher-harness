@@ -96,6 +96,11 @@ impl OpenCodeBackend {
         lock(&self.inner).status
     }
 
+    /// Owned `opencode serve` child pid when a process is supervised.
+    pub fn pid(&self) -> Option<u32> {
+        lock(&self.inner).guard.as_ref().map(ChildGuard::pid)
+    }
+
     pub fn base_url(&self) -> Option<String> {
         lock(&self.inner).base_url.clone()
     }
@@ -160,6 +165,7 @@ impl OpenCodeBackend {
         // `fail()` force-kills the freshly spawned child. The packaged app
         // (AppImage FUSE) boots the ~180 MB bundled `opencode` slowly enough
         // that this race breaks automatic free-model selection on first launch.
+        let started = Instant::now();
         let _startup = self
             .startup_lock
             .lock()
@@ -175,7 +181,10 @@ impl OpenCodeBackend {
                     let mut inner = lock(&self.inner);
                     inner.status = BackendStatus::Ready;
                     inner.version = Some(version.clone());
-                    log_event("backend ready");
+                    log_event(format!(
+                        "backend ready version={version} elapsed_ms={}",
+                        started.elapsed().as_millis()
+                    ));
                     return Ok(version);
                 }
                 Ok((false, version)) => {
@@ -205,10 +214,18 @@ impl OpenCodeBackend {
                 if let Err(err) = self.check_version(&version) {
                     return Err(self.fail(err));
                 }
-                let mut inner = lock(&self.inner);
-                inner.status = BackendStatus::Ready;
-                inner.version = Some(version.clone());
-                log_event("backend ready");
+                let pid = self.pid();
+                let elapsed_ms = started.elapsed().as_millis();
+                {
+                    let mut inner = lock(&self.inner);
+                    inner.status = BackendStatus::Ready;
+                    inner.version = Some(version.clone());
+                }
+                log_event(format!(
+                    "backend ready version={version} pid={} elapsed_ms={elapsed_ms}",
+                    pid.map(|pid| pid.to_string())
+                        .unwrap_or_else(|| "none".into())
+                ));
                 Ok(version)
             }
             Err(err) => Err(self.fail(err)),
@@ -221,6 +238,7 @@ impl OpenCodeBackend {
             return Ok(());
         }
         let had_process = inner.guard.is_some();
+        let pid = inner.guard.as_ref().map(ChildGuard::pid);
         if let Some(mut guard) = inner.guard.take() {
             guard.request_stop();
             if guard.wait(self.shutdown_timeout).is_err() {
@@ -231,7 +249,11 @@ impl OpenCodeBackend {
             inner.base_url = None;
         }
         inner.status = BackendStatus::Stopped;
-        log_event("backend stopped");
+        log_event(format!(
+            "backend stopped pid={}",
+            pid.map(|pid| pid.to_string())
+                .unwrap_or_else(|| "none".into())
+        ));
         Ok(())
     }
 
@@ -309,6 +331,11 @@ impl OpenCodeBackend {
         envs.extend(self.extra_env.iter().cloned());
 
         let guard = ChildGuard::spawn(&self.binary, &argv, &envs).map_err(map_process_error)?;
+        log_event(format!(
+            "backend spawned pid={} port={}",
+            guard.pid(),
+            self.port
+        ));
         inner.guard = Some(guard);
         inner.base_url = Some(format!("http://127.0.0.1:{}", self.port));
         Ok(())
@@ -327,6 +354,7 @@ impl OpenCodeBackend {
                 if let Some(guard) = inner.guard.as_mut()
                     && let Some(status) = guard.try_wait()
                 {
+                    log_event(format!("backend exited status={:?}", status.code()));
                     return Err(BackendError::StartFailed(format!(
                         "process exited ({:?})",
                         status.code()
@@ -376,8 +404,8 @@ fn map_process_error(err: ProcessError) -> BackendError {
     }
 }
 
-fn log_event(event: &str) {
-    eprintln!("[agent] {event}");
+fn log_event(event: impl AsRef<str>) {
+    eprintln!("[agent] {}", event.as_ref());
 }
 
 fn trim_slash(url: &str) -> String {

@@ -63,17 +63,21 @@ impl CloudflareQuickTunnel {
         }
     }
 
-    fn fail(&mut self, err: TunnelError) -> TunnelError {
+    fn fail(&mut self, stage: &str, err: TunnelError) -> TunnelError {
         self.abort_guard();
         self.state = TunnelState::Failed {
             reason: fail_reason(&err).into(),
         };
-        log::emit("failed");
+        log::emit(&format!("failed stage={stage} error={}", fail_detail(&err)));
         err
     }
 
     fn start_inner(&mut self, origin: LocalOrigin) -> TunnelResult<TunnelSession> {
-        let binary = self.resolver.resolve().map_err(|err| self.fail(err))?;
+        let started = Instant::now();
+        let binary = self
+            .resolver
+            .resolve()
+            .map_err(|err| self.fail("binary_resolve", err))?;
         let argv = vec![
             "tunnel".to_string(),
             "--url".to_string(),
@@ -96,7 +100,8 @@ impl CloudflareQuickTunnel {
 
         let guard = ChildGuard::spawn(&binary, &argv, &envs)
             .map_err(map_process_error)
-            .map_err(|err| self.fail(err))?;
+            .map_err(|err| self.fail("spawn", err))?;
+        log::emit(&format!("process pid={}", guard.pid()));
         let lines = guard.lines();
         self.guard = Some(guard);
 
@@ -108,7 +113,11 @@ impl CloudflareQuickTunnel {
                         self.state = TunnelState::Running {
                             base_url: base_url.clone(),
                         };
-                        log::emit("running");
+                        log::emit(&format!(
+                            "public_url={} elapsed_ms={}",
+                            base_url.as_str(),
+                            started.elapsed().as_millis()
+                        ));
                         return Ok(TunnelSession::new(base_url));
                     }
                 }
@@ -117,14 +126,15 @@ impl CloudflareQuickTunnel {
             }
 
             if let Some(status) = self.guard.as_mut().and_then(ChildGuard::try_wait) {
+                log::emit(&format!("exited status={:?}", status.code()));
                 let err = TunnelError::ProcessExited {
                     code: status.code(),
                 };
-                return Err(self.fail(err));
+                return Err(self.fail("process_exited", err));
             }
 
             if Instant::now() >= deadline {
-                return Err(self.fail(TunnelError::StartupTimeout));
+                return Err(self.fail("url_acquisition", TunnelError::StartupTimeout));
             }
             thread::sleep(Duration::from_millis(5));
         }
@@ -151,13 +161,24 @@ fn fail_reason(err: &TunnelError) -> &'static str {
     }
 }
 
+/// Diagnostic detail for the error stage log. Safe: only process-level
+/// metadata (never credentials, prompts, or artifact contents).
+fn fail_detail(err: &TunnelError) -> String {
+    match err {
+        TunnelError::StartFailed(reason) => format!("start failed: {reason}"),
+        TunnelError::StopFailed(reason) => format!("stop failed: {reason}"),
+        TunnelError::BinaryNotFound(name) => format!("binary not found: {name}"),
+        other => other.to_string(),
+    }
+}
+
 impl TunnelProvider for CloudflareQuickTunnel {
     fn start(&mut self, origin: LocalOrigin) -> TunnelResult<TunnelSession> {
         if self.is_running() {
             return Err(TunnelError::AlreadyRunning);
         }
         self.state = TunnelState::Starting;
-        log::emit("starting");
+        log::emit(&format!("starting origin={}", origin.as_str()));
         self.start_inner(origin)
     }
 
@@ -177,7 +198,12 @@ impl TunnelProvider for CloudflareQuickTunnel {
             return Err(TunnelError::NotRunning);
         }
         self.state = TunnelState::Stopping;
-        log::emit("stopping");
+        let pid = self.guard.as_ref().map(ChildGuard::pid);
+        log::emit(&format!(
+            "stopping pid={}",
+            pid.map(|pid| pid.to_string())
+                .unwrap_or_else(|| "none".into())
+        ));
         let mut result = Ok(());
         if let Some(mut guard) = self.guard.take() {
             guard.request_stop();
@@ -187,7 +213,11 @@ impl TunnelProvider for CloudflareQuickTunnel {
             }
         }
         self.state = TunnelState::Stopped;
-        log::emit("stopped");
+        log::emit(&format!(
+            "stopped pid={}",
+            pid.map(|pid| pid.to_string())
+                .unwrap_or_else(|| "none".into())
+        ));
         result
     }
 

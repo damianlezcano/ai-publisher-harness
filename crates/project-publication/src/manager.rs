@@ -401,6 +401,32 @@ where
         self.retry_pending_stop()
     }
 
+    /// Application-exit shutdown: stops the shared tunnel and the local
+    /// publisher if they are running, idempotently and best-effort. This is
+    /// what guarantees the owned `cloudflared` and the local HTTP server never
+    /// outlive the app. Durable publication state and the `published` registry
+    /// are left untouched.
+    pub fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut tunnel = self.tunnel.lock().unwrap_or_else(|e| e.into_inner());
+            if tunnel.is_running() {
+                let _ = tunnel.stop();
+            }
+        }
+        {
+            let mut publisher = self.publisher.lock().unwrap_or_else(|e| e.into_inner());
+            if publisher.is_running() {
+                let _ = publisher.stop();
+            }
+        }
+        *self
+            .tunnel_stop_failed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        *self.stop_failed.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+
     fn load_and_allocate(
         &self,
         project_id: &ProjectId,

@@ -98,6 +98,27 @@ fn request_stop_stops_running_child() {
 }
 
 #[test]
+fn stopping_one_child_never_touches_an_unrelated_child() {
+    let mut first = spawn_mode("silent");
+    let mut second = spawn_mode("silent");
+    let first_pid = first.pid();
+    let second_pid = second.pid();
+    assert!(process_exists(first_pid));
+    assert!(process_exists(second_pid));
+
+    first.request_stop();
+    first.wait(Duration::from_secs(2)).expect("first stops");
+    assert!(!process_exists(first_pid), "owned child must exit");
+    assert!(
+        process_exists(second_pid),
+        "unrelated child must never be touched"
+    );
+
+    second.force_kill();
+    assert!(!process_exists(second_pid));
+}
+
+#[test]
 fn force_kill_stops_silent_child() {
     let mut guard = spawn_mode("silent");
     let pid = guard.pid();

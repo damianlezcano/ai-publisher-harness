@@ -1494,17 +1494,54 @@ where
         project_id: &str,
         creation_id: Option<&str>,
     ) -> AppResult<PublicationView> {
+        let started = std::time::Instant::now();
+        crate::session_log::record(
+            "DEBUG",
+            format!(
+                "[share] requested conversation_id={project_id} creation_id={}",
+                creation_id.unwrap_or("latest")
+            ),
+        );
         self.prepare_share_visibility(project_id, creation_id)?;
         let pid = parse_project_id(project_id)?;
-        let publication = self
+        let publication = self.publication.publish(&pid).map_err(|error| {
+            let stage = match &error {
+                project_publication::PublicationError::TunnelStart => "tunnel_start",
+                project_publication::PublicationError::PublisherStart => "publisher_start",
+                _ => "local_publish",
+            };
+            crate::session_log::record(
+                "ERROR",
+                format!("[share] failed stage={stage} conversation_id={project_id} error={error}"),
+            );
+            AppError::from_publication(error)
+        })?;
+        let origin = self
             .publication
-            .publish(&pid)
-            .map_err(AppError::from_publication)?;
+            .endpoint()
+            .map(|url| url.as_str().to_owned())
+            .unwrap_or_else(|| "none".to_owned());
+        crate::session_log::record(
+            "DEBUG",
+            format!(
+                "[publish] prepared conversation_id={project_id} route={} origin={origin}",
+                publication.route.as_str()
+            ),
+        );
         crate::session_log::record(
             "INFO",
             format!(
                 "creation shared conversation_id={project_id} creation_id={}",
                 creation_id.unwrap_or("latest")
+            ),
+        );
+        crate::session_log::record(
+            "DEBUG",
+            format!(
+                "[share] ready conversation_id={project_id} route={} public_url={} elapsed_ms={}",
+                publication.route.as_str(),
+                publication.public_url.as_deref().unwrap_or("none"),
+                started.elapsed().as_millis()
             ),
         );
         Ok(PublicationView {
@@ -1554,9 +1591,15 @@ where
 
     pub fn unpublish(&self, project_id: &str) -> AppResult<PublicationView> {
         let pid = parse_project_id(project_id)?;
-        self.publication
-            .unpublish(&pid)
-            .map_err(AppError::from_publication)?;
+        self.publication.unpublish(&pid).map_err(|error| {
+            crate::session_log::record(
+                "ERROR",
+                format!(
+                    "[share] failed stage=unpublish conversation_id={project_id} error={error}"
+                ),
+            );
+            AppError::from_publication(error)
+        })?;
         crate::session_log::record("INFO", format!("conversation unshared id={project_id}"));
         Ok(PublicationView {
             state: "local".to_owned(),
@@ -1656,6 +1699,25 @@ where
     }
 
     // -- Status ------------------------------------------------------------
+
+    /// Explicit owned-child shutdown for application exit. Idempotent and
+    /// bounded: stops the shared `opencode serve` backend (via the agent
+    /// engine), the local HTTP publisher, the shared `cloudflared` tunnel, and
+    /// any isolated preview servers, so no EducAI-owned runtime process
+    /// outlives the app. Called from the Tauri exit path and safe to call more
+    /// than once.
+    pub fn shutdown(&self) {
+        crate::session_log::record("INFO", "app shutdown requested");
+        if let Err(error) = self.agent.shutdown() {
+            crate::session_log::record("WARN", format!("app shutdown agent error={error}"));
+        }
+        self.publication.shutdown();
+        self.previews
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        crate::session_log::record("INFO", "app shutdown complete");
+    }
 
     pub fn app_status(&self) -> AppStatusView {
         AppStatusView {

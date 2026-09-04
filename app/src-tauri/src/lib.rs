@@ -1,7 +1,9 @@
 mod commands;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use project_app::{AppConfig, AppState};
 use tauri::Manager;
@@ -11,7 +13,7 @@ pub type SharedState = Arc<AppState>;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     project_app::session_log::configure_from_args(std::env::args());
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = build_state(app.handle())?;
@@ -68,8 +70,49 @@ pub fn run() {
             commands::session_logs,
             commands::session_logs_clear,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Graceful termination on external signals: when the app is terminated
+    // with SIGTERM/SIGINT (logout, task manager, `kill <pid>`), the process
+    // would otherwise die without running any destructor and orphan its owned
+    // `opencode serve` / `cloudflared` children. `signal-hook`'s flag handler
+    // is async-signal-safe (it only sets an atomic); a dedicated thread reacts
+    // and runs the same owned-child shutdown before exiting.
+    let terminate = Arc::new(AtomicBool::new(false));
+    if let Err(err) = signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&terminate))
+        .and_then(|_| signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&terminate)))
+    {
+        eprintln!("[EducAI][WARN] failed to register termination signal handlers: {err}");
+    }
+    let terminate_watcher = Arc::clone(&terminate);
+    let signal_app = app.handle().clone();
+    std::thread::spawn(move || {
+        while !terminate_watcher.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        project_app::session_log::record("INFO", "app shutdown requested (signal)");
+        if let Some(state) = signal_app.try_state::<SharedState>() {
+            state.shutdown();
+        }
+        std::process::exit(0);
+    });
+
+    app.run(|app_handle, event| {
+        // The app is exiting: deterministically stop every EducAI-owned child
+        // (bundled `opencode serve`, bundled `cloudflared`, local publisher,
+        // preview servers) before the process goes away. Relying only on Drop
+        // is unsafe here because the managed `AppState` may never be dropped
+        // on some exit paths, which previously leaked sidecar processes.
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Some(state) = app_handle.try_state::<SharedState>() {
+                state.shutdown();
+            }
+        }
+    });
 }
 
 fn build_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {

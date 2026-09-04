@@ -573,6 +573,124 @@ fn publish_failure_maps_to_human_error() {
     assert_eq!(err.message, "No se pudo publicar en Internet.");
 }
 
+// -- Application shutdown / lifecycle ----------------------------------------
+
+/// App-exit shutdown must terminate every owned runtime component (agent
+/// engine / opencode backend, shared tunnel, local publisher) and be safe to
+/// call more than once.
+#[test]
+fn app_shutdown_is_idempotent_and_stops_owned_children() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, tunnel) = app(tmp.path());
+    let p = app.create_project("X").expect("create");
+    app.publish(&p.id).expect("publish");
+
+    app.shutdown();
+    assert!(engine.calls().contains(&project_agent::FakeCall::Shutdown));
+    assert!(tunnel.calls().contains(&project_tunnel::TunnelCall::Stop));
+    assert!(!tunnel.running());
+
+    // Idempotent: a second shutdown must not panic or regress state.
+    app.shutdown();
+    assert!(!tunnel.running());
+    assert_eq!(
+        app.publication_status(&p.id).expect("status").state,
+        "local"
+    );
+}
+
+/// A successful share must record the stage lifecycle in order:
+/// requested -> prepared -> ready.
+#[test]
+fn share_stage_logs_record_lifecycle_in_order() {
+    project_app::session_log::configure_from_args(["--debug".to_owned()]);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, _) = app(tmp.path());
+    let p = app.create_project("Fotosíntesis").expect("create");
+    app.publish(&p.id).expect("publish");
+
+    let share_events: Vec<String> = project_app::session_log::list()
+        .into_iter()
+        .map(|entry| entry.message)
+        .filter(|message| message.starts_with("[share]") || message.starts_with("[publish]"))
+        .collect();
+    assert!(
+        share_events
+            .iter()
+            .any(|e| e.starts_with("[share] requested")),
+        "missing share requested stage: {share_events:?}"
+    );
+    assert!(
+        share_events
+            .iter()
+            .any(|e| e.starts_with("[publish] prepared")),
+        "missing publish prepared stage: {share_events:?}"
+    );
+    assert!(
+        share_events.iter().any(|e| e.starts_with("[share] ready")),
+        "missing share ready stage: {share_events:?}"
+    );
+    let last_requested = share_events
+        .iter()
+        .rposition(|e| e.starts_with("[share] requested"))
+        .expect("requested stage");
+    let prepared_after = share_events[last_requested + 1..]
+        .iter()
+        .position(|e| e.starts_with("[publish] prepared"))
+        .expect("prepared after requested");
+    let ready_after = share_events[last_requested + 1 + prepared_after + 1..]
+        .iter()
+        .position(|e| e.starts_with("[share] ready"))
+        .expect("ready after prepared");
+    let _ = ready_after;
+}
+
+/// A failing tunnel start must be logged with the precise stage so a future
+/// intermittent failure is localizable (tunnel_start, not a generic message).
+#[test]
+fn share_failure_logs_identify_tunnel_start_stage() {
+    project_app::session_log::configure_from_args(["--debug".to_owned()]);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, tunnel) = app(tmp.path());
+    let p = app.create_project("X").expect("create");
+    tunnel.fail_start();
+    let _ = app.publish(&p.id).unwrap_err();
+
+    let messages: Vec<String> = project_app::session_log::list()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.starts_with("[share] failed stage=tunnel_start")),
+        "tunnel_start failure stage not logged: {messages:?}"
+    );
+}
+
+/// Unpublish is part of the share lifecycle: a failure must still be stage-
+/// identifiable rather than a generic user-facing message only.
+#[test]
+fn unpublish_failure_logs_stage() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, _, tunnel) = app(tmp.path());
+    let p = app.create_project("X").expect("create");
+    app.publish(&p.id).expect("publish");
+    tunnel.fail_stop();
+    let _ = app.unpublish(&p.id).unwrap_err();
+
+    let messages: Vec<String> = project_app::session_log::list()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.starts_with("[share] failed stage=unpublish")),
+        "unpublish failure stage not logged: {messages:?}"
+    );
+}
+
 // -- Restart / persistence ----------------------------------------------------
 
 #[test]
