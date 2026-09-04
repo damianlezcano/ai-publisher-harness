@@ -25,6 +25,25 @@ tauri = json.loads(Path("app/src-tauri/tauri.conf.json").read_text())
 if "nsis" not in tauri["bundle"]["targets"]:
     raise SystemExit("Tauri NSIS target is missing")
 PY
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+cf = Path("packaging/linux/Containerfile").read_text()
+if "ARG NODE_VERSION=22.14.0" not in cf:
+    raise SystemExit("Containerfile: NODE_VERSION must stay pinned at 22.14.0")
+statements = re.split(r"\n(?=FROM|RUN|ENV|ARG|COPY)", cf)
+node_stmts = [s for s in statements if "nodejs.org/dist" in s and "corepack enable" in s]
+if len(node_stmts) != 1:
+    raise SystemExit("Containerfile: expected exactly one pinned-Node + corepack-enable RUN")
+node_run = node_stmts[0]
+for name in ("node", "npm", "npx", "corepack"):
+    link = f"ln -s /opt/node-v${{NODE_VERSION}}-linux-x64/bin/{name} /usr/local/bin/{name}"
+    if link not in node_run:
+        raise SystemExit(f"Containerfile: /usr/local/bin/{name} must be linked from the pinned Node distribution")
+if node_run.index("/usr/local/bin/corepack") > node_run.index("corepack enable"):
+    raise SystemExit("Containerfile: corepack enable must run after the corepack symlink")
+PY
 rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
 rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
 echo 'test-distribution-contracts: PASS'
