@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Make the Ubuntu WebKitGTK subprocess runtime self-contained in an AppDir.
+set -euo pipefail
+
+appdir="${1:?usage: packaging/linux/prepare-webkit-appdir APPDIR}"
+webkit_dir="$appdir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+source_dir="/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+webkit_lib="$appdir/usr/lib/libwebkit2gtk-4.1.so.0"
+
+[[ -d "$appdir" ]] || { echo "prepare-webkit-appdir: FAIL: AppDir not found: $appdir" >&2; exit 2; }
+[[ -d "$source_dir" ]] || { echo "prepare-webkit-appdir: FAIL: Ubuntu WebKitGTK runtime not found: $source_dir" >&2; exit 2; }
+[[ -f "$webkit_lib" ]] || { echo "prepare-webkit-appdir: FAIL: bundled libwebkit2gtk-4.1.so.0 missing" >&2; exit 2; }
+
+mkdir -p "$webkit_dir/injected-bundle"
+for helper in WebKitNetworkProcess WebKitWebProcess WebKitGPUProcess; do
+  install -m 0755 "$source_dir/$helper" "$webkit_dir/$helper"
+done
+install -m 0644 "$source_dir/injected-bundle/libwebkit2gtkinjectedbundle.so" \
+  "$webkit_dir/injected-bundle/libwebkit2gtkinjectedbundle.so"
+
+# Ubuntu's library was configured with absolute Debian paths. AppRun changes
+# into APPDIR/usr, so equal-size replacements with lib/... make process and
+# injected-bundle lookup resolve inside the mounted AppImage without a host
+# WebKitGTK installation. Keep the file size stable: this is a data-only
+# replacement, not an ELF layout rewrite.
+perl -0777pi -e '
+  $absolute_root = "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1";
+  $relative_root = "lib/x86_64-linux-gnu/webkit2gtk-4.1";
+  $padding = "\x00" x (length($absolute_root) - length($relative_root));
+  $absolute_bundle = "$absolute_root/injected-bundle/";
+  $relative_bundle = "$relative_root/injected-bundle/";
+  $bundle_count = s/\Q${absolute_bundle}\E/$relative_bundle . $padding/e;
+  die "prepare-webkit-appdir: expected one absolute injected-bundle path\n"
+    unless $bundle_count == 1;
+  $helper_count = s/\Q${absolute_root}\E/$relative_root . $padding/e;
+  die "prepare-webkit-appdir: expected one absolute helper path\n"
+    unless $helper_count == 1;
+' "$webkit_lib"

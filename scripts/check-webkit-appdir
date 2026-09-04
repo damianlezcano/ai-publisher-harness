@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Verify the AppDir has a complete, relocatable WebKitGTK subprocess runtime.
+set -euo pipefail
+
+appdir="${1:?usage: scripts/check-webkit-appdir APPDIR}"
+fail() { echo "check-webkit-appdir: FAIL: $*" >&2; exit 1; }
+webkit_dir="$appdir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+webkit_lib="$appdir/usr/lib/libwebkit2gtk-4.1.so.0"
+
+[[ -d "$appdir" ]] || fail "AppDir not found: $appdir"
+[[ -f "$webkit_lib" ]] || fail "bundled libwebkit2gtk-4.1.so.0 missing"
+for helper in WebKitNetworkProcess WebKitWebProcess WebKitGPUProcess; do
+  path="$webkit_dir/$helper"
+  [[ -f "$path" ]] || fail "$helper missing from $webkit_dir"
+  [[ -x "$path" ]] || fail "$helper is not executable"
+  file -b "$path" | rg -q '^ELF .*executable' || fail "$helper is not an ELF executable"
+done
+bundle="$webkit_dir/injected-bundle/libwebkit2gtkinjectedbundle.so"
+[[ -f "$bundle" ]] || fail "injected bundle missing"
+file -b "$bundle" | rg -q '^ELF .*shared object' || fail "injected bundle is not an ELF shared object"
+
+absolute_root='/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1'
+relative_root='lib/x86_64-linux-gnu/webkit2gtk-4.1'
+strings "$webkit_lib" | rg -Fx "$absolute_root" >/dev/null && fail "absolute host helper path remains in bundled WebKitGTK"
+strings "$webkit_lib" | rg -Fx "$absolute_root/injected-bundle/" >/dev/null && fail "absolute host injected-bundle path remains in bundled WebKitGTK"
+strings "$webkit_lib" | rg -Fx "$relative_root" >/dev/null || fail "relative helper path is not configured"
+strings "$webkit_lib" | rg -Fx "$relative_root/injected-bundle/" >/dev/null || fail "relative injected-bundle path is not configured"
+
+echo "check-webkit-appdir: PASS: complete relocatable WebKitGTK runtime in $webkit_dir"

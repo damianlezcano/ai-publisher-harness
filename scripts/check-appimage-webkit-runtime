@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Extract an AppImage and enforce its WebKitGTK subprocess portability contract.
+set -euo pipefail
+
+artifact="${1:?usage: scripts/check-appimage-webkit-runtime ARTIFACT}"
+[[ -f "$artifact" ]] || { echo "check-appimage-webkit-runtime: FAIL: artifact not found: $artifact" >&2; exit 2; }
+artifact="$(realpath "$artifact")"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+( cd "$workdir" && "$artifact" --appimage-extract >/dev/null )
+"$(dirname "${BASH_SOURCE[0]}")/check-webkit-appdir" "$workdir/squashfs-root"

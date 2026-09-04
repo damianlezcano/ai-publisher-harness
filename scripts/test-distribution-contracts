@@ -57,5 +57,15 @@ PY
 rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
 rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux controlled build must be non-interactive (CI=true)'
 rg -Fq 'linuxdeploy-plugin-appimage.AppImage' packaging/linux/build-linux-appimage || fail 'Linux controlled build must fall back to appimagetool packaging of the container-assembled AppDir'
+rg -Fq './packaging/linux/prepare-webkit-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must prepare the WebKitGTK AppDir before AppImage packaging'
+rg -Fq './scripts/check-appimage-webkit-runtime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged WebKitGTK runtime'
+for helper in WebKitNetworkProcess WebKitWebProcess WebKitGPUProcess; do
+  rg -Fq "$helper" packaging/linux/prepare-webkit-appdir || fail "WebKitGTK preparation must include $helper"
+  rg -Fq "$helper" scripts/check-webkit-appdir || fail "WebKitGTK gate must require $helper"
+done
+rg -Fq 'injected-bundle/libwebkit2gtkinjectedbundle.so' packaging/linux/prepare-webkit-appdir || fail 'WebKitGTK preparation must include the injected bundle'
+rg -Fq 'injected-bundle/libwebkit2gtkinjectedbundle.so' scripts/check-webkit-appdir || fail 'WebKitGTK gate must require the injected bundle'
+rg -Fq 'absolute host helper path remains' scripts/check-webkit-appdir || fail 'WebKitGTK gate must reject absolute host helper paths'
+rg -Fq 'check-appimage-glibc "$artifact" 2.39' packaging/linux/build-linux-appimage || fail 'WebKitGTK preparation must retain the GLIBC 2.39 gate'
 rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
 echo 'test-distribution-contracts: PASS'
