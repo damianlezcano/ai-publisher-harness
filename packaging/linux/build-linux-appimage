@@ -39,3 +39,7 @@ if [[ -z "$artifact" ]]; then
 fi
 ./scripts/check-appimage-glibc "$artifact" 2.39
 sha256sum "$artifact"
+# pnpm (run via corepack in this root) records its packageManager in
+# app/package.json; discard that write so the controlled build leaves the
+# working tree clean.
+git restore -- app/package.json
