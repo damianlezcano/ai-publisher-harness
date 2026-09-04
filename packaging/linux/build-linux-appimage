@@ -4,8 +4,31 @@ cd /workspace
 export CI=true
 ./scripts/fetch-sidecars linux-x86_64
 pnpm --dir app install --frozen-lockfile
-( cd app/src-tauri && cargo tauri build --bundles appimage )
+# tauri-bundler assembles the AppDir with the Ubuntu 24.04 dependency closure
+# and then runs linuxdeploy. linuxdeploy aborts on the pinned sidecars (static
+# executables: ldd exits 1) once the AppDir is complete, so fall back to
+# appimagetool packaging of that container-assembled AppDir (same documented
+# pattern as scripts/smoke-package).
+if ! ( cd app/src-tauri && cargo tauri build --bundles appimage ); then
+  echo 'build-linux-appimage: note: tauri linuxdeploy step failed; packaging AppDir with appimagetool' >&2
+fi
 artifact="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | head -n 1)"
-[[ -n "$artifact" ]] || { echo 'build-linux-appimage: FAIL: no AppImage produced' >&2; exit 1; }
+if [[ -z "$artifact" ]]; then
+  appdir="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -type d -name '*.AppDir' | head -n 1)"
+  [[ -n "$appdir" ]] || { echo 'build-linux-appimage: FAIL: no AppImage and no AppDir produced' >&2; exit 1; }
+  if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
+    ln -sf EducAI.png "$appdir/educai.png"
+  fi
+  appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
+  [[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
+  appimage="app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage"
+  rm -f "$appimage"
+  if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+      "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
+    echo 'build-linux-appimage: FAIL: appimagetool packaging failed' >&2
+    exit 1
+  fi
+  artifact="$appimage"
+fi
 ./scripts/check-appimage-glibc "$artifact" 2.39
 sha256sum "$artifact"
