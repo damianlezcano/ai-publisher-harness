@@ -14,6 +14,17 @@ does not inherit Fedora libraries. AppImage does not make a newer glibc
 portable, so `scripts/check-appimage-glibc` extracts every shipped ELF and
 rejects requirements above GLIBC 2.39.
 
+### Linux graphics-runtime boundary
+
+The AppImage bundles portable application libraries, including GTK/WebKitGTK
+and `libepoxy`. It deliberately does not bundle the target-driver-facing
+graphics layer: Wayland client/egl/cursor/server, EGL/GL/GLX/OpenGL/GLES,
+GLVND vendor metadata, Mesa, GBM, DRM, or DRI drivers. AppRun would otherwise
+place Ubuntu Wayland libraries ahead of host Mesa in `LD_LIBRARY_PATH`, creating
+an incompatible mixed graphics stack. `scripts/check-graphics-appdir` rejects
+that payload after every controlled build. The target host supplies this full
+graphics layer as one coherent stack; no system configuration change is needed.
+
 ## Build commands
 
 On Linux with Podman:

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Enforce the AppImage graphics boundary required by host Mesa/GLVND stacks.
+set -euo pipefail
+
+appdir="${1:?usage: scripts/check-graphics-appdir APPDIR}"
+fail() { echo "check-graphics-appdir: FAIL: $*" >&2; exit 1; }
+libdir="$appdir/usr/lib"
+
+[[ -d "$appdir" ]] || fail "AppDir not found: $appdir"
+[[ -d "$libdir" ]] || fail "AppDir library directory missing: $libdir"
+for library in \
+  libwayland-client.so.0 \
+  libwayland-cursor.so.0 \
+  libwayland-egl.so.1 \
+  libwayland-server.so.0; do
+  [[ ! -e "$libdir/$library" ]] || fail "host graphics boundary violated by bundled $library"
+done
+
+while IFS= read -r -d '' path; do
+  fail "host graphics boundary violated by bundled ${path#$appdir/}"
+done < <(find "$appdir" \( -type f -o -type l \) \( \
+  -name 'libEGL.so*' -o -name 'libGL.so*' -o -name 'libGLX.so*' -o \
+  -name 'libOpenGL.so*' -o -name 'libGLESv1_CM.so*' -o -name 'libGLESv2.so*' -o \
+  -name 'libgbm.so*' -o -name 'libdrm.so*' -o -name 'libEGL_mesa.so*' -o \
+  -name 'libGLX_mesa.so*' -o -name 'libGLdispatch.so*' -o -name 'libGLX_indirect.so*' \
+  \) -print0)
+
+[[ ! -d "$libdir/dri" ]] || fail "host graphics boundary violated by bundled DRI drivers"
+[[ ! -d "$appdir/usr/share/glvnd" ]] || fail "host graphics boundary violated by bundled GLVND vendor metadata"
+echo "check-graphics-appdir: PASS: host Wayland/EGL/GLVND/Mesa/GBM/DRM/DRI boundary preserved"

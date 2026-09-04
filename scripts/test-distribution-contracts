@@ -58,7 +58,15 @@ rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 contro
 rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux controlled build must be non-interactive (CI=true)'
 rg -Fq 'linuxdeploy-plugin-appimage.AppImage' packaging/linux/build-linux-appimage || fail 'Linux controlled build must fall back to appimagetool packaging of the container-assembled AppDir'
 rg -Fq './packaging/linux/prepare-webkit-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must prepare the WebKitGTK AppDir before AppImage packaging'
+rg -Fq './packaging/linux/prepare-graphics-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must remove the incompatible AppDir Wayland layer before AppImage packaging'
 rg -Fq './scripts/check-appimage-webkit-runtime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged WebKitGTK runtime'
+rg -Fq './scripts/check-graphics-appdir "$workdir/squashfs-root"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged graphics boundary'
+for library in libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.0; do
+  rg -Fq "$library" packaging/linux/prepare-graphics-appdir || fail "graphics preparation must remove $library"
+  rg -Fq "$library" scripts/check-graphics-appdir || fail "graphics gate must reject $library"
+done
+rg -Fq 'bundled DRI drivers' scripts/check-graphics-appdir || fail 'graphics gate must reject bundled DRI drivers'
+rg -Fq 'bundled GLVND vendor metadata' scripts/check-graphics-appdir || fail 'graphics gate must reject bundled GLVND vendor metadata'
 for helper in WebKitNetworkProcess WebKitWebProcess WebKitGPUProcess; do
   rg -Fq "$helper" packaging/linux/prepare-webkit-appdir || fail "WebKitGTK preparation must include $helper"
   rg -Fq "$helper" scripts/check-webkit-appdir || fail "WebKitGTK gate must require $helper"

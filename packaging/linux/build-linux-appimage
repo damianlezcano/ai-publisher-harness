@@ -26,6 +26,7 @@ if [[ -z "$artifact" ]]; then
   # artifact ships byte-exact sidecars.
   cp sidecars/opencode-x86_64-unknown-linux-gnu "$appdir/usr/bin/opencode"
   cp sidecars/cloudflared-x86_64-unknown-linux-gnu "$appdir/usr/bin/cloudflared"
+  ./packaging/linux/prepare-graphics-appdir "$appdir"
   ./packaging/linux/prepare-webkit-appdir "$appdir"
   appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
   [[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
@@ -40,6 +41,10 @@ if [[ -z "$artifact" ]]; then
 fi
 ./scripts/check-appimage-glibc "$artifact" 2.39
 ./scripts/check-appimage-webkit-runtime "$artifact"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+( cd "$workdir" && "$artifact" --appimage-extract >/dev/null )
+./scripts/check-graphics-appdir "$workdir/squashfs-root"
 sha256sum "$artifact"
 # pnpm (run via corepack in this root) records its packageManager in
 # app/package.json; discard that write so the controlled build leaves the

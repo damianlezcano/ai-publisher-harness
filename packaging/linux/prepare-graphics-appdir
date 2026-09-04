@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Keep the Wayland/EGL boundary coherent: Mesa's EGL implementation and its
+# Wayland client ABI must come from the same target host graphics stack.
+set -euo pipefail
+
+appdir="${1:?usage: packaging/linux/prepare-graphics-appdir APPDIR}"
+libdir="$appdir/usr/lib"
+
+[[ -d "$appdir" ]] || { echo "prepare-graphics-appdir: FAIL: AppDir not found: $appdir" >&2; exit 2; }
+[[ -d "$libdir" ]] || { echo "prepare-graphics-appdir: FAIL: AppDir library directory missing: $libdir" >&2; exit 2; }
+
+# AppRun prepends usr/lib to LD_LIBRARY_PATH. Shipping these Ubuntu copies
+# would make host libEGL_mesa/libgbm use an AppImage Wayland ABI. Leave the
+# complete Wayland/EGL/GLVND/Mesa/GBM/DRM/DRI layer to the target host instead.
+for library in \
+  libwayland-client.so.0 \
+  libwayland-cursor.so.0 \
+  libwayland-egl.so.1 \
+  libwayland-server.so.0; do
+  rm -f "$libdir/$library"
+done
