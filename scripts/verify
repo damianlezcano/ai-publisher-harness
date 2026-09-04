@@ -228,7 +228,7 @@ if [[ -d app ]]; then
     exit 1
   else
     printf 'verify: pnpm --dir app install --frozen-lockfile\n'
-    pnpm --dir app install --frozen-lockfile
+    CI=true pnpm --dir app install --frozen-lockfile
 
     printf 'verify: pnpm --dir app run format:check\n'
     pnpm --dir app run format:check
