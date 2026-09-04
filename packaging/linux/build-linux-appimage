@@ -20,6 +20,12 @@ if [[ -z "$artifact" ]]; then
   if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
     ln -sf EducAI.png "$appdir/educai.png"
   fi
+  # linuxdeploy's bundled patchelf corrupts the pinned opencode sidecar
+  # (it adds a broken RUNPATH; the patched binary segfaults). Restore the
+  # checksum-verified pinned sidecars into the AppDir so the packaged
+  # artifact ships byte-exact sidecars.
+  cp sidecars/opencode-x86_64-unknown-linux-gnu "$appdir/usr/bin/opencode"
+  cp sidecars/cloudflared-x86_64-unknown-linux-gnu "$appdir/usr/bin/cloudflared"
   appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
   [[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
   appimage="app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage"
