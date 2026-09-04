@@ -77,4 +77,6 @@ rg -Fq 'injected-bundle/libwebkit2gtkinjectedbundle.so' scripts/check-webkit-app
 rg -Fq 'absolute host helper path remains' scripts/check-webkit-appdir || fail 'WebKitGTK gate must reject absolute host helper paths'
 rg -Fq 'check-appimage-glibc "$artifact" 2.39' packaging/linux/build-linux-appimage || fail 'WebKitGTK preparation must retain the GLIBC 2.39 gate'
 rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
+rg -Fq '("educai-" + $component.name + "." + $ext)' packaging/windows/build.ps1 || fail 'Windows ZIP sidecars must keep the .zip suffix on the temp path (PowerShell 5.1 Expand-Archive requires it)'
+rg -Fq 'Expand-Archive -Path $download' packaging/windows/build.ps1 || fail 'Windows ZIP extraction must consume the checksum-verified download path'
 echo 'test-distribution-contracts: PASS'

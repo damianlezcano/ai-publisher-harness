@@ -6,7 +6,8 @@ $sidecars = Join-Path $root 'sidecars'
 New-Item -ItemType Directory -Force -Path $sidecars | Out-Null
 
 foreach ($component in $manifest.components | Where-Object { $_.platform -eq 'windows-x86_64' }) {
-  $download = Join-Path $env:TEMP ("educai-" + $component.name + ".download")
+  $ext = if ($component.format -eq 'zip') { 'zip' } else { 'download' }
+  $download = Join-Path $env:TEMP ("educai-" + $component.name + "." + $ext)
   Invoke-WebRequest -Uri $component.source -OutFile $download
   $actual = (Get-FileHash -Algorithm SHA256 $download).Hash.ToLowerInvariant()
   if ($actual -ne $component.sha256) { Remove-Item -Force $download; throw "checksum mismatch for $($component.name)" }
