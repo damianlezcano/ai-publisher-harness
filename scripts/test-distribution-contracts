@@ -59,6 +59,7 @@ rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux cont
 rg -Fq 'linuxdeploy-plugin-appimage.AppImage' packaging/linux/build-linux-appimage || fail 'Linux controlled build must fall back to appimagetool packaging of the container-assembled AppDir'
 rg -Fq './packaging/linux/prepare-webkit-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must prepare the WebKitGTK AppDir before AppImage packaging'
 rg -Fq './packaging/linux/prepare-graphics-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must remove the incompatible AppDir Wayland layer before AppImage packaging'
+rg -Fq 'readlink -f "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate on the absolute artifact path (graphics gate extracts into a temp workdir)'
 rg -Fq './scripts/check-appimage-webkit-runtime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged WebKitGTK runtime'
 rg -Fq './scripts/check-graphics-appdir "$workdir/squashfs-root"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged graphics boundary'
 for library in libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.0; do

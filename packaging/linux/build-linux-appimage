@@ -39,6 +39,7 @@ if [[ -z "$artifact" ]]; then
   fi
   artifact="$appimage"
 fi
+artifact="$(readlink -f "$artifact")"
 ./scripts/check-appimage-glibc "$artifact" 2.39
 ./scripts/check-appimage-webkit-runtime "$artifact"
 workdir="$(mktemp -d)"
