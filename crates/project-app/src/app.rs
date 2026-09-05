@@ -1922,8 +1922,322 @@ where
         Ok(())
     }
 
-    // -- Status ------------------------------------------------------------
+    // -- Summarization (K6) ------------------------------------------------
 
+    /// Produces (or reuses cached) a hierarchical summary for every indexed
+    /// source in the project. Remote calls happen only for nodes whose inputs
+    /// changed. Returns accounting only; summary content is read via
+    /// [`Self::get_summary`]. This never creates a chat turn.
+    pub fn summarize_project(
+        &self,
+        project_id: &str,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+    ) -> AppResult<SummarizationReportView> {
+        let pid = parse_project_id(project_id)?;
+        let root = self.base.join("projects").join(pid.as_str());
+        if !root.join("knowledge/knowledge.sqlite").is_file() {
+            return Ok(SummarizationReportView {
+                remote_calls: 0,
+                estimated_input_units: 0,
+                cache_hits: 0,
+                reused: 0,
+                regenerated: 0,
+                source_count: 0,
+                hierarchy_depth: 0,
+            });
+        }
+        let mut store = KnowledgeStore::open(&root, &pid)
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        let levels = store
+            .summary_document_levels()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        if levels.is_empty() {
+            return Ok(SummarizationReportView {
+                remote_calls: 0,
+                estimated_input_units: 0,
+                cache_hits: 0,
+                reused: 0,
+                regenerated: 0,
+                source_count: 0,
+                hierarchy_depth: 0,
+            });
+        }
+        let existing = store
+            .summary_existing()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        let model_id = None;
+        let plan = project_knowledge::plan_project_summaries(
+            &levels,
+            &existing,
+            project_knowledge::BatchOptions::default(),
+            model_id,
+        )
+        .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+
+        let mut accounting = project_knowledge::SummaryAccounting {
+            reused: plan.reused.len(),
+            cache_hits: plan.reused.len(),
+            source_count: plan.source_count,
+            hierarchy_depth: plan.hierarchy_depth,
+            ..Default::default()
+        };
+
+        for node in &plan.pending {
+            match self.synthesize_node(&mut store, node, summarizer, &mut accounting) {
+                Ok(()) => {}
+                Err(failure) => {
+                    store
+                        .mark_summary_failed(&node.summary_id, failure)
+                        .map_err(|_| {
+                            AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
+                        })?;
+                }
+            }
+        }
+
+        Ok(SummarizationReportView {
+            remote_calls: accounting.remote_calls,
+            estimated_input_units: accounting.estimated_input_units,
+            cache_hits: accounting.cache_hits,
+            reused: accounting.reused,
+            regenerated: accounting.regenerated,
+            source_count: accounting.source_count,
+            hierarchy_depth: accounting.hierarchy_depth,
+        })
+    }
+
+    /// Produces (or reuses) a single document summary. Remote calls happen only
+    /// when the document summary is missing or stale.
+    pub fn summarize_document(
+        &self,
+        project_id: &str,
+        material_id: &str,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+    ) -> AppResult<SummarizationReportView> {
+        let pid = parse_project_id(project_id)?;
+        let mid = parse_material_id(material_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        if !project.materials.iter().any(|m| m.id == mid) {
+            return Err(AppError::new(
+                ErrorCode::NotFound,
+                "No se encontró ese material.",
+            ));
+        }
+        let root = self.base.join("projects").join(pid.as_str());
+        let mut store = KnowledgeStore::open(&root, &pid)
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        // Resolve the document id owned by this material's source.
+        let Some(document_id) = store.document_for_material(mid.as_str()).ok().flatten() else {
+            return Ok(SummarizationReportView {
+                remote_calls: 0,
+                estimated_input_units: 0,
+                cache_hits: 0,
+                reused: 0,
+                regenerated: 0,
+                source_count: 0,
+                hierarchy_depth: 0,
+            });
+        };
+        let existing = store
+            .summary_existing()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        let plan = project_knowledge::plan_project_summaries(
+            &[(document_id.clone(), 1)],
+            &existing,
+            project_knowledge::BatchOptions::default(),
+            None,
+        )
+        .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+        let mut accounting = project_knowledge::SummaryAccounting {
+            reused: plan.reused.len(),
+            cache_hits: plan.reused.len(),
+            source_count: plan.source_count,
+            hierarchy_depth: plan.hierarchy_depth,
+            ..Default::default()
+        };
+        for node in &plan.pending {
+            if let Err(failure) =
+                self.synthesize_node(&mut store, node, summarizer, &mut accounting)
+            {
+                store
+                    .mark_summary_failed(&node.summary_id, failure)
+                    .map_err(|_| {
+                        AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
+                    })?;
+            }
+        }
+        Ok(SummarizationReportView {
+            remote_calls: accounting.remote_calls,
+            estimated_input_units: accounting.estimated_input_units,
+            cache_hits: accounting.cache_hits,
+            reused: accounting.reused,
+            regenerated: accounting.regenerated,
+            source_count: accounting.source_count,
+            hierarchy_depth: accounting.hierarchy_depth,
+        })
+    }
+
+    /// Synthesizes one planned node: assembles bounded evidence, calls the
+    /// summarizer, validates the structured output, and persists `Ready`.
+    fn synthesize_node(
+        &self,
+        store: &mut KnowledgeStore,
+        node: &project_knowledge::SummaryNode,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+        accounting: &mut project_knowledge::SummaryAccounting,
+    ) -> std::result::Result<(), project_knowledge::SummaryFailure> {
+        use project_knowledge::SummaryLevel;
+
+        match node.level {
+            SummaryLevel::Document => {
+                let document_id = &node.source_ids[0];
+                let source_name = store
+                    .document_source_name(document_id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| document_id.clone());
+                let chunks = store
+                    .document_chunks(document_id, 32)
+                    .map_err(|_| project_knowledge::SummaryFailure::ExecutionFailed)?;
+                let labels: Vec<String> = (1..=chunks.len()).map(|i| format!("E{i}")).collect();
+                let evidence: Vec<(String, String, String)> =
+                    project_knowledge::select_document_evidence(&chunks, &labels);
+                let request = project_knowledge::build_document_summary_request(
+                    &source_name,
+                    &evidence,
+                    SummaryLevel::Document,
+                );
+                accounting.estimated_input_units += request.estimated_input_units;
+                let output = summarizer.summarize(&request)?;
+                accounting.remote_calls += 1;
+                let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
+                let mut ready = node.clone();
+                ready.content = Some(content.clone());
+                ready.source_chunk_ids = evidence
+                    .iter()
+                    .map(|(_, chunk_id, _)| chunk_id.clone())
+                    .collect();
+                ready.output_fingerprint = project_knowledge::fingerprint_output(&content);
+                ready.model_id = output.model_id;
+                ready.provider_id = output.provider_id;
+                ready.generation_id = "generation-1".to_owned();
+                ready.state = project_knowledge::SummaryState::Ready;
+                store
+                    .store_summary(&ready)
+                    .map_err(|_| project_knowledge::SummaryFailure::ExecutionFailed)?;
+                accounting.regenerated += 1;
+                Ok(())
+            }
+            SummaryLevel::Batch | SummaryLevel::Global => {
+                let mut children = Vec::new();
+                for child_id in &node.source_ids {
+                    match store.get_summary(child_id) {
+                        Ok(Some(child))
+                            if child.state == project_knowledge::SummaryState::Ready =>
+                        {
+                            let content = child
+                                .content
+                                .ok_or(project_knowledge::SummaryFailure::EmptyCorpus)?;
+                            children.push((child_id.clone(), content));
+                        }
+                        _ => {
+                            return Err(project_knowledge::SummaryFailure::EmptyCorpus);
+                        }
+                    }
+                }
+                if children.is_empty() {
+                    return Err(project_knowledge::SummaryFailure::EmptyCorpus);
+                }
+                let labels: Vec<String> = (1..=children.len()).map(|i| format!("P{i}")).collect();
+                let request = project_knowledge::build_synthesis_request(&children, node.level);
+                accounting.estimated_input_units += request.estimated_input_units;
+                let output = summarizer.summarize(&request)?;
+                accounting.remote_calls += 1;
+                let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
+                let mut ready = node.clone();
+                ready.content = Some(content.clone());
+                ready.output_fingerprint = project_knowledge::fingerprint_output(&content);
+                ready.model_id = output.model_id;
+                ready.provider_id = output.provider_id;
+                ready.generation_id = "generation-1".to_owned();
+                ready.state = project_knowledge::SummaryState::Ready;
+                store
+                    .store_summary(&ready)
+                    .map_err(|_| project_knowledge::SummaryFailure::ExecutionFailed)?;
+                accounting.regenerated += 1;
+                Ok(())
+            }
+        }
+    }
+
+    /// Durable summary status for a project: every node's id, level, and state.
+    pub fn summary_status(&self, project_id: &str) -> AppResult<Vec<SummaryNodeView>> {
+        let store = self.open_knowledge_store(project_id)?;
+        let Some(store) = store else {
+            return Ok(vec![]);
+        };
+        let ids = store.summary_ids().map_err(|_| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos leer el estado del resumen.",
+            )
+        })?;
+        let mut views = Vec::new();
+        for id in ids {
+            if let Some(node) = store.get_summary(&id).map_err(|_| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "No pudimos leer el estado del resumen.",
+                )
+            })? {
+                views.push(summary_node_view(&node));
+            }
+        }
+        Ok(views)
+    }
+
+    /// Reads one durable summary node.
+    pub fn get_summary(&self, project_id: &str, summary_id: &str) -> AppResult<SummaryNodeView> {
+        let store = self.open_knowledge_store(project_id)?;
+        let store = store
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese resumen."))?;
+        let node = store
+            .get_summary(summary_id)
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos leer el resumen."))?
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese resumen."))?;
+        Ok(summary_node_view(&node))
+    }
+
+    /// Invalidates a summary node and everything transitively built from it.
+    pub fn invalidate_summary(&self, project_id: &str, summary_id: &str) -> AppResult<()> {
+        let mut store = self
+            .open_knowledge_store(project_id)?
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese resumen."))?;
+        store
+            .invalidate_summary(summary_id)
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos invalidar el resumen."))
+    }
+
+    fn open_knowledge_store(&self, project_id: &str) -> AppResult<Option<KnowledgeStore>> {
+        let pid = parse_project_id(project_id)?;
+        let root = self.base.join("projects").join(pid.as_str());
+        if !root.join("knowledge/knowledge.sqlite").is_file() {
+            return Ok(None);
+        }
+        Ok(Some(KnowledgeStore::open(&root, &pid).map_err(|_| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos abrir el material de apoyo.",
+            )
+        })?))
+    }
+
+    // -- Status ------------------------------------------------------------
     /// Explicit owned-child shutdown for application exit. Idempotent and
     /// bounded: stops the shared `opencode serve` backend (via the agent
     /// engine), the local HTTP publisher, the shared `cloudflared` tunnel, and
@@ -1993,6 +2307,71 @@ fn assistant_reply_text(message: Option<&str>, has_creation: bool) -> String {
 
 fn parse_material_id(id: &str) -> AppResult<MaterialId> {
     MaterialId::parse(id).map_err(|_| AppError::invalid("Ese material no es válido."))
+}
+
+fn summary_node_view(node: &project_knowledge::SummaryNode) -> SummaryNodeView {
+    SummaryNodeView {
+        summary_id: node.summary_id.clone(),
+        level: match node.level {
+            project_knowledge::SummaryLevel::Document => "document",
+            project_knowledge::SummaryLevel::Batch => "batch",
+            project_knowledge::SummaryLevel::Global => "global",
+        }
+        .to_owned(),
+        state: match node.state {
+            project_knowledge::SummaryState::Pending => "pending",
+            project_knowledge::SummaryState::Ready => "ready",
+            project_knowledge::SummaryState::Failed => "failed",
+            project_knowledge::SummaryState::Stale => "stale",
+        }
+        .to_owned(),
+        failure: node.failure.as_ref().map(|failure| {
+            match failure {
+                project_knowledge::SummaryFailure::ProviderUnavailable => "provider_unavailable",
+                project_knowledge::SummaryFailure::ExecutionFailed => "execution_failed",
+                project_knowledge::SummaryFailure::InvalidOutput => "invalid_output",
+                project_knowledge::SummaryFailure::EmptyCorpus => "empty_corpus",
+            }
+            .to_owned()
+        }),
+        content: node.content.as_ref().map(|content| SummaryContentView {
+            summary: content.summary.clone(),
+            topics: content
+                .topics
+                .iter()
+                .map(|item| SummaryItemView {
+                    text: item.text.clone(),
+                    evidence: item.evidence.clone(),
+                })
+                .collect(),
+            decisions: content
+                .decisions
+                .iter()
+                .map(|item| SummaryItemView {
+                    text: item.text.clone(),
+                    evidence: item.evidence.clone(),
+                })
+                .collect(),
+            action_items: content
+                .action_items
+                .iter()
+                .map(|item| SummaryItemView {
+                    text: item.text.clone(),
+                    evidence: item.evidence.clone(),
+                })
+                .collect(),
+            questions: content
+                .questions
+                .iter()
+                .map(|item| SummaryItemView {
+                    text: item.text.clone(),
+                    evidence: item.evidence.clone(),
+                })
+                .collect(),
+        }),
+        source_count: node.source_ids.len(),
+        parent_summary_id: node.parent_summary_id.clone(),
+    }
 }
 
 fn material_source(material: &Material) -> MaterialSource {

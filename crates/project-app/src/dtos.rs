@@ -170,3 +170,53 @@ pub struct SelectedModelView {
     pub notice: Option<String>,
     pub requires_choice: bool,
 }
+
+/// One structured summary finding, grounded in evidence labels (E1.. or P1..).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryItemView {
+    pub text: String,
+    pub evidence: Vec<String>,
+}
+
+/// The structured summary content (the same validated contract K6 persists).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryContentView {
+    pub summary: String,
+    pub topics: Vec<SummaryItemView>,
+    pub decisions: Vec<SummaryItemView>,
+    pub action_items: Vec<SummaryItemView>,
+    pub questions: Vec<SummaryItemView>,
+}
+
+/// One durable summary node exposed to the UI. No chunk text, prompt, or path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryNodeView {
+    pub summary_id: String,
+    /// `document`, `batch`, or `global`.
+    pub level: String,
+    /// `pending`, `ready`, `failed`, or `stale`.
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<SummaryContentView>,
+    pub source_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_summary_id: Option<String>,
+}
+
+/// Result of one summarization run: accounting only, never summary content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummarizationReportView {
+    pub remote_calls: usize,
+    pub estimated_input_units: usize,
+    pub cache_hits: usize,
+    pub reused: usize,
+    pub regenerated: usize,
+    pub source_count: usize,
+    pub hierarchy_depth: usize,
+}
