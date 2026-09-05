@@ -9,6 +9,7 @@
 mod context;
 mod model;
 mod ort_provider;
+mod summary;
 pub use context::{
     BudgetEstimator, ConservativeCharBudgetEstimator, ContextAssembler, ContextAssemblyOptions,
     EvidenceEntry, EvidencePackage, EvidenceQueryMetadata, EvidenceTotals, ExcerptKind,
@@ -18,6 +19,13 @@ pub use model::{
     semantic_safe_subdivide, token_count, verify_artifact,
 };
 pub use ort_provider::{OrtEmbeddingProvider, runtime_library_from_executable};
+pub use summary::{
+    BatchOptions, RemoteSummarizer, SUMMARY_CONTRACT_VERSION, SummaryAccounting, SummaryContent,
+    SummaryEvidenceRef, SummaryFailure, SummaryItem, SummaryLevel, SummaryNode, SummaryOutput,
+    SummaryPlan, SummaryRequest, SummaryState, build_document_summary_request,
+    build_synthesis_request, deserialize_content, fingerprint_output, fingerprint_summary_inputs,
+    plan_project_summaries, select_document_evidence, serialize_content, validate_summary_output,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -29,7 +37,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 pub const NORMALIZATION_VERSION: &str = "nfc-lf-v1";
 pub const CHUNKER_ID: &str = "structural-v1";
 pub const CHUNKER_VERSION: &str = "structural-v1";
@@ -524,8 +532,18 @@ impl KnowledgeStore {
                     .unwrap_or_else(|| source.source_name.clone()),
             ));
         }
+        let prior_document: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT document_id FROM material_sources WHERE material_id = ?1",
+                [source.material_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
         match self.index_derived(source, bytes) {
             Ok(outcome) => {
+                let changed = prior_document.as_deref() != Some(outcome.document_id.as_str())
+                    || !outcome.reused;
                 let now = unix_seconds();
                 self.upsert_material_index_state(
                     &source.material_id,
@@ -535,6 +553,17 @@ impl KnowledgeStore {
                     None,
                     now,
                 )?;
+                // Incremental invalidation: a changed or renewed document
+                // invalidates only its own summary lineage (and, when the
+                // canonical document identity changed, the previous identity's).
+                if changed {
+                    self.invalidate_document_summaries(&outcome.document_id)?;
+                    if let Some(prior) = prior_document
+                        && prior != outcome.document_id
+                    {
+                        self.invalidate_document_summaries(&prior)?;
+                    }
+                }
                 Ok(outcome)
             }
             Err(error) => {
@@ -641,6 +670,14 @@ impl KnowledgeStore {
     /// Removes one source link. Shared same-byte canonical documents remain
     /// available until their last source is removed.
     pub fn remove(&mut self, material_id: &MaterialId) -> Result<bool> {
+        let prior_document: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT document_id FROM material_sources WHERE material_id = ?1",
+                [material_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
         let tx = self.connection.transaction()?;
         let removed = tx.execute(
             "DELETE FROM material_sources WHERE material_id = ?1",
@@ -652,6 +689,11 @@ impl KnowledgeStore {
         )?;
         cleanup_orphaned_documents(&tx)?;
         tx.commit()?;
+        if let Some(document_id) = prior_document {
+            // Invalidate summary lineage that claimed support from this
+            // document. Unrelated summaries remain available.
+            let _ = self.invalidate_document_summaries(&document_id);
+        }
         Ok(removed)
     }
 
@@ -1024,6 +1066,314 @@ impl KnowledgeStore {
     pub fn project_id(&self) -> &str {
         &self.project_id
     }
+
+    // -- K6 hierarchical summarization --------------------------------------
+
+    /// Lists this project's current indexed document identities (document_id
+    /// and chunk count), in stable `(document_id, source_relative_path)` order.
+    /// This is the Level-0 source set the hierarchy planner reduces.
+    pub fn summary_document_levels(&self) -> Result<Vec<(String, usize)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT d.document_id, COUNT(c.chunk_id) AS n
+             FROM documents d
+             LEFT JOIN chunks c ON c.document_id = d.document_id
+             WHERE d.state = 'ready'
+             GROUP BY d.document_id
+             ORDER BY d.document_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Returns one document's chunks `(chunk_id, text)` in stable ordinal order,
+    /// capped at `limit`. Used to assemble bounded document-summary evidence.
+    pub fn document_chunks(
+        &self,
+        document_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let limit = i64::try_from(limit.min(256)).unwrap_or(256);
+        let mut statement = self.connection.prepare(
+            "SELECT chunk_id, text FROM chunks WHERE document_id=?1 ORDER BY ordinal LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![document_id, limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Returns the canonical document id a material source currently resolves to.
+    pub fn document_for_material(&self, material_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT document_id FROM material_sources WHERE material_id=?1",
+                [material_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Returns the source name (first, stable) for a document, for evidence
+    /// labelling. Falls back to the document id.
+    pub fn document_source_name(&self, document_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT source_name FROM material_sources WHERE document_id=?1 ORDER BY source_relative_path LIMIT 1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Returns the durable summary nodes keyed by summary_id: `(state,
+    /// input_fingerprint)`. Used by the planner to decide reuse.
+    pub fn summary_existing(&self) -> Result<BTreeMap<String, (SummaryState, String)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT summary_id, state, input_fingerprint FROM summaries")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (id, state, fingerprint) = row?;
+            out.insert(id, (SummaryState::from_db(&state)?, fingerprint));
+        }
+        Ok(out)
+    }
+
+    /// Retrieves one durable summary node, or `None`.
+    pub fn get_summary(&self, summary_id: &str) -> Result<Option<SummaryNode>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT summary_id, level, state, failure_category, content_json,
+                        parent_summary_id, input_fingerprint, output_fingerprint,
+                        contract_version, generation_id, model_id, provider_id,
+                        created_at, updated_at
+                 FROM summaries WHERE summary_id = ?1",
+                [summary_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, i64>(13)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            summary_id,
+            level,
+            state,
+            failure,
+            content,
+            parent,
+            input_fingerprint,
+            output_fingerprint,
+            contract_version,
+            generation_id,
+            model_id,
+            provider_id,
+            created_at,
+            updated_at,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let source_ids = self.summary_source_ids(&summary_id)?;
+        let source_chunk_ids = self.summary_chunk_ids(&summary_id)?;
+        Ok(Some(SummaryNode {
+            summary_id,
+            level: SummaryLevel::from_db(&level)?,
+            state: SummaryState::from_db(&state)?,
+            failure: failure
+                .as_deref()
+                .map(SummaryFailure::from_db)
+                .transpose()?,
+            content: content.as_deref().map(deserialize_content).transpose()?,
+            source_ids,
+            source_chunk_ids,
+            parent_summary_id: parent,
+            input_fingerprint,
+            output_fingerprint,
+            generation_id,
+            model_id,
+            provider_id,
+            contract_version,
+            created_at,
+            updated_at,
+        }))
+    }
+
+    fn summary_source_ids(&self, summary_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_id FROM summary_sources WHERE summary_id=?1 ORDER BY source_id",
+        )?;
+        let rows = statement.query_map([summary_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn summary_chunk_ids(&self, summary_id: &str) -> Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT chunk_id FROM summary_chunks WHERE summary_id=?1 ORDER BY chunk_id")?;
+        let rows = statement.query_map([summary_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Persists a generated (Ready) summary node and its provenance. Replaces
+    /// any prior version of the same summary_id atomically.
+    pub fn store_summary(&mut self, node: &SummaryNode) -> Result<()> {
+        let content = node.content.as_ref().map(serialize_content);
+        let now = unix_seconds();
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO summaries(summary_id, level, state, failure_category, content_json, parent_summary_id, input_fingerprint, output_fingerprint, contract_version, generation_id, model_id, provider_id, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(summary_id) DO UPDATE SET level=excluded.level, state=excluded.state, failure_category=excluded.failure_category, content_json=excluded.content_json, parent_summary_id=excluded.parent_summary_id, input_fingerprint=excluded.input_fingerprint, output_fingerprint=excluded.output_fingerprint, contract_version=excluded.contract_version, generation_id=excluded.generation_id, model_id=excluded.model_id, provider_id=excluded.provider_id, updated_at=excluded.updated_at",
+            params![
+                node.summary_id,
+                node.level.as_db(),
+                node.state.as_db(),
+                node.failure.as_ref().map(SummaryFailure::as_db),
+                content.as_deref(),
+                node.parent_summary_id,
+                node.input_fingerprint,
+                node.output_fingerprint,
+                node.contract_version,
+                node.generation_id,
+                node.model_id,
+                node.provider_id,
+                node.created_at,
+                now,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM summary_sources WHERE summary_id=?1",
+            [&node.summary_id],
+        )?;
+        tx.execute(
+            "DELETE FROM summary_chunks WHERE summary_id=?1",
+            [&node.summary_id],
+        )?;
+        for source_id in &node.source_ids {
+            tx.execute(
+                "INSERT INTO summary_sources(summary_id, source_id) VALUES(?1, ?2)",
+                params![node.summary_id, source_id],
+            )?;
+        }
+        for chunk_id in &node.source_chunk_ids {
+            tx.execute(
+                "INSERT INTO summary_chunks(summary_id, chunk_id) VALUES(?1, ?2)",
+                params![node.summary_id, chunk_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks a summary node Failed with a sanitized category. Failing a new
+    /// synthesis never replaces an existing Ready summary's content.
+    pub fn mark_summary_failed(&mut self, summary_id: &str, failure: SummaryFailure) -> Result<()> {
+        let now = unix_seconds();
+        self.connection.execute(
+            "INSERT INTO summaries(summary_id, level, state, failure_category, content_json, input_fingerprint, output_fingerprint, contract_version, generation_id, created_at, updated_at)
+             VALUES(?1, 'document', 'failed', ?2, NULL, '', '', ?3, '', ?4, ?4)
+             ON CONFLICT(summary_id) DO UPDATE SET state='failed', failure_category=excluded.failure_category, updated_at=excluded.updated_at",
+            params![summary_id, failure.as_db(), SUMMARY_CONTRACT_VERSION, now],
+        )?;
+        Ok(())
+    }
+
+    /// Invalidates `summary_id` and, transitively, every summary that lists it
+    /// as a source (batches -> global). Unrelated summaries stay `Ready`.
+    pub fn invalidate_summary(&mut self, summary_id: &str) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let mut frontier = vec![summary_id.to_owned()];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = frontier.pop() {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            tx.execute(
+                "UPDATE summaries SET state='stale' WHERE summary_id=?1",
+                [&id],
+            )?;
+            let mut statement = tx.prepare(
+                "SELECT s.summary_id FROM summaries s
+                 JOIN summary_sources src ON src.summary_id = s.summary_id
+                 WHERE src.source_id = ?1",
+            )?;
+            let children = statement
+                .query_map([&id], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            drop(statement);
+            frontier.extend(children);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Invalidates summaries that reference a changed/deleted document, by
+    /// using document summaries keyed to that document plus any batsynthesis
+    /// node listing those summaries as sources (transitive).
+    pub fn invalidate_document_summaries(&mut self, document_id: &str) -> Result<()> {
+        let mut statement = self.connection.prepare(
+            "SELECT summary_id FROM summaries
+             WHERE level='document' AND summary_id IN (
+                SELECT summary_id FROM summary_sources WHERE source_id = ?1
+             )",
+        )?;
+        let roots = statement
+            .query_map([document_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        for root in roots {
+            self.invalidate_summary(&root)?;
+        }
+        Ok(())
+    }
+
+    /// Removes a deleted source's summary associations and, when a document
+    /// summary loses its last legitimate reference, marks it stale. Directly
+    /// referenced child summaries (batch/global) are transitively invalidated.
+    pub fn remove_summary_source(&mut self, document_id: &str) -> Result<()> {
+        self.invalidate_document_summaries(document_id)
+    }
+
+    /// Lists every durable summary id in stable order (for status reporting).
+    pub fn summary_ids(&self) -> Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT summary_id FROM summaries ORDER BY summary_id")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
 }
 
 #[derive(Clone)]
@@ -1311,6 +1661,16 @@ fn migrate(connection: &Connection) -> Result<()> {
             tx.commit()?;
             return Ok(());
         }
+        if version == 3 {
+            let tx = connection.unchecked_transaction()?;
+            create_summary_tables(&tx)?;
+            tx.execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
         if version != SCHEMA_VERSION {
             return Err(KnowledgeError::IncompatibleSchema(version));
         }
@@ -1342,8 +1702,49 @@ fn migrate(connection: &Connection) -> Result<()> {
     )?;
     create_embedding_tables(&tx)?;
     create_material_index_state_table(&tx)?;
+    create_summary_tables(&tx)?;
     tx.execute("INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION.to_string()])?;
     tx.commit()?;
+    Ok(())
+}
+
+/// K6 summary tables: summary nodes (source coverage, state, fingerprints),
+/// summary-source and summary-chunk associations for provenance, and
+/// transmission-safe accounting. No document/chunk/prompt/provider text is
+/// persisted beyond the validated structured content.
+fn create_summary_tables(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS summaries (
+            summary_id TEXT PRIMARY KEY NOT NULL,
+            level TEXT NOT NULL CHECK(level IN ('document', 'batch', 'global')),
+            state TEXT NOT NULL CHECK(state IN ('pending', 'ready', 'failed', 'stale')),
+            failure_category TEXT CHECK(failure_category IN (
+                'provider_unavailable', 'execution_failed', 'invalid_output', 'empty_corpus'
+            )),
+            content_json TEXT,
+            parent_summary_id TEXT,
+            input_fingerprint TEXT NOT NULL,
+            output_fingerprint TEXT NOT NULL,
+            contract_version TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            model_id TEXT,
+            provider_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS summary_sources (
+            summary_id TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+            source_id TEXT NOT NULL,
+            PRIMARY KEY(summary_id, source_id)
+         );
+         CREATE TABLE IF NOT EXISTS summary_chunks (
+            summary_id TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+            chunk_id TEXT NOT NULL,
+            PRIMARY KEY(summary_id, chunk_id)
+         );
+         CREATE INDEX IF NOT EXISTS summaries_parent ON summaries(parent_summary_id);
+         CREATE INDEX IF NOT EXISTS summaries_state ON summaries(state);",
+    )?;
     Ok(())
 }
 
@@ -2134,7 +2535,7 @@ mod tests {
         drop(store);
 
         let upgraded = KnowledgeStore::open(&project_root, &pid).unwrap();
-        assert_eq!(upgraded.schema_version().unwrap(), 3);
+        assert_eq!(upgraded.schema_version().unwrap(), 4);
         assert_eq!(upgraded.search("OpenShift", 10).unwrap().len(), 1);
         assert_eq!(
             upgraded
@@ -2165,6 +2566,130 @@ mod tests {
                 .material_index_status(&source.material_id)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn v3_migration_preserves_k1_k3_and_adds_summary_tables() {
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let source = source("migra.txt");
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        store
+            .index(&source, b"OpenShift conserva el resumen al migrar")
+            .unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        store.index_embeddings(&mut provider, 8).unwrap();
+        // Summaries table does not exist yet at v3; simulate a v3 DB.
+        store
+            .connection
+            .execute("DROP TABLE IF EXISTS summaries", [])
+            .unwrap();
+        store
+            .connection
+            .execute("DROP TABLE IF EXISTS summary_sources", [])
+            .unwrap();
+        store
+            .connection
+            .execute("DROP TABLE IF EXISTS summary_chunks", [])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE schema_meta SET value='3' WHERE key='schema_version'",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        let upgraded = KnowledgeStore::open(&project_root, &pid).unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), 4);
+        assert_eq!(upgraded.search("OpenShift", 10).unwrap().len(), 1);
+        assert_eq!(upgraded.summary_ids().unwrap().len(), 0);
+        let columns: Vec<String> = upgraded
+            .connection
+            .prepare("SELECT name FROM pragma_table_info('summaries')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(columns.contains(&"content_json".to_owned()));
+    }
+
+    #[test]
+    fn summary_store_roundtrips_provenance_and_invalidates_transitively() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+
+        let doc = SummaryNode {
+            summary_id: "summary-doc".to_owned(),
+            level: SummaryLevel::Document,
+            state: SummaryState::Ready,
+            failure: None,
+            content: Some(summary::SummaryContent {
+                summary: "resumen doc".to_owned(),
+                topics: vec![],
+                decisions: vec![],
+                action_items: vec![],
+                questions: vec![],
+            }),
+            source_ids: vec!["document-id".to_owned()],
+            source_chunk_ids: vec!["chunk-1".to_owned()],
+            parent_summary_id: None,
+            input_fingerprint: "f-in".to_owned(),
+            output_fingerprint: "f-out".to_owned(),
+            generation_id: "g".to_owned(),
+            model_id: Some("m".to_owned()),
+            provider_id: Some("p".to_owned()),
+            contract_version: SUMMARY_CONTRACT_VERSION.to_owned(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        let batch = SummaryNode {
+            summary_id: "summary-batch".to_owned(),
+            level: SummaryLevel::Batch,
+            state: SummaryState::Ready,
+            failure: None,
+            content: Some(summary::SummaryContent {
+                summary: "resumen batch".to_owned(),
+                topics: vec![],
+                decisions: vec![],
+                action_items: vec![],
+                questions: vec![],
+            }),
+            source_ids: vec!["summary-doc".to_owned()],
+            source_chunk_ids: vec![],
+            parent_summary_id: None,
+            input_fingerprint: "f-in-batch".to_owned(),
+            output_fingerprint: "f-out-batch".to_owned(),
+            generation_id: "g".to_owned(),
+            model_id: Some("m".to_owned()),
+            provider_id: Some("p".to_owned()),
+            contract_version: SUMMARY_CONTRACT_VERSION.to_owned(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        store.store_summary(&doc).unwrap();
+        store.store_summary(&batch).unwrap();
+
+        let read = store.get_summary("summary-doc").unwrap().unwrap();
+        assert_eq!(read.source_chunk_ids, vec!["chunk-1".to_owned()]);
+        assert_eq!(read.content.as_ref().unwrap().summary, "resumen doc");
+
+        // Transitive invalidation: invalidating the document summary also marks
+        // the batch (which lists it as a source) stale.
+        store.invalidate_summary("summary-doc").unwrap();
+        assert_eq!(
+            store.get_summary("summary-doc").unwrap().unwrap().state,
+            SummaryState::Stale
+        );
+        assert_eq!(
+            store.get_summary("summary-batch").unwrap().unwrap().state,
+            SummaryState::Stale
         );
     }
 
