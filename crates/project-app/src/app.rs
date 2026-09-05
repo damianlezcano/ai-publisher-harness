@@ -25,7 +25,10 @@ use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
     PublicationSnapshotStore,
 };
-use project_knowledge::{ContextAssemblyOptions, HybridSearchOptions, KnowledgeStore};
+use project_knowledge::{
+    ContextAssemblyOptions, EmbeddingProvider, HybridSearchOptions, KnowledgeStore, MaterialSource,
+    ModelInstallState, ModelManager, OrtEmbeddingProvider, runtime_library_from_executable,
+};
 use project_opencode::OpenCodeBackend;
 use project_preview::PreviewServer;
 use project_provider::{
@@ -126,6 +129,9 @@ pub struct AppState<
     >,
     agent: AgentService<E, FilesystemCreationRegistrar>,
     provider: ProviderService<P, R>,
+    /// One process-local, strictly local E5 provider. It is initialized only
+    /// when both the verified model and bundled runtime are available.
+    knowledge_provider: Mutex<Option<OrtEmbeddingProvider>>,
     /// Live isolated web-preview servers keyed by their single-use token. Each
     /// entry serves one immutable copy of a creation's `outputs/<id>` tree on a
     /// loopback-only, token-guarded endpoint (ADR-0010). Removed (and torn down)
@@ -247,6 +253,7 @@ where
             publication,
             agent,
             provider,
+            knowledge_provider: Mutex::new(None),
             previews: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -391,12 +398,7 @@ where
             content_type,
             source: MaterialContent { bytes },
         };
-        let material = self
-            .projects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .add_material(&pid, request)
-            .map_err(AppError::from_material)?;
+        let material = self.add_material_and_index(&pid, request)?;
         crate::session_log::record(
             "INFO",
             format!(
@@ -437,12 +439,7 @@ where
             content_type: Some(ContentType::parse(image.content_type).expect("validated type")),
             source: MaterialContent { bytes },
         };
-        let material = self
-            .projects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .add_material(&pid, request)
-            .map_err(AppError::from_material)?;
+        let material = self.add_material_and_index(&pid, request)?;
         Ok(MaterialAddImageView {
             material: material_view(&material),
             duplicate: false,
@@ -560,12 +557,7 @@ where
                     content_type,
                     source: MaterialContent { bytes },
                 };
-                match self
-                    .projects
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .add_material(pid, request)
-                {
+                match self.add_material_and_index(pid, request) {
                     Ok(material) => Ok(MaterialImportResult {
                         source_name,
                         status: "added".to_owned(),
@@ -609,7 +601,73 @@ where
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove_material(&pid, &mid)
-            .map_err(AppError::from_material)
+            .map_err(AppError::from_material)?;
+        self.remove_knowledge_material(&pid, &mid);
+        Ok(())
+    }
+
+    /// Stores an accepted Material before attempting the independent local
+    /// Knowledge derivation. A Knowledge failure never rolls back or rejects
+    /// the user's accepted source Material.
+    fn add_material_and_index(&self, pid: &ProjectId, request: AddMaterial) -> AppResult<Material> {
+        let bytes = request.source.bytes.clone();
+        let material = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_material(pid, request)
+            .map_err(AppError::from_material)?;
+        self.index_material_locally(pid, &material, &bytes);
+        Ok(material)
+    }
+
+    fn index_material_locally(&self, project_id: &ProjectId, material: &Material, bytes: &[u8]) {
+        let root = self.base.join("projects").join(project_id.as_str());
+        let mut store = match KnowledgeStore::open(&root, project_id) {
+            Ok(store) => store,
+            Err(_) => {
+                crate::session_log::record(
+                    "WARN",
+                    format!("[knowledge] index_open_failed material_id={}", material.id),
+                );
+                return;
+            }
+        };
+        let source = material_source(material);
+        if store.index(&source, bytes).is_err() {
+            crate::session_log::record(
+                "WARN",
+                format!("[knowledge] index_failed material_id={}", material.id),
+            );
+            return;
+        }
+        if let Some(Err(_)) =
+            self.with_local_embedding_provider(|provider| store.index_embeddings(provider, 8))
+        {
+            crate::session_log::record(
+                "WARN",
+                format!(
+                    "[knowledge] embedding_index_failed material_id={}",
+                    material.id
+                ),
+            );
+        }
+    }
+
+    fn remove_knowledge_material(&self, project_id: &ProjectId, material_id: &MaterialId) {
+        let root = self.base.join("projects").join(project_id.as_str());
+        if !root.join("knowledge/knowledge.sqlite").is_file() {
+            return;
+        }
+        if KnowledgeStore::open(&root, project_id)
+            .and_then(|mut store| store.remove(material_id))
+            .is_err()
+        {
+            crate::session_log::record(
+                "WARN",
+                format!("[knowledge] remove_failed material_id={material_id}"),
+            );
+        }
     }
 
     /// Resolves the validated, canonical on-disk path for a material. Used by
@@ -884,14 +942,34 @@ where
                 "No pudimos preparar el material de apoyo.",
             )
         })?;
-        let (candidates, semantic) = store
-            .hybrid_search(user_query, None, HybridSearchOptions::default())
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCode::Internal,
-                    "No pudimos buscar el material de apoyo.",
-                )
-            })?;
+        let search = self.with_local_embedding_provider(|provider| {
+            store.hybrid_search(user_query, Some(provider), HybridSearchOptions::default())
+        });
+        let (candidates, semantic) = match search {
+            Some(Ok(result)) => result,
+            Some(Err(_)) => {
+                crate::session_log::record(
+                    "WARN",
+                    "[knowledge] semantic_search_failed fallback=lexical",
+                );
+                store
+                    .hybrid_search(user_query, None, HybridSearchOptions::default())
+                    .map_err(|_| {
+                        AppError::new(
+                            ErrorCode::Internal,
+                            "No pudimos buscar el material de apoyo.",
+                        )
+                    })?
+            }
+            None => store
+                .hybrid_search(user_query, None, HybridSearchOptions::default())
+                .map_err(|_| {
+                    AppError::new(
+                        ErrorCode::Internal,
+                        "No pudimos buscar el material de apoyo.",
+                    )
+                })?,
+        };
         let package = store
             .assemble_context(user_query, &candidates, ContextAssemblyOptions::default())
             .map_err(|_| {
@@ -948,6 +1026,44 @@ where
             evidence_budget_limit: package.totals.estimated_budget_limit,
             citation_map,
         }))
+    }
+
+    /// Runs an operation against the verified, bundled local E5 provider when
+    /// it is available. Missing/corrupt model data or a missing runtime is an
+    /// expected lexical-only state; this function never installs or contacts a
+    /// remote provider.
+    fn with_local_embedding_provider<Output>(
+        &self,
+        operation: impl FnOnce(&mut dyn EmbeddingProvider) -> project_knowledge::Result<Output>,
+    ) -> Option<project_knowledge::Result<Output>> {
+        let mut provider = self
+            .knowledge_provider
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if provider.is_none() {
+            *provider = self.load_local_embedding_provider();
+        }
+        provider.as_mut().map(|provider| operation(provider))
+    }
+
+    fn load_local_embedding_provider(&self) -> Option<OrtEmbeddingProvider> {
+        let manager = ModelManager::new(&self.base).ok()?;
+        let model_root = match manager.inspect().ok()? {
+            ModelInstallState::Verified(path) => path,
+            ModelInstallState::NotInstalled
+            | ModelInstallState::Incomplete
+            | ModelInstallState::Corrupt(_) => return None,
+        };
+        let executable = std::env::current_exe().ok()?;
+        let runtime = runtime_library_from_executable(&executable).ok()?;
+        let tokenizer = manager.load_tokenizer().ok()?;
+        OrtEmbeddingProvider::load(
+            manager.generation(),
+            tokenizer,
+            &model_root.join("onnx/model.onnx"),
+            &runtime,
+        )
+        .ok()
     }
 
     /// Resolves prompt attachments (M8 §6 / ADR-0011). Each opaque material ID
@@ -1877,6 +1993,18 @@ fn assistant_reply_text(message: Option<&str>, has_creation: bool) -> String {
 
 fn parse_material_id(id: &str) -> AppResult<MaterialId> {
     MaterialId::parse(id).map_err(|_| AppError::invalid("Ese material no es válido."))
+}
+
+fn material_source(material: &Material) -> MaterialSource {
+    MaterialSource {
+        material_id: material.id.clone(),
+        source_name: material.original_file_name.clone(),
+        relative_path: material.relative_path.as_str().to_owned(),
+        media_type: material
+            .content_type
+            .as_ref()
+            .map(|content_type| content_type.as_str().to_owned()),
+    }
 }
 
 fn material_view(m: &Material) -> MaterialView {

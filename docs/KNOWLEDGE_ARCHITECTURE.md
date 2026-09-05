@@ -319,6 +319,16 @@ None blocks the current Windows runtime/distribution validation.
 
 ## 28. Validation criteria and status
 
+Production Material → Knowledge wiring is COMPLETE (`CURRENT_CHECKPOINT.md`):
+every Material acceptance path derives Knowledge independently after acceptance,
+the local ONNX/E5 semantic provider loads only when verified model + runtime
+assets exist (never installing or contacting a remote provider), and K3/K4/K5
+feed only the bounded evidence package into the single remote chat request.
+Accepted Material survives any Knowledge failure; durable `Pending`/`Ready`/
+`Failed`/`Unsupported` status tells the truth independently. Acceptance tests
+live in `crates/project-app/tests/knowledge.rs`. Summarization and M11 remain
+NOT STARTED.
+
 ## 29. K5 chat request integration
 
 K5 activates deterministically for an active project with an existing local
