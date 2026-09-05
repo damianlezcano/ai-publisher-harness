@@ -5,7 +5,7 @@
 | Platform | Official artifact | Minimum supported OS | Controlled build environment | Status |
 | --- | --- | --- | --- | --- |
 | Linux x86_64 | AppImage | Ubuntu 24.04 family / glibc 2.39 | Ubuntu 24.04 Podman image | technical gate implemented; target-machine validation pending |
-| Windows x64 | NSIS installer | Windows 11 x64 | native Windows x64 MSVC runner | technically ready for Windows runtime validation |
+| Windows x64 | NSIS installer | Windows 11 x64 | native Windows x64 MSVC runner | HUMAN-PASS |
 
 Linux uses Ubuntu 24.04 because it is the oldest evaluated LTS with both glibc
 2.39 and the required WebKitGTK 4.1 development ABI. Ubuntu 22.04 ships an
@@ -73,5 +73,5 @@ Preview/Abrir, a public trycloudflare URL, and clean owned-child shutdown.
 
 Validate the NSIS installer on a real Windows 11 x64 target: launch, chat,
 quoted prompt, attachment, Creation/Preview/Abrir, share/unshare, public URL,
-and no owned OpenCode/cloudflared residue on close. Until that run is recorded,
-Windows is **TECHNICALLY READY FOR WINDOWS RUNTIME VALIDATION**, not human-pass.
+and no owned OpenCode/cloudflared residue on close. This validation was
+completed on Windows 11 x64 on 2026-09-05; Windows is **HUMAN-PASS**.
