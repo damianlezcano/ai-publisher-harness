@@ -1,6 +1,6 @@
 # EducAI Knowledge Architecture
 
-Status: **IMPLEMENTED (K1–K5) — LINUX SEMANTIC RUNTIME HUMAN-PASS**; Windows Knowledge semantic runtime validation remains a separate future gate. Architecture design was approved in the bounded pass below; implementation and Linux runtime closure are recorded in `CURRENT_CHECKPOINT.md`.
+Status: **IMPLEMENTED (K1–K6) — LINUX SEMANTIC RUNTIME HUMAN-PASS**; Windows Knowledge semantic runtime validation remains a separate future gate. Architecture design was approved in the bounded pass below; implementation, Linux runtime closure, and K6 hierarchical summarization closure are recorded in `CURRENT_CHECKPOINT.md`.
 
 ## 1. Context and problem
 
@@ -332,8 +332,8 @@ assets exist (never installing or contacting a remote provider), and K3/K4/K5
 feed only the bounded evidence package into the single remote chat request.
 Accepted Material survives any Knowledge failure; durable `Pending`/`Ready`/
 `Failed`/`Unsupported` status tells the truth independently. Acceptance tests
-live in `crates/project-app/tests/knowledge.rs`. Summarization and M11 remain
-NOT STARTED.
+live in `crates/project-app/tests/knowledge.rs`. K6 hierarchical summarization
+is COMPLETE (`## 31` below and `CURRENT_CHECKPOINT.md`). M11 remains NOT STARTED.
 
 ## 29. K5 chat request integration
 
@@ -420,3 +420,62 @@ not HUMAN ACCEPTED; implementation is intentionally deferred until after the
 current Windows gate. M11 remains NOT STARTED. The next main gate is
 **WINDOWS NATIVE DISTRIBUTION + REAL RUNTIME VALIDATION**; Linux human
 validation remains pending as recorded by `CURRENT_CHECKPOINT.md`.
+
+## 31. K6 hierarchical summarization (implemented)
+
+K6 adds the Knowledge-side foundation for NotebookLM-like multi-document
+summarization on top of K1–K5, without any NotebookLM UI. It is hierarchical,
+bounded, incremental, cacheable, provenance-aware, project-local, deterministic,
+and provider-independent at the orchestration boundary.
+
+### Ownership boundary
+
+Summarization belongs to the Knowledge/application layer. Planning, node
+identity, source coverage, provenance, cached records, invalidation, hierarchy,
+and readiness live in `project-knowledge` (schema v4). Remote synthesis executes
+only through the provider-independent `RemoteSummarizer` trait; the
+OpenCode-backed implementation `OpenCodeRemoteSummarizer` lives in
+`project-app` and runs each request in a dedicated scratch session (never the
+chat session), so internal summary generation never creates a user-visible chat
+turn. The remote provider receives only bounded, labelled evidence for one node
+at a time — never the corpus, SQLite DB, vectors, model files, or absolute paths.
+
+### Hierarchy
+
+Level 0 = source chunks; Level 1 = per-document summary; Level 2 = deterministic
+batches; Level 3 = one global summary. `plan_project_summaries` reduces an
+ordered source list with a configurable branching factor (default 10) so 100+
+documents never require one unbounded request. A single-document project's
+document summary is its root (no redundant global node).
+
+### Summary nodes, state, provenance
+
+`summaries` (level/state/content_json/fingerprints/contract/generation/model/
+provider/timestamps) plus `summary_sources`/`summary_chunks` association tables
+preserve lineage for later citations. State is `Pending | Ready | Failed |
+Stale` (`Stale` ≠ `Failed`). Content is the validated structured contract
+`{summary, topics[], decisions[], action_items[], questions[]}` where each item
+carries `evidence` labels (`E1..` for documents, `P1..` for synthesis) that must
+resolve to the supplied evidence set, else they are stripped. Absence is
+represented explicitly, never hallucinated.
+
+### Cache, fingerprint, invalidation, delete
+
+A node reuses when its input fingerprint (source ids + chunk ids + contract
+version + model identity) is unchanged and `Ready`. A changed source invalidates
+only `invalidate_document_summaries` → `invalidate_summary` transitively through
+the `summary_sources` graph; unrelated summaries stay `Ready`. Deletion
+(`remove`) marks the deleted source's lineage `Stale`. A failed synthesis never
+replaces a valid `Ready` summary; provider unavailability keeps cached summaries
+readable.
+
+SUMMARIZATION REMOTE LLM CALLS: ZERO on a full cache hit; nonzero only when a
+stale/missing node must actually be synthesized. All ingestion/embedding/
+retrieval/context-assembly/invalidation/cache-lookup remain local (zero remote
+calls), exactly as in K1–K5.
+
+Fingerprint output hash, source provenance, and content are persisted; no
+prompt, chunk text, provider secret, or raw provider request body is stored.
+Structural acceptance uses a deterministic capture summarizer (zero spend);
+tests live in `crates/project-app/tests/summarization.rs` and in
+`project-knowledge` `summary.rs` unit tests.
