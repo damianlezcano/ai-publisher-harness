@@ -1,5 +1,11 @@
 # Current Checkpoint
 
+## KNOWLEDGE HYBRID RETRIEVAL PASS COMPLETE (2026-09-05)
+
+- **K3:** project-local hybrid retrieval now fuses preserved FTS5/BM25 lexical candidates with K2 active-generation exact semantic candidates using deterministic RRF (`k=60`). It overfetches 40 candidates per signal for a default final limit of 10, keeps lexical/semantic ranks and scores plus provenance/signal metadata, deduplicates canonical chunks and source aliases, applies conservative three-per-document and three-per-source caps, and uses a bounded 0.02 post-RRF boost only for NFC/lowercase exact identifier-like tokens (letters + digits with meaningful `-`, `_`, `:`, `/` punctuation). Semantic absence degrades to lexical-only with explicit availability metadata; partial vector coverage remains lexically searchable and only valid active-generation vectors contribute. Neighbor expansion is intentionally not implemented; Context Assembly is not started. No schema, package, native runtime, or dependency change. HYBRID RETRIEVAL REMOTE LLM CALLS: ZERO.
+- **Status:** FTS5 + exact semantic + RRF implemented. **CONTEXT ASSEMBLY NOT STARTED. M11: NOT STARTED.** Windows released features remain HUMAN-PASS; Knowledge Windows embeddings runtime remains NOT YET HUMAN-VALIDATED.
+- **Validation:** focused deterministic RRF/exact-ID/diversity/fallback/project-isolation/Spanish partial-vector tests plus preserved K1/K2 tests pass; full workspace and verification results are recorded with this pass.
+
 ## KNOWLEDGE LOCAL EMBEDDINGS PASS COMPLETE (2026-09-05)
 
 - **K2:** verified multilingual-e5-small fp32, Rust tokenizer, schema v2 vectors, incremental current-generation reuse, exact project-local semantic retrieval, and K1 lexical preservation are complete. DOCUMENT EMBEDDING REMOTE LLM CALLS: ZERO. QUERY EMBEDDING REMOTE LLM CALLS: ZERO.

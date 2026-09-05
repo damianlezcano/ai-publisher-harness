@@ -14,6 +14,7 @@ pub use model::{
 };
 pub use ort_provider::{OrtEmbeddingProvider, runtime_library_from_executable};
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,6 +45,7 @@ pub enum KnowledgeError {
     InputTooLong,
     InvalidEmbedding(String),
     Inference(String),
+    InvalidSearchOptions(String),
 }
 
 impl std::fmt::Display for KnowledgeError {
@@ -70,6 +72,9 @@ impl std::fmt::Display for KnowledgeError {
             Self::InputTooLong => f.write_str("Knowledge input cannot fit the model hard limit"),
             Self::InvalidEmbedding(message) => write!(f, "invalid Knowledge embedding: {message}"),
             Self::Inference(message) => write!(f, "Knowledge local inference error: {message}"),
+            Self::InvalidSearchOptions(message) => {
+                write!(f, "invalid Knowledge hybrid search options: {message}")
+            }
         }
     }
 }
@@ -135,6 +140,7 @@ pub struct IndexOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchResult {
     pub document_id: String,
+    pub source_id: String,
     pub source_name: String,
     pub source_relative_path: String,
     pub chunk_id: String,
@@ -189,6 +195,7 @@ pub trait EmbeddingProvider {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticSearchResult {
     pub document_id: String,
+    pub source_id: String,
     pub source_name: String,
     pub source_relative_path: String,
     pub chunk_id: String,
@@ -202,6 +209,69 @@ pub struct SemanticSearchResult {
 pub struct EmbeddingIndexOutcome {
     pub embedded: usize,
     pub reused: usize,
+}
+
+/// Bounded controls for project-local hybrid retrieval.  Candidate lists are
+/// intentionally overfetched before fusion; no query-specific state is stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HybridSearchOptions {
+    pub final_limit: usize,
+    pub lexical_candidate_limit: usize,
+    pub semantic_candidate_limit: usize,
+    pub rrf_k: usize,
+    pub max_per_document: usize,
+    pub max_per_source: usize,
+    /// A bounded additive preference for a literal identifier match. It never
+    /// replaces RRF and is only used for identifier-like query tokens.
+    pub exact_identifier_boost: f64,
+}
+
+impl Default for HybridSearchOptions {
+    fn default() -> Self {
+        Self {
+            final_limit: 10,
+            lexical_candidate_limit: 40,
+            semantic_candidate_limit: 40,
+            rrf_k: 60,
+            max_per_document: 3,
+            max_per_source: 3,
+            exact_identifier_boost: 0.02,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticAvailability {
+    Available,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HybridMatchSignals {
+    pub lexical_match: bool,
+    pub semantic_match: bool,
+    pub exact_identifier_match: bool,
+    /// K3 does not expand neighbors. Reserved for future context assembly
+    /// candidates without changing the evidence contract.
+    pub neighbor_of: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HybridSearchResult {
+    pub document_id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub source_relative_path: String,
+    pub chunk_id: String,
+    pub chunk_text: String,
+    pub provenance: Provenance,
+    pub lexical_rank: Option<usize>,
+    pub semantic_rank: Option<usize>,
+    pub lexical_score: Option<f64>,
+    pub semantic_score: Option<f32>,
+    pub fusion_score: f64,
+    pub embedding_generation_id: Option<String>,
+    pub signals: HybridMatchSignals,
 }
 
 /// SQLite-backed derived Knowledge data for exactly one existing project.
@@ -338,7 +408,7 @@ impl KnowledgeStore {
         }
         let limit = i64::try_from(limit.min(100)).unwrap_or(100);
         let mut statement = self.connection.prepare(
-            "SELECT c.document_id, ms.source_name, ms.source_relative_path, c.chunk_id, c.text,
+            "SELECT c.document_id, ms.material_id, ms.source_name, ms.source_relative_path, c.chunk_id, c.text,
                     -bm25(chunk_fts) AS score, c.start_offset, c.end_offset, c.start_line, c.end_line,
                     c.heading_path, c.structural_type
              FROM chunk_fts
@@ -349,25 +419,26 @@ impl KnowledgeStore {
              LIMIT ?2"
         )?;
         let rows = statement.query_map(params![query, limit], |row| {
-            let headings: String = row.get(10)?;
+            let headings: String = row.get(11)?;
             Ok(SearchResult {
                 document_id: row.get(0)?,
-                source_name: row.get(1)?,
-                source_relative_path: row.get(2)?,
-                chunk_id: row.get(3)?,
-                chunk_text: row.get(4)?,
-                score: row.get(5)?,
+                source_id: row.get(1)?,
+                source_name: row.get(2)?,
+                source_relative_path: row.get(3)?,
+                chunk_id: row.get(4)?,
+                chunk_text: row.get(5)?,
+                score: row.get(6)?,
                 provenance: Provenance {
-                    start_offset: row.get(6)?,
-                    end_offset: row.get(7)?,
-                    start_line: row.get(8)?,
-                    end_line: row.get(9)?,
+                    start_offset: row.get(7)?,
+                    end_offset: row.get(8)?,
+                    start_line: row.get(9)?,
+                    end_line: row.get(10)?,
                     heading_path: headings
                         .split('\u{1f}')
                         .filter(|s| !s.is_empty())
                         .map(str::to_owned)
                         .collect(),
-                    structural_type: row.get(11)?,
+                    structural_type: row.get(12)?,
                 },
             })
         })?;
@@ -469,7 +540,7 @@ impl KnowledgeStore {
         let query_vector = provider.embed_query(query)?;
         validate_vector(&query_vector)?;
         let mut statement = self.connection.prepare(
-            "SELECT c.document_id, ms.source_name, ms.source_relative_path, c.chunk_id, c.text,
+            "SELECT c.document_id, ms.material_id, ms.source_name, ms.source_relative_path, c.chunk_id, c.text,
                     e.vector, e.generation_id, c.start_offset, c.end_offset, c.start_line, c.end_line,
                     c.heading_path, c.structural_type
              FROM chunk_embeddings e JOIN chunks c ON c.chunk_id=e.chunk_id
@@ -483,20 +554,22 @@ impl KnowledgeStore {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Vec<u8>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, usize>(7)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, String>(7)?,
                 row.get::<_, usize>(8)?,
                 row.get::<_, usize>(9)?,
                 row.get::<_, usize>(10)?,
-                row.get::<_, String>(11)?,
+                row.get::<_, usize>(11)?,
                 row.get::<_, String>(12)?,
+                row.get::<_, String>(13)?,
             ))
         })?;
         let mut results = Vec::new();
         for row in rows {
             let (
                 document_id,
+                source_id,
                 source_name,
                 source_relative_path,
                 chunk_id,
@@ -514,6 +587,7 @@ impl KnowledgeStore {
             let similarity = dot_product(&query_vector, &vector)?;
             results.push(SemanticSearchResult {
                 document_id,
+                source_id,
                 source_name,
                 source_relative_path,
                 chunk_id,
@@ -544,9 +618,285 @@ impl KnowledgeStore {
         Ok(results)
     }
 
+    /// Fuses bounded FTS5/BM25 and current-generation exact semantic results
+    /// with RRF. `None` means a local semantic runtime/model is unavailable;
+    /// lexical results remain usable and `semantic_availability` reports that.
+    pub fn hybrid_search(
+        &self,
+        query: &str,
+        provider: Option<&mut dyn EmbeddingProvider>,
+        options: HybridSearchOptions,
+    ) -> Result<(Vec<HybridSearchResult>, SemanticAvailability)> {
+        validate_hybrid_options(&options)?;
+        if fts_query(query).is_empty() {
+            return Ok((vec![], SemanticAvailability::Unavailable));
+        }
+        let lexical = self.search(query, options.lexical_candidate_limit)?;
+        let (semantic, availability) = match provider {
+            None => (vec![], SemanticAvailability::Unavailable),
+            Some(provider) => {
+                match self.semantic_search(provider, query, options.semantic_candidate_limit) {
+                    Ok(results) => (results, SemanticAvailability::Available),
+                    Err(KnowledgeError::ModelUnavailable) => {
+                        (vec![], SemanticAvailability::Unavailable)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        };
+        Ok((
+            fuse_hybrid_results(query, &lexical, &semantic, &options),
+            availability,
+        ))
+    }
+
     pub fn project_id(&self) -> &str {
         &self.project_id
     }
+}
+
+#[derive(Clone)]
+struct FusionCandidate {
+    document_id: String,
+    source_id: String,
+    source_name: String,
+    source_relative_path: String,
+    chunk_id: String,
+    chunk_text: String,
+    provenance: Provenance,
+    lexical_rank: Option<usize>,
+    semantic_rank: Option<usize>,
+    lexical_score: Option<f64>,
+    semantic_score: Option<f32>,
+    embedding_generation_id: Option<String>,
+}
+
+fn validate_hybrid_options(options: &HybridSearchOptions) -> Result<()> {
+    if options.final_limit == 0
+        || options.final_limit > 20
+        || options.lexical_candidate_limit == 0
+        || options.lexical_candidate_limit > 100
+        || options.semantic_candidate_limit == 0
+        || options.semantic_candidate_limit > 100
+        || options.rrf_k == 0
+        || options.rrf_k > 1_000
+        || options.max_per_document == 0
+        || options.max_per_document > 20
+        || options.max_per_source == 0
+        || options.max_per_source > 20
+        || !options.exact_identifier_boost.is_finite()
+        || !(0.0..=0.1).contains(&options.exact_identifier_boost)
+    {
+        return Err(KnowledgeError::InvalidSearchOptions(
+            "limits must be bounded and exact identifier boost must be 0.0..=0.1".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn fuse_hybrid_results(
+    query: &str,
+    lexical: &[SearchResult],
+    semantic: &[SemanticSearchResult],
+    options: &HybridSearchOptions,
+) -> Vec<HybridSearchResult> {
+    // BTreeMap makes deduplication and all tie paths independent of hash order.
+    let mut candidates = BTreeMap::<String, FusionCandidate>::new();
+    for (index, result) in lexical.iter().enumerate() {
+        let entry = candidates
+            .entry(result.chunk_id.clone())
+            .or_insert_with(|| FusionCandidate {
+                document_id: result.document_id.clone(),
+                source_id: result.source_id.clone(),
+                source_name: result.source_name.clone(),
+                source_relative_path: result.source_relative_path.clone(),
+                chunk_id: result.chunk_id.clone(),
+                chunk_text: result.chunk_text.clone(),
+                provenance: result.provenance.clone(),
+                lexical_rank: None,
+                semantic_rank: None,
+                lexical_score: None,
+                semantic_score: None,
+                embedding_generation_id: None,
+            });
+        if entry.lexical_rank.is_none() {
+            entry.lexical_rank = Some(index + 1);
+            entry.lexical_score = Some(result.score);
+        }
+        prefer_source(
+            entry,
+            &result.source_id,
+            &result.source_name,
+            &result.source_relative_path,
+        );
+    }
+    for (index, result) in semantic.iter().enumerate() {
+        let entry = candidates
+            .entry(result.chunk_id.clone())
+            .or_insert_with(|| FusionCandidate {
+                document_id: result.document_id.clone(),
+                source_id: result.source_id.clone(),
+                source_name: result.source_name.clone(),
+                source_relative_path: result.source_relative_path.clone(),
+                chunk_id: result.chunk_id.clone(),
+                chunk_text: result.chunk_text.clone(),
+                provenance: result.provenance.clone(),
+                lexical_rank: None,
+                semantic_rank: None,
+                lexical_score: None,
+                semantic_score: None,
+                embedding_generation_id: Some(result.generation_id.clone()),
+            });
+        if entry.semantic_rank.is_none() {
+            entry.semantic_rank = Some(index + 1);
+            entry.semantic_score = Some(result.similarity);
+        }
+        entry.embedding_generation_id = Some(result.generation_id.clone());
+        prefer_source(
+            entry,
+            &result.source_id,
+            &result.source_name,
+            &result.source_relative_path,
+        );
+    }
+    let identifiers = exact_identifier_tokens(query);
+    let mut ranked = candidates
+        .into_values()
+        .map(|candidate| {
+            let rrf = candidate
+                .lexical_rank
+                .map_or(0.0, |rank| 1.0 / (options.rrf_k + rank) as f64)
+                + candidate
+                    .semantic_rank
+                    .map_or(0.0, |rank| 1.0 / (options.rrf_k + rank) as f64);
+            let exact = !identifiers.is_empty()
+                && candidate_contains_identifier(&candidate.chunk_text, &identifiers);
+            let fusion_score = rrf
+                + if exact {
+                    options.exact_identifier_boost
+                } else {
+                    0.0
+                };
+            HybridSearchResult {
+                document_id: candidate.document_id,
+                source_id: candidate.source_id,
+                source_name: candidate.source_name,
+                source_relative_path: candidate.source_relative_path,
+                chunk_id: candidate.chunk_id,
+                chunk_text: candidate.chunk_text,
+                provenance: candidate.provenance,
+                lexical_rank: candidate.lexical_rank,
+                semantic_rank: candidate.semantic_rank,
+                lexical_score: candidate.lexical_score,
+                semantic_score: candidate.semantic_score,
+                fusion_score,
+                embedding_generation_id: candidate.embedding_generation_id,
+                signals: HybridMatchSignals {
+                    lexical_match: candidate.lexical_rank.is_some(),
+                    semantic_match: candidate.semantic_rank.is_some(),
+                    exact_identifier_match: exact,
+                    neighbor_of: None,
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .fusion_score
+            .total_cmp(&left.fusion_score)
+            .then_with(|| best_rank(left).cmp(&best_rank(right)))
+            .then_with(|| {
+                left.lexical_rank
+                    .unwrap_or(usize::MAX)
+                    .cmp(&right.lexical_rank.unwrap_or(usize::MAX))
+            })
+            .then_with(|| {
+                left.semantic_rank
+                    .unwrap_or(usize::MAX)
+                    .cmp(&right.semantic_rank.unwrap_or(usize::MAX))
+            })
+            .then_with(|| left.document_id.cmp(&right.document_id))
+            .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+    });
+    let mut document_counts = BTreeMap::<String, usize>::new();
+    let mut source_counts = BTreeMap::<String, usize>::new();
+    ranked
+        .into_iter()
+        .filter(|result| {
+            let document = document_counts
+                .get(&result.document_id)
+                .copied()
+                .unwrap_or(0);
+            let source = source_counts
+                .get(&result.source_relative_path)
+                .copied()
+                .unwrap_or(0);
+            if document >= options.max_per_document || source >= options.max_per_source {
+                return false;
+            }
+            document_counts.insert(result.document_id.clone(), document + 1);
+            source_counts.insert(result.source_relative_path.clone(), source + 1);
+            true
+        })
+        .take(options.final_limit)
+        .collect()
+}
+
+fn prefer_source(candidate: &mut FusionCandidate, id: &str, name: &str, path: &str) {
+    if path < candidate.source_relative_path.as_str()
+        || (path == candidate.source_relative_path && name < candidate.source_name.as_str())
+    {
+        candidate.source_id = id.to_owned();
+        candidate.source_name = name.to_owned();
+        candidate.source_relative_path = path.to_owned();
+    }
+}
+fn best_rank(result: &HybridSearchResult) -> usize {
+    result
+        .lexical_rank
+        .into_iter()
+        .chain(result.semantic_rank)
+        .min()
+        .unwrap_or(usize::MAX)
+}
+fn exact_identifier_tokens(value: &str) -> BTreeSet<String> {
+    value
+        .nfc()
+        .collect::<String>()
+        .split_whitespace()
+        .filter_map(|raw| {
+            let token = raw.trim_matches(|c: char| {
+                !c.is_alphanumeric() && !matches!(c, '-' | '_' | ':' | '/')
+            });
+            let has_letter = token.chars().any(char::is_alphabetic);
+            let has_digit = token.chars().any(|c| c.is_ascii_digit());
+            (has_letter
+                && has_digit
+                && token
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '/')))
+            .then(|| token.to_lowercase())
+        })
+        .collect()
+}
+fn candidate_contains_identifier(text: &str, identifiers: &BTreeSet<String>) -> bool {
+    text.nfc()
+        .collect::<String>()
+        .split(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    ',' | '.' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
+                )
+        })
+        .flat_map(|token| {
+            let normalized = token
+                .trim_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '-' | '_' | ':' | '/'))
+                .to_lowercase();
+            let stripped = normalized.trim_end_matches([':', '/', '-', '_']).to_owned();
+            [normalized, stripped]
+        })
+        .any(|token| identifiers.contains(&token))
 }
 
 fn migrate(connection: &Connection) -> Result<()> {
@@ -1250,5 +1600,211 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].chunk_text.contains("OpenShift"));
         assert!(results[0].similarity > results[1].similarity);
+    }
+
+    fn synthetic_lexical(
+        chunk_id: &str,
+        document_id: &str,
+        source: &str,
+        text: &str,
+    ) -> SearchResult {
+        SearchResult {
+            document_id: document_id.to_owned(),
+            source_id: source.to_owned(),
+            source_name: source.to_owned(),
+            source_relative_path: format!("inputs/{source}/source.txt"),
+            chunk_id: chunk_id.to_owned(),
+            chunk_text: text.to_owned(),
+            score: 1.0,
+            provenance: Provenance {
+                start_offset: 0,
+                end_offset: text.len(),
+                start_line: 1,
+                end_line: 1,
+                heading_path: vec![],
+                structural_type: "paragraph".to_owned(),
+            },
+        }
+    }
+    fn synthetic_semantic(
+        chunk_id: &str,
+        document_id: &str,
+        source: &str,
+        text: &str,
+        similarity: f32,
+    ) -> SemanticSearchResult {
+        SemanticSearchResult {
+            document_id: document_id.to_owned(),
+            source_id: source.to_owned(),
+            source_name: source.to_owned(),
+            source_relative_path: format!("inputs/{source}/source.txt"),
+            chunk_id: chunk_id.to_owned(),
+            chunk_text: text.to_owned(),
+            similarity,
+            generation_id: "active-generation".to_owned(),
+            provenance: Provenance {
+                start_offset: 0,
+                end_offset: text.len(),
+                start_line: 1,
+                end_line: 1,
+                heading_path: vec![],
+                structural_type: "paragraph".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn rrf_fuses_deduplicates_and_orders_deterministically() {
+        let lexical = vec![
+            synthetic_lexical("a", "doc-a", "a", "uno"),
+            synthetic_lexical("b", "doc-b", "b", "dos"),
+        ];
+        let semantic = vec![
+            synthetic_semantic("b", "doc-b", "b", "dos", 0.9),
+            synthetic_semantic("a", "doc-a", "a", "uno", 0.8),
+            synthetic_semantic("c", "doc-c", "c", "tres", 0.7),
+        ];
+        let options = HybridSearchOptions {
+            final_limit: 3,
+            ..Default::default()
+        };
+        let first = fuse_hybrid_results("consulta", &lexical, &semantic, &options);
+        let second = fuse_hybrid_results("consulta", &lexical, &semantic, &options);
+        assert_eq!(first, second);
+        assert_eq!(
+            first
+                .iter()
+                .map(|r| r.chunk_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert!(first[0].signals.lexical_match && first[0].signals.semantic_match);
+        assert_eq!(first[2].lexical_rank, None);
+        assert_eq!(
+            first[0].embedding_generation_id.as_deref(),
+            Some("active-generation")
+        );
+    }
+
+    #[test]
+    fn exact_identifiers_are_case_normalized_without_boosting_normal_language() {
+        let lexical = vec![synthetic_lexical(
+            "related",
+            "related",
+            "r",
+            "Incidente general relacionado",
+        )];
+        let semantic = vec![
+            synthetic_semantic(
+                "related",
+                "related",
+                "r",
+                "Incidente general relacionado",
+                0.99,
+            ),
+            synthetic_semantic("exact", "exact", "e", "Ticket INC-12345 confirmado", 0.10),
+        ];
+        let results = fuse_hybrid_results(
+            "inc-12345",
+            &lexical,
+            &semantic,
+            &HybridSearchOptions::default(),
+        );
+        assert_eq!(results[0].chunk_id, "exact");
+        assert!(results[0].signals.exact_identifier_match);
+        assert!(exact_identifier_tokens("problema de memoria").is_empty());
+        assert!(exact_identifier_tokens("RFC-999").contains("rfc-999"));
+    }
+
+    #[test]
+    fn diversity_caps_and_options_are_enforced() {
+        let lexical = vec![
+            synthetic_lexical("a", "doc-a", "same", "a"),
+            synthetic_lexical("b", "doc-a", "same", "b"),
+            synthetic_lexical("c", "doc-c", "other", "c"),
+        ];
+        let options = HybridSearchOptions {
+            final_limit: 3,
+            max_per_document: 1,
+            max_per_source: 1,
+            ..Default::default()
+        };
+        let results = fuse_hybrid_results("consulta", &lexical, &[], &options);
+        assert_eq!(
+            results
+                .iter()
+                .map(|r| r.chunk_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "c"]
+        );
+        assert!(matches!(
+            validate_hybrid_options(&HybridSearchOptions {
+                final_limit: 0,
+                ..Default::default()
+            }),
+            Err(KnowledgeError::InvalidSearchOptions(_))
+        ));
+    }
+
+    #[test]
+    fn hybrid_falls_back_to_lexical_when_semantic_is_unavailable_and_projects_isolate() {
+        let (one, pid) = root();
+        let (two, pid2) = root();
+        let mut first = KnowledgeStore::open(one.path().join(PID), &pid).unwrap();
+        let second = KnowledgeStore::open(two.path().join(PID), &pid2).unwrap();
+        first
+            .index(&source("incidente.txt"), b"INC-12345: incidente de memoria")
+            .unwrap();
+        let (results, availability) = first
+            .hybrid_search("INC-12345", None, HybridSearchOptions::default())
+            .unwrap();
+        assert_eq!(availability, SemanticAvailability::Unavailable);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].signals.lexical_match && results[0].signals.exact_identifier_match);
+        assert!(
+            second
+                .hybrid_search("INC-12345", None, HybridSearchOptions::default())
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn spanish_hybrid_sanity_uses_both_signals_with_partial_vectors() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        store.index(&source("openshift.txt"), b"Los operadores administran automaticamente instalacion, actualizacion y reconciliacion de componentes OpenShift.").unwrap();
+        let mut incident = source("incidente.txt");
+        incident.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        incident.relative_path = format!("inputs/{}/incidente.txt", incident.material_id);
+        store
+            .index(&incident, b"INC-12345: incidente de memoria.")
+            .unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        // Embed only the OpenShift chunk: the incident remains lexically searchable.
+        store.record_generation(provider.generation()).unwrap();
+        let open = store.search("OpenShift", 1).unwrap().remove(0);
+        store.connection.execute("INSERT INTO chunk_embeddings(chunk_id, generation_id, vector, dimensions, normalized, state, embedded_at) VALUES(?1, ?2, ?3, 384, 1, 'ready', 0)", params![open.chunk_id, provider.generation().generation_id, serialize_vector(&basis(0)).unwrap()]).unwrap();
+        let (semantic, availability) = store
+            .hybrid_search(
+                "Como se automatiza el ciclo de vida de componentes?",
+                Some(&mut provider),
+                HybridSearchOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(availability, SemanticAvailability::Available);
+        assert_eq!(semantic[0].source_name, "openshift.txt");
+        let (exact, _) = store
+            .hybrid_search(
+                "INC-12345",
+                Some(&mut provider),
+                HybridSearchOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(exact[0].source_name, "incidente.txt");
     }
 }

@@ -68,6 +68,14 @@ No PostgreSQL, Qdrant, Elasticsearch, Docker, or permanent service.
 
 Run lexical FTS and vector search in parallel. Merge ranked lists through reciprocal-rank fusion (RRF), rather than assuming BM25 and vector scores are directly comparable; boost exact normalized identifiers, source names, speakers and dates through explicit, testable rules. Deduplicate by content hash and diversify by source/document. Add a limited neighboring-chunk window only when it fits the budget. A future small multilingual local cross-encoder may rerank the already small merged set, but V1 does not add a second model/runtime.
 
+### K3 implemented hybrid retrieval contract
+
+K3 exposes one project-local `hybrid_search(query, optional_provider, options)` API. Its defaults return up to 10 candidates after bounded overfetch of 40 FTS5/BM25 and 40 active-generation exact-semantic candidates. Fusion is `sum(1 / (60 + rank))`; ties are resolved by best rank, lexical rank, semantic rank, document id, then chunk id. This deliberately does not calibrate BM25 against vector similarity.
+
+Identifier-like tokens must contain letters and ASCII digits and may retain `-`, `_`, `:` or `/`; they are NFC-normalized and lowercased. An exact candidate occurrence receives the bounded post-RRF additive preference of 0.02, never replacing RRF. Natural-language-only queries receive no identifier boost. The fusion stage deduplicates a canonical chunk across both signals and alias sources, chooses a stable source representative, and applies conservative caps of three candidates per canonical document and three per source path.
+
+Neighbor expansion is intentionally **not implemented in K3**: Context Assembly is not started, and no adjacent chunk is represented as a direct match. Result signal metadata reserves `neighbor_of` as `None` for a later bounded evidence-package pass. Missing local semantic capability returns lexical-only results with semantic availability marked unavailable; corrupt semantic data still follows K2's typed error/recovery path. Only ready vectors from the provider's active generation participate. There is no ANN, vector extension, reranker, persistent query state, or remote fallback. HYBRID RETRIEVAL REMOTE LLM CALLS: ZERO.
+
 Context assembly is provider-independent: intent/request → retrieval → ranking → token/character budget → evidence package containing excerpts and provenance. It enforces top-k, per-source caps, diversity, and a hard budget; it never forwards all attachments implicitly. The FTS query builder must escape/tokenize raw user text rather than interpolate FTS syntax.
 
 ## 11. Question answering vs corpus summarization
