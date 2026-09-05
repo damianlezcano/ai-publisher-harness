@@ -63,18 +63,34 @@ fn atomic_write(path: &Path, content: &[u8]) -> CoreResult<()> {
     tmp.as_file()
         .sync_all()
         .map_err(|_| ProjectCoreError::WriteFailed)?;
-    fsync_dir(parent)?;
+    sync_parent_dir(parent)?;
     tmp.persist(path)
         .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
-    fsync_dir(parent)?;
+    sync_parent_dir(parent)?;
     Ok(())
 }
 
-/// Fsync a directory to ensure directory entries are durable.
-fn fsync_dir(dir: &Path) -> CoreResult<()> {
+/// Synchronize the directory containing an atomic rename where the platform
+/// provides a directory-durability primitive.
+///
+/// Unix `fsync` on a directory makes the renamed directory entry durable. On
+/// Windows, the file contents are still flushed with `File::sync_all` before
+/// the atomic rename, but Win32 does not provide the corresponding
+/// directory-handle flush primitive: `FlushFileBuffers` is documented for
+/// writable file and volume handles, not directory handles. Do not try to
+/// open a directory with ordinary file semantics there; it fails before the
+/// metadata write can be committed. This is an explicit platform durability
+/// boundary, not suppression of file-write or rename failures.
+#[cfg(unix)]
+pub(crate) fn sync_parent_dir(dir: &Path) -> CoreResult<()> {
     fs::File::open(dir)
         .and_then(|f| f.sync_all())
         .map_err(|_| ProjectCoreError::WriteFailed)
+}
+
+#[cfg(windows)]
+pub(crate) fn sync_parent_dir(_dir: &Path) -> CoreResult<()> {
+    Ok(())
 }
 
 pub(crate) fn read_json(path: &Path) -> CoreResult<Project> {
@@ -379,12 +395,12 @@ impl ProjectRepository for FilesystemProjectRepository {
         }
 
         write_json(&staging.path().join(PROJECT_JSON), project)?;
-        fsync_dir(staging.path())?;
+        sync_parent_dir(staging.path())?;
 
         let target = self.project_dir(&project.id);
         fs::rename(staging.keep(), &target).map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
         if let Some(parent) = target.parent() {
-            let _ = fsync_dir(parent);
+            sync_parent_dir(parent)?;
         }
 
         Ok(())
@@ -476,10 +492,10 @@ impl ProjectRepository for FilesystemProjectRepository {
             tmp.as_file()
                 .sync_all()
                 .map_err(|_| ProjectCoreError::WriteFailed)?;
-            fsync_dir(parent)?;
+            sync_parent_dir(parent)?;
             tmp.persist(&pj)
                 .map_err(|_| ProjectCoreError::AtomicWriteFailed)?;
-            fsync_dir(parent)?;
+            sync_parent_dir(parent)?;
             // Containment re-check after the rename is complete.
             let canon_now = fs::canonicalize(&pj).map_err(|_| ProjectCoreError::WriteFailed)?;
             if !canon_now.starts_with(&canon_project) {
@@ -499,7 +515,7 @@ impl ProjectRepository for FilesystemProjectRepository {
         }
         fs::remove_dir_all(&dir).map_err(|_| ProjectCoreError::WriteFailed)?;
         if let Some(parent) = dir.parent() {
-            let _ = fsync_dir(parent);
+            sync_parent_dir(parent)?;
         }
         Ok(())
     }

@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use tempfile::Builder;
 
 use crate::{
-    PROJECTS_DIR, ProjectPublishRootProvider, canon_project_dir, fsync_dir, reject_symlink_path,
+    PROJECTS_DIR, ProjectPublishRootProvider, canon_project_dir, reject_symlink_path,
+    sync_parent_dir,
 };
 
 const STAGING_PREFIX: &str = ".publish-staging-";
@@ -155,7 +156,7 @@ impl PublicationSnapshotStore {
                 fs::rename(&previous, &publish).map_err(|_| ProjectCoreError::OperationFailed {
                     operation: "recover",
                 })?;
-                fsync_dir(&project_dir)?;
+                sync_parent_dir(&project_dir)?;
                 validate_publish(&self.base, project_id)?;
             } else {
                 return Err(ProjectCoreError::OperationFailed {
@@ -165,7 +166,7 @@ impl PublicationSnapshotStore {
             fs::remove_file(path).map_err(|_| ProjectCoreError::OperationFailed {
                 operation: "recover",
             })?;
-            fsync_dir(&project_dir)?;
+            sync_parent_dir(&project_dir)?;
         }
         // A staging sibling has never been installed and can be safely removed.
         for entry in fs::read_dir(&project_dir).map_err(|_| ProjectCoreError::StorageUnavailable)? {
@@ -283,7 +284,7 @@ impl PublicationSnapshotStore {
                 .map_err(|_| ProjectCoreError::WriteFailed)?
                 .as_slice(),
         )?;
-        fsync_dir(project_dir)?;
+        sync_parent_dir(project_dir)?;
         if self.fault == Some(SnapshotFault::AfterJournal) {
             let _ = fs::remove_file(&journal_path);
             return Err(ProjectCoreError::OperationFailed { operation: "swap" });
@@ -317,11 +318,11 @@ impl PublicationSnapshotStore {
             }
             return Err(ProjectCoreError::OperationFailed { operation: "swap" });
         }
-        fsync_dir(project_dir)?;
+        sync_parent_dir(project_dir)?;
         let root = validate_publish(&self.base, &project.id)?;
         fs::remove_file(&journal_path)
             .map_err(|_| ProjectCoreError::OperationFailed { operation: "swap" })?;
-        fsync_dir(project_dir)?;
+        sync_parent_dir(project_dir)?;
         Ok(PublicationSnapshot {
             project_id: project.id.clone(),
             publish_root: root,
@@ -448,7 +449,7 @@ fn fsync_tree(path: &Path) -> CoreResult<()> {
                 .map_err(|_| ProjectCoreError::WriteFailed)?;
         }
     }
-    fsync_dir(path)
+    sync_parent_dir(path)
 }
 fn validate_component(name: &str, root: bool) -> CoreResult<()> {
     if name.is_empty()

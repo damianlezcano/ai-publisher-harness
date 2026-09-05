@@ -1727,6 +1727,31 @@ fn list_ignores_non_id_directories() {
 
 // --- 5. Exclusive staging/temp creation ---
 
+/// Windows regression: the initial project must survive the complete
+/// repository path (create, list, reopen). Before the platform-aware parent
+/// sync boundary, creation failed while trying to open the staging directory
+/// with ordinary file semantics.
+#[cfg(windows)]
+#[test]
+fn windows_first_project_creation_persists_across_reopen() {
+    let base = tmp_dir("windows-first-project-persistence");
+    let mut repo = FilesystemProjectRepository::new(&base);
+    let project = project_core::Project::new(
+        fake_project_id(),
+        ProjectName::parse("Nueva conversacion").unwrap(),
+        Timestamp::parse("2026-09-04T12:00:00Z").unwrap(),
+    );
+
+    assert!(repo.list().unwrap().is_empty());
+    repo.create(&project).unwrap();
+    assert!(project_json_path(&base, project.id.as_str()).is_file());
+    assert_eq!(repo.list().unwrap(), vec![project.clone()]);
+
+    let reopened = FilesystemProjectRepository::new(&base);
+    assert_eq!(reopened.get(&project.id).unwrap(), project);
+    assert_eq!(reopened.list().unwrap(), vec![project]);
+}
+
 #[test]
 fn pre_existing_staging_dir_does_not_block_or_corrupt_create() {
     let base = tmp_dir("exclusive-staging");
