@@ -46,7 +46,8 @@ impl CloudflareQuickTunnel {
         }
     }
 
-    /// Append an environment variable used at spawn (after the minimal PATH/HOME).
+    /// Append an environment variable used at spawn (after the managed child
+    /// env: PATH/HOME plus the Windows SYSTEMROOT).
     pub fn with_env(mut self, key: String, value: String) -> Self {
         self.extra_env.push((key, value));
         self
@@ -86,17 +87,7 @@ impl CloudflareQuickTunnel {
             "--loglevel".to_string(),
             "info".to_string(),
         ];
-        let mut envs = vec![
-            (
-                "PATH".to_string(),
-                std::env::var("PATH").unwrap_or_default(),
-            ),
-            (
-                "HOME".to_string(),
-                std::env::var("HOME").unwrap_or_default(),
-            ),
-        ];
-        envs.extend(self.extra_env.iter().cloned());
+        let envs = build_child_env(&self.extra_env);
 
         let guard = ChildGuard::spawn(&binary, &argv, &envs)
             .map_err(map_process_error)
@@ -139,6 +130,49 @@ impl CloudflareQuickTunnel {
             thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+/// Child environment for `cloudflared`. The supervisor clears the inherited
+/// environment; only PATH/HOME and (on Windows) the parent `SYSTEMROOT` value
+/// are provided, plus any test-only `extra_env`.
+///
+/// Windows DNS/getaddrinfo requires `SYSTEMROOT` after `env_clear`: without it
+/// `cloudflared` cannot resolve `api.trycloudflare.com`, the Quick Tunnel
+/// request fails, and the process exits with code 1. Only that single variable
+/// is forwarded; no other parent variable is inherited. Non-Windows targets
+/// forward nothing extra.
+pub fn build_child_env(extra_env: &[(String, String)]) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        ),
+        (
+            "HOME".to_string(),
+            std::env::var("HOME").unwrap_or_default(),
+        ),
+    ];
+    env.extend(windows_systemroot_env());
+    env.extend(extra_env.iter().cloned());
+    env
+}
+
+/// On Windows the reconstructed child environment must carry the parent
+/// `SYSTEMROOT` value verbatim, mirroring the proven OpenCode child policy.
+/// When the parent value is absent the existing minimal convention applies
+/// (empty value, no hardcoded fallback); the launch keeps the existing
+/// process-exit surfacing.
+#[cfg(windows)]
+fn windows_systemroot_env() -> Vec<(String, String)> {
+    vec![(
+        "SYSTEMROOT".to_string(),
+        std::env::var("SYSTEMROOT").unwrap_or_default(),
+    )]
+}
+
+#[cfg(not(windows))]
+fn windows_systemroot_env() -> Vec<(String, String)> {
+    Vec::new()
 }
 
 fn map_process_error(err: ProcessError) -> TunnelError {
@@ -241,5 +275,75 @@ impl Drop for CloudflareQuickTunnel {
                 guard.force_kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_child_env;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn child_env_keeps_managed_keys_and_forwards_windows_systemroot() {
+        let env = build_child_env(&[]);
+        let keys: BTreeSet<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+
+        let mut expected: BTreeSet<&str> = ["PATH", "HOME"].into_iter().collect();
+
+        #[cfg(windows)]
+        {
+            expected.insert("SYSTEMROOT");
+            let parent = std::env::var("SYSTEMROOT").unwrap_or_default();
+            let value = env
+                .iter()
+                .find(|(k, _)| k == "SYSTEMROOT")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(
+                value,
+                Some(parent.as_str()),
+                "SYSTEMROOT must be forwarded verbatim from the parent env"
+            );
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert!(
+                !keys.contains("SYSTEMROOT"),
+                "SYSTEMROOT must not be forwarded on non-Windows targets"
+            );
+        }
+
+        assert_eq!(
+            keys, expected,
+            "child env must contain exactly the managed keys, never arbitrary parent variables"
+        );
+    }
+
+    #[test]
+    fn child_env_preserves_path_and_home_verbatim() {
+        let env = build_child_env(&[]);
+        let parent_path = std::env::var("PATH").unwrap_or_default();
+        let parent_home = std::env::var("HOME").unwrap_or_default();
+
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.as_str());
+        let home = env
+            .iter()
+            .find(|(k, _)| k == "HOME")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(path, Some(parent_path.as_str()), "PATH preserved");
+        assert_eq!(home, Some(parent_home.as_str()), "HOME preserved");
+    }
+
+    #[test]
+    fn child_env_appends_extra_env_after_managed_keys() {
+        let env = build_child_env(&[("FAKE_PROCESS_MODE".into(), "print".into())]);
+        let value = env
+            .iter()
+            .find(|(k, _)| k == "FAKE_PROCESS_MODE")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(value, Some("print"));
     }
 }
