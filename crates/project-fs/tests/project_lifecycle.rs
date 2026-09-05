@@ -946,7 +946,7 @@ fn materials_and_creations_folders_resolve_to_owned_fixed_roots() {
 
     // A fresh project already has its fixed roots; both resolve canonically.
     let store = FilesystemProjectContentStore::new(&base);
-    let project_dir = base.join("projects").join(p.id.as_str());
+    let project_dir = fs::canonicalize(base.join("projects").join(p.id.as_str())).unwrap();
     let inputs = store.materials_dir(&p.id).unwrap();
     assert!(inputs.starts_with(&project_dir), "inputs: {inputs:?}");
     assert_eq!(
@@ -2460,6 +2460,56 @@ fn messages_are_not_published() {
             "User secret message content",
             "Assistant secret message content",
         ],
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn publication_snapshot_syncs_nested_web_files_without_mutating_bytes() {
+    let base = tmp_dir("windows-publication-snapshot-regular-file-sync");
+    let mut svc = make_service(&base);
+    let project = svc.create_project("Public web snapshot").unwrap();
+    let creation = svc
+        .create_creation(
+            &project.id,
+            project_core::CreateCreation {
+                display_name: "Public activity".into(),
+                kind: CreationKind::Web,
+                visibility: CreationVisibility::Public,
+                content_type: Some(ContentType::parse("text/html").unwrap()),
+                content: CreationContent {
+                    bytes: b"<html><body>index</body></html>".to_vec(),
+                    file_name: "index.html".into(),
+                },
+                parent_creation_id: None,
+            },
+        )
+        .unwrap();
+    let source = base
+        .join("projects")
+        .join(project.id.as_str())
+        .join("outputs")
+        .join(creation.id.as_str());
+    let app_js = b"console.log('durable');\n";
+    let asset = [0_u8, 1, 2, 3, 255];
+    fs::write(source.join("app.js"), app_js).unwrap();
+    fs::create_dir_all(source.join("assets")).unwrap();
+    fs::write(source.join("assets").join("small.bin"), asset).unwrap();
+
+    let reloaded = svc.open_project(&project.id).unwrap();
+    let snapshot = PublicationSnapshotStore::new(&base)
+        .prepare(&reloaded)
+        .unwrap();
+    let publish = snapshot.publish_root().as_path();
+
+    assert_eq!(
+        fs::read(publish.join("index.html")).unwrap(),
+        b"<html><body>index</body></html>"
+    );
+    assert_eq!(fs::read(publish.join("app.js")).unwrap(), app_js);
+    assert_eq!(
+        fs::read(publish.join("assets").join("small.bin")).unwrap(),
+        asset
     );
 }
 

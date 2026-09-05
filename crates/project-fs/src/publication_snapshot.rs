@@ -186,9 +186,7 @@ impl PublicationSnapshotStore {
         let project_dir = self.base.join(PROJECTS_DIR).join(id.as_str());
         reject_symlink_path(&project_dir, &self.base)?;
         let canonical = canon_project_dir(&self.base, id)?;
-        if canonical != project_dir {
-            return Err(ProjectCoreError::PathEscape);
-        }
+        canonical_project_dir_matches(&self.base, &project_dir, &canonical, id)?;
         Ok(project_dir)
     }
 
@@ -444,12 +442,48 @@ fn fsync_tree(path: &Path) -> CoreResult<()> {
         if p.is_dir() {
             fsync_tree(&p)?;
         } else {
-            fs::File::open(&p)
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&p)
                 .and_then(|f| f.sync_all())
                 .map_err(|_| ProjectCoreError::WriteFailed)?;
         }
     }
     sync_parent_dir(path)
+}
+
+/// Compare the canonical project directory with the fixed project location.
+///
+/// Windows `fs::canonicalize` returns a verbatim (`\\?\\`) path, so comparing
+/// it directly with the ordinary joined path rejects the same directory. Build
+/// the expected child from the canonical base instead. This still requires the
+/// resolved directory to be exactly the configured `projects/<id>` child: a
+/// symlink, junction, or other redirect that resolves elsewhere fails closed.
+fn canonical_project_dir_matches(
+    base: &Path,
+    project_dir: &Path,
+    canonical_project_dir: &Path,
+    id: &ProjectId,
+) -> CoreResult<()> {
+    #[cfg(windows)]
+    {
+        let _ = project_dir;
+        let canonical_base =
+            fs::canonicalize(base).map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        (canonical_project_dir == canonical_base.join(PROJECTS_DIR).join(id.as_str()))
+            .then_some(())
+            .ok_or(ProjectCoreError::PathEscape)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = base;
+        let _ = id;
+        (canonical_project_dir == project_dir)
+            .then_some(())
+            .ok_or(ProjectCoreError::PathEscape)
+    }
 }
 fn validate_component(name: &str, root: bool) -> CoreResult<()> {
     if name.is_empty()
@@ -599,6 +633,30 @@ fn validate_publish(base: &Path, id: &ProjectId) -> CoreResult<PublishRoot> {
 mod tests {
     use super::*;
     use project_core::{CreationId, RelativeProjectPath, Timestamp};
+    #[cfg(windows)]
+    use tempfile::tempdir;
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_project_dir_accepts_verbatim_equivalent_and_rejects_other_project() {
+        let temp = tempdir().unwrap();
+        let id = ProjectId::parse("0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22").unwrap();
+        let projects = temp.path().join(PROJECTS_DIR);
+        let project = projects.join(id.as_str());
+        let other = projects.join("other-project");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        let canonical_project = fs::canonicalize(&project).unwrap();
+        assert!(canonical_project.to_string_lossy().starts_with(r"\\?\"));
+        canonical_project_dir_matches(temp.path(), &project, &canonical_project, &id).unwrap();
+
+        let canonical_other = fs::canonicalize(&other).unwrap();
+        assert!(matches!(
+            canonical_project_dir_matches(temp.path(), &project, &canonical_other, &id),
+            Err(ProjectCoreError::PathEscape)
+        ));
+    }
 
     fn creation(display_name: &str) -> Creation {
         Creation {
