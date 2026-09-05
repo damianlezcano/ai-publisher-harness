@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Copy the already checksum-verified Linux ONNX Runtime component into an
+# AppDir, then verify the final AppDir bytes again.  Only payloads declared in
+# config/components.json are admitted.
+set -euo pipefail
+
+appdir="${1:?usage: stage-onnxruntime-appdir APPDIR}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+manifest="$root/config/components.json"
+source_dir="$root/components/linux-x86_64/onnxruntime"
+destination="$appdir/usr/lib/educai/onnxruntime"
+
+[[ -d "$appdir" ]] || { echo "stage-onnxruntime-appdir: FAIL: AppDir not found: $appdir" >&2; exit 2; }
+[[ -d "$source_dir" ]] || { echo "stage-onnxruntime-appdir: FAIL: verified component not found; run scripts/fetch-sidecars linux-x86_64" >&2; exit 1; }
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+python3 - "$manifest" "$source_dir" "$workdir" <<'PY'
+import hashlib, json, os, shutil, sys
+from pathlib import Path, PurePosixPath
+
+manifest, source_dir, stage = json.load(open(sys.argv[1], encoding="utf-8")), Path(sys.argv[2]), Path(sys.argv[3])
+component = next((c for c in manifest["components"] if c["name"] == "onnxruntime" and c["platform"] == "linux-x86_64"), None)
+if component is None:
+    raise SystemExit("Linux ONNX Runtime component is missing from manifest")
+def safe(value):
+    path = PurePosixPath(value)
+    return not path.is_absolute() and all(part not in ("", ".", "..") for part in path.parts)
+for payload in component["payloads"]:
+    if not safe(payload["installPath"]):
+        raise SystemExit("unsafe install path")
+    source = source_dir / payload["installPath"]
+    if not source.is_file() or source.is_symlink() or source.stat().st_size != payload["bytes"]:
+        raise SystemExit(f"staged payload rejected: {payload['installPath']}")
+    if hashlib.sha256(source.read_bytes()).hexdigest() != payload["sha256"]:
+        raise SystemExit(f"staged payload checksum mismatch: {payload['installPath']}")
+    target = stage / payload["installPath"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    os.chmod(target, 0o755)
+for link in component.get("symlinks", []):
+    if not safe(link["installPath"]) or not safe(link["target"]):
+        raise SystemExit("unsafe symlink")
+    target = stage / link["installPath"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(link["target"], target)
+PY
+
+rm -rf "$destination"
+mkdir -p "$(dirname "$destination")"
+mv "$workdir" "$destination"
+trap - EXIT
+
+# Verify the AppDir copy, not merely the component staging cache.
+python3 - "$manifest" "$destination" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+
+manifest, destination = json.load(open(sys.argv[1], encoding="utf-8")), Path(sys.argv[2])
+component = next(c for c in manifest["components"] if c["name"] == "onnxruntime" and c["platform"] == "linux-x86_64")
+for payload in component["payloads"]:
+    path = destination / payload["installPath"]
+    if not path.is_file() or path.stat().st_size != payload["bytes"] or hashlib.sha256(path.read_bytes()).hexdigest() != payload["sha256"]:
+        raise SystemExit(f"AppDir payload verification failed: {payload['installPath']}")
+for link in component.get("symlinks", []):
+    path = destination / link["installPath"]
+    if not path.is_symlink() or os.readlink(path) != link["target"]:
+        raise SystemExit(f"AppDir symlink verification failed: {link['installPath']}")
+PY
+echo "stage-onnxruntime-appdir: PASS: staged verified ONNX Runtime at usr/lib/educai/onnxruntime"

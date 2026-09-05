@@ -20,6 +20,34 @@
       "bundleName": "cloudflared"
     },
     {
+      "name": "onnxruntime",
+      "platform": "linux-x86_64",
+      "version": "1.22.0",
+      "source": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
+      "format": "tar.gz",
+      "bundleName": "onnxruntime",
+      "archiveRoot": "onnxruntime-linux-x64-1.22.0",
+      "payloads": [
+        {
+          "archivePath": "lib/libonnxruntime.so.1.22.0",
+          "installPath": "libonnxruntime.so.1.22.0",
+          "bytes": 21042416,
+          "sha256": "3da6146e14e7b8aaec625dde11d6114c7457c87a5f93d744897da8781e35c673"
+        },
+        {
+          "archivePath": "lib/libonnxruntime_providers_shared.so",
+          "installPath": "libonnxruntime_providers_shared.so",
+          "bytes": 14632,
+          "sha256": "e4706ea02be3999167f000bb1ff7391c86e95d2d96f78eb33225c14b172a8451"
+        }
+      ],
+      "symlinks": [
+        { "installPath": "libonnxruntime.so.1", "target": "libonnxruntime.so.1.22.0" },
+        { "installPath": "libonnxruntime.so", "target": "libonnxruntime.so.1" }
+      ]
+    },
+    {
       "name": "opencode",
       "platform": "windows-x86_64",
       "version": "1.18.25",
@@ -36,6 +64,30 @@
       "sha256": "83e726ed18ea78c5ad5213c4c3a3a27051393950d2bc8ed4de69bec12d14eaae",
       "format": "binary",
       "bundleName": "cloudflared"
+    },
+    {
+      "name": "onnxruntime",
+      "platform": "windows-x86_64",
+      "version": "1.22.0",
+      "source": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip",
+      "sha256": "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da",
+      "format": "zip",
+      "bundleName": "onnxruntime",
+      "archiveRoot": "onnxruntime-win-x64-1.22.0",
+      "payloads": [
+        {
+          "archivePath": "lib/onnxruntime.dll",
+          "installPath": "onnxruntime.dll",
+          "bytes": 12418080,
+          "sha256": "579b636403983254346a5c1d80bd28f1519cd1e284cd204f8d4ff41f8d711559"
+        },
+        {
+          "archivePath": "lib/onnxruntime_providers_shared.dll",
+          "installPath": "onnxruntime_providers_shared.dll",
+          "bytes": 22064,
+          "sha256": "ba00ea1ef846c9b909c7854bc56c51051a20f9773b3e1153dda118d4b85d0b93"
+        }
+      ]
     }
   ]
 }

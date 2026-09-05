@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Fetch, verify, and install the pinned sidecar binaries from config/components.json.
+# Fetch, verify, and install pinned bundled components from config/components.json.
 #
 # Default mode (network): for each component, download from its official pinned
-# source, verify the pinned SHA-256 (fail closed: partial artifacts deleted,
-# never install an unverified binary), and install to
-# sidecars/<bundleName>-<target_triple>[.exe].
+# source, verify the pinned archive SHA-256 (fail closed: partial artifacts
+# deleted, never install an unverified payload), and install sidecars to
+# sidecars/<bundleName>-<target_triple>[.exe]. Native runtime payloads are
+# staged under components/<platform>/<bundleName>/ for the platform packager.
 #
 # --check mode (offline, deterministic): validate the manifest shape,
 # schemaVersion, per-component fields, format, and sha256 format. No network.
@@ -84,6 +85,32 @@ else:
         sha = comp.get("sha256")
         if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
             problems.append(f"{label}.sha256: must be exactly 64 lowercase hex characters")
+        payloads = comp.get("payloads")
+        if payloads is not None:
+            if not isinstance(comp.get("archiveRoot"), str) or not comp["archiveRoot"]:
+                problems.append(f"{label}.archiveRoot: required for payload component")
+            if not isinstance(payloads, list) or not payloads:
+                problems.append(f"{label}.payloads: must be a non-empty list")
+            else:
+                for payload_idx, payload in enumerate(payloads):
+                    payload_label = f"{label}.payloads[{payload_idx}]"
+                    if not isinstance(payload, dict):
+                        problems.append(f"{payload_label}: must be an object")
+                        continue
+                    for field in ("archivePath", "installPath", "sha256"):
+                        if not isinstance(payload.get(field), str) or not payload[field]:
+                            problems.append(f"{payload_label}.{field}: missing or empty")
+                    if not isinstance(payload.get("bytes"), int) or payload["bytes"] <= 0:
+                        problems.append(f"{payload_label}.bytes: must be a positive integer")
+                    if not (isinstance(payload.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", payload["sha256"])):
+                        problems.append(f"{payload_label}.sha256: must be exactly 64 lowercase hex characters")
+            symlinks = comp.get("symlinks", [])
+            if not isinstance(symlinks, list):
+                problems.append(f"{label}.symlinks: must be a list when present")
+            else:
+                for link_idx, link in enumerate(symlinks):
+                    if not isinstance(link, dict) or not all(isinstance(link.get(field), str) and link[field] for field in ("installPath", "target")):
+                        problems.append(f"{label}.symlinks[{link_idx}]: installPath and target are required")
 
 if problems:
     for problem in problems:
@@ -98,8 +125,15 @@ elif mode == "tsv":
     for comp in components:
         if not isinstance(comp, dict):
             continue
+        if "payloads" in comp:
+            continue
         print("\t".join((comp["name"], comp["platform"], comp["version"], comp["source"],
                          comp["sha256"], comp["format"], comp["bundleName"])))
+elif mode == "payload-json":
+    import base64
+    for comp in components:
+        if isinstance(comp, dict) and "payloads" in comp:
+            print("\t".join((comp["platform"], base64.b64encode(json.dumps(comp).encode()).decode())))
 PY
 }
 
@@ -158,6 +192,89 @@ fetch_one() {
   fi
 }
 
+fetch_payload_component() {
+  local component_file="$1" component_platform archive_root bundle_name source expected format
+  local artifact actual extract_dir stage destination
+  mapfile -t component_meta < <(python3 - "$component_file" <<'PY'
+import json, sys
+component = json.load(open(sys.argv[1], encoding="utf-8"))
+for field in ("platform", "archiveRoot", "bundleName", "source", "sha256", "format"):
+    print(component[field])
+PY
+)
+  component_platform="${component_meta[0]}"
+  archive_root="${component_meta[1]}"
+  bundle_name="${component_meta[2]}"
+  source="${component_meta[3]}"
+  expected="${component_meta[4]}"
+  format="${component_meta[5]}"
+  [[ "$component_platform" == "$platform" ]] || return 0
+  artifact="$workdir/artifact-$bundle_name"
+  extract_dir="$workdir/extract-$bundle_name"
+  stage="$(mktemp -d "$components_dir/.tmp-$bundle_name.XXXXXX")"
+  destination="$components_dir/$bundle_name"
+
+  printf '%s: fetching runtime component %s (%s)\n' "$SCRIPT" "$bundle_name" "$source"
+  curl -fsSL -o "$artifact" "$source" || { rm -f "$artifact"; rm -rf "$stage"; fail "download failed for $bundle_name from $source"; }
+  actual="$(sha256sum "$artifact")"
+  actual="${actual%% *}"
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f "$artifact"
+    rm -rf "$stage"
+    fail "checksum mismatch for $bundle_name: expected $expected, got $actual; partial artifact deleted, nothing installed"
+  fi
+  printf '%s: verified %s archive (sha256 %s)\n' "$SCRIPT" "$bundle_name" "$actual"
+  mkdir -p "$extract_dir"
+  if [[ "$format" == "tar.gz" ]]; then
+    tar -xzf "$artifact" -C "$extract_dir"
+  else
+    unzip -q "$artifact" -d "$extract_dir"
+  fi || { rm -rf "$stage" "$extract_dir"; fail "extraction failed for $bundle_name"; }
+
+  if ! python3 - "$component_file" "$extract_dir/$archive_root" "$stage" <<'PY'
+import hashlib, json, os, shutil, sys
+from pathlib import Path, PurePosixPath
+
+component, archive_root, stage = json.load(open(sys.argv[1], encoding="utf-8")), Path(sys.argv[2]), Path(sys.argv[3])
+def safe(value):
+    path = PurePosixPath(value)
+    return not path.is_absolute() and all(part not in ("", ".", "..") for part in path.parts)
+for payload in component["payloads"]:
+    if not safe(payload["archivePath"]) or not safe(payload["installPath"]):
+        raise SystemExit("unsafe payload path in component manifest")
+    source = archive_root / payload["archivePath"]
+    if not source.is_file() or source.is_symlink():
+        raise SystemExit(f"expected regular payload missing: {payload['archivePath']}")
+    if source.stat().st_size != payload["bytes"]:
+        raise SystemExit(f"payload size mismatch: {payload['archivePath']}")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if digest != payload["sha256"]:
+        raise SystemExit(f"payload checksum mismatch: {payload['archivePath']}")
+    destination = stage / payload["installPath"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    os.chmod(destination, 0o755)
+for link in component.get("symlinks", []):
+    if not safe(link["installPath"]) or not safe(link["target"]):
+        raise SystemExit("unsafe symlink path in component manifest")
+    destination = stage / link["installPath"]
+    if destination.exists() or destination.is_symlink():
+        raise SystemExit(f"duplicate symlink destination: {link['installPath']}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(link["target"], destination)
+PY
+  then
+    rm -rf "$stage" "$extract_dir"
+    fail "selected payload verification failed for $bundle_name; nothing installed"
+  fi
+  rm -rf "$extract_dir"
+  # The destination is generated cache state, replaced only after archive and
+  # every selected payload have been verified in the private staging directory.
+  rm -rf "$destination"
+  mv "$stage" "$destination"
+  printf '%s: installed verified runtime payload to %s\n' "$SCRIPT" "$destination"
+}
+
 fetch_mode() {
   require_cmd curl
   require_cmd sha256sum
@@ -167,12 +284,22 @@ fetch_mode() {
   run_manifest_py tsv > "$workdir/components.tsv"
 
   sidecars_dir="$repo_root/sidecars"
+  components_dir="$repo_root/components/$platform"
   mkdir -p "$sidecars_dir"
+  mkdir -p "$components_dir"
 
   while IFS=$'\t' read -r name component_platform version source expected format bundle_name; do
     [[ "$component_platform" == "$platform" ]] || continue
     fetch_one "$name" "$version" "$source" "$expected" "$format" "$bundle_name"
   done < "$workdir/components.tsv"
+
+  run_manifest_py payload-json > "$workdir/payload-components.tsv"
+  while IFS=$'\t' read -r component_platform component_b64; do
+    [[ "$component_platform" == "$platform" ]] || continue
+    component_file="$workdir/payload-$component_platform.json"
+    printf '%s' "$component_b64" | base64 --decode > "$component_file"
+    fetch_payload_component "$component_file"
+  done < "$workdir/payload-components.tsv"
 }
 
 if (( check_only )); then

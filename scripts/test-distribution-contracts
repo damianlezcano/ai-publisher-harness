@@ -11,8 +11,8 @@ from pathlib import Path
 
 components = json.loads(Path("config/components.json").read_text())["components"]
 for platform, expected in {
-    "linux-x86_64": {"opencode", "cloudflared"},
-    "windows-x86_64": {"opencode", "cloudflared"},
+    "linux-x86_64": {"opencode", "cloudflared", "onnxruntime"},
+    "windows-x86_64": {"opencode", "cloudflared", "onnxruntime"},
 }.items():
     actual = {c["name"] for c in components if c["platform"] == platform}
     if actual != expected:
@@ -21,9 +21,20 @@ for platform, expected in {
         if len(c["sha256"]) != 64:
             raise SystemExit(f"{platform}/{c['name']}: invalid checksum")
 
+linux_ort = next(c for c in components if c["platform"] == "linux-x86_64" and c["name"] == "onnxruntime")
+if linux_ort["version"] != "1.22.0" or linux_ort["format"] != "tar.gz":
+    raise SystemExit("Linux ONNX Runtime pin is incorrect")
+if {p["installPath"] for p in linux_ort["payloads"]} != {"libonnxruntime.so.1.22.0", "libonnxruntime_providers_shared.so"}:
+    raise SystemExit("Linux ONNX Runtime payload selection is incorrect")
+if [(s["installPath"], s["target"]) for s in linux_ort["symlinks"]] != [("libonnxruntime.so.1", "libonnxruntime.so.1.22.0"), ("libonnxruntime.so", "libonnxruntime.so.1")]:
+    raise SystemExit("Linux ONNX Runtime symlink contract is incorrect")
+
 tauri = json.loads(Path("app/src-tauri/tauri.conf.json").read_text())
 if "nsis" not in tauri["bundle"]["targets"]:
     raise SystemExit("Tauri NSIS target is missing")
+frontend = json.loads(Path("app/package.json").read_text())
+if frontend.get("packageManager") != "pnpm@11.24.0":
+    raise SystemExit("frontend must pin the controlled pnpm version")
 PY
 python3 - <<'PY'
 import re
@@ -56,11 +67,14 @@ if "/opt/tauri-cli/bin" not in cf:
 PY
 rg -Fq 'ubuntu:24.04' packaging/linux/Containerfile || fail 'Ubuntu 24.04 controlled build image missing'
 rg -Fq 'export CI=true' packaging/linux/build-linux-appimage || fail 'Linux controlled build must be non-interactive (CI=true)'
+rg -Fq 'export COREPACK_HOME=/workspace/.corepack' packaging/linux/build-linux-appimage || fail 'Linux controlled build must use a writable deterministic Corepack cache'
 rg -Fq 'linuxdeploy-plugin-appimage.AppImage' packaging/linux/build-linux-appimage || fail 'Linux controlled build must fall back to appimagetool packaging of the container-assembled AppDir'
 rg -Fq './packaging/linux/prepare-webkit-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must prepare the WebKitGTK AppDir before AppImage packaging'
+rg -Fq './packaging/linux/stage-onnxruntime-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must stage the verified ONNX Runtime payload'
 rg -Fq './packaging/linux/prepare-graphics-appdir "$appdir"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must remove the incompatible AppDir Wayland layer before AppImage packaging'
 rg -Fq 'readlink -f "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate on the absolute artifact path (graphics gate extracts into a temp workdir)'
 rg -Fq './scripts/check-appimage-webkit-runtime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged WebKitGTK runtime'
+rg -Fq './scripts/check-appimage-onnxruntime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must inspect the final packaged ONNX Runtime payload'
 rg -Fq './scripts/check-graphics-appdir "$workdir/squashfs-root"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged graphics boundary'
 for library in libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.0; do
   rg -Fq "$library" packaging/linux/prepare-graphics-appdir || fail "graphics preparation must remove $library"

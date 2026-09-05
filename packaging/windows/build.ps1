@@ -6,6 +6,10 @@ $sidecars = Join-Path $root 'sidecars'
 New-Item -ItemType Directory -Force -Path $sidecars | Out-Null
 
 foreach ($component in $manifest.components | Where-Object { $_.platform -eq 'windows-x86_64' }) {
+  # Knowledge's DLL payload is pinned in the shared component manifest, but
+  # Windows K2 installer placement/DLL-resolution validation is deliberately
+  # a future native Windows gate. Do not mistake this Fedora/Linux pass for it.
+  if ($component.name -eq 'onnxruntime') { continue }
   $ext = if ($component.format -eq 'zip') { 'zip' } else { 'download' }
   $download = Join-Path $env:TEMP ("educai-" + $component.name + "." + $ext)
   Invoke-WebRequest -Uri $component.source -OutFile $download

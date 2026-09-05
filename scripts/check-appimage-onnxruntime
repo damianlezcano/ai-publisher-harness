@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Inspect the final artifact, not a source AppDir, for the pinned ORT payload.
+set -euo pipefail
+
+artifact="${1:?usage: check-appimage-onnxruntime ARTIFACT}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ -f "$artifact" ]] || { echo "check-appimage-onnxruntime: FAIL: artifact not found: $artifact" >&2; exit 2; }
+artifact="$(readlink -f "$artifact")"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+( cd "$workdir" && "$artifact" --appimage-extract >/dev/null )
+payload="$workdir/squashfs-root/usr/lib/educai/onnxruntime"
+python3 - "$root/config/components.json" "$payload" "$workdir/squashfs-root" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+
+manifest, payload, image_root = json.load(open(sys.argv[1], encoding="utf-8")), Path(sys.argv[2]), Path(sys.argv[3])
+component = next((c for c in manifest["components"] if c["name"] == "onnxruntime" and c["platform"] == "linux-x86_64"), None)
+if component is None or not payload.is_dir():
+    raise SystemExit("missing Linux ONNX Runtime payload")
+for entry in component["payloads"]:
+    path = payload / entry["installPath"]
+    if not path.is_file() or path.stat().st_size != entry["bytes"]:
+        raise SystemExit(f"payload size/name mismatch: {entry['installPath']}")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != entry["sha256"]:
+        raise SystemExit(f"payload checksum mismatch: {entry['installPath']}")
+    print(f"check-appimage-onnxruntime: verified {entry['installPath']} bytes={entry['bytes']} sha256={entry['sha256']}")
+for entry in component.get("symlinks", []):
+    path = payload / entry["installPath"]
+    if not path.is_symlink() or os.readlink(path) != entry["target"]:
+        raise SystemExit(f"symlink mismatch: {entry['installPath']}")
+    print(f"check-appimage-onnxruntime: verified {entry['installPath']} -> {entry['target']}")
+if any(path.name in {"model.onnx", "tokenizer.json", "sentencepiece.bpe.model"} for path in image_root.rglob("*")):
+    raise SystemExit("Knowledge model/tokenizer payload must not be embedded in AppImage")
+PY
+for library in libonnxruntime.so.1.22.0 libonnxruntime_providers_shared.so; do
+  required="$(readelf --version-info "$payload/$library" | rg -o 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -n 1 || true)"
+  echo "check-appimage-onnxruntime: $library maximum GLIBC_${required:-none}"
+done
+echo 'check-appimage-onnxruntime: PASS'

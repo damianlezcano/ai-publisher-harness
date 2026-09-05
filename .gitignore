@@ -3,6 +3,7 @@
 .vscode/
 target/
 sidecars/
+components/
 node_modules/
 dist/
 build/
@@ -11,3 +12,4 @@ worktrees/
 *.log
 app/src-tauri/gen/
 .pnpm-store/
+.corepack/

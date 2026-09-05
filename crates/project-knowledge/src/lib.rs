@@ -6,6 +6,14 @@
 
 #![forbid(unsafe_code)]
 
+mod model;
+mod ort_provider;
+pub use model::{
+    ModelArtifact, ModelGeneration, ModelInstallState, ModelManager, ModelManifest,
+    semantic_safe_subdivide, token_count, verify_artifact,
+};
+pub use ort_provider::{OrtEmbeddingProvider, runtime_library_from_executable};
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const NORMALIZATION_VERSION: &str = "nfc-lf-v1";
 pub const CHUNKER_ID: &str = "structural-v1";
 pub const CHUNKER_VERSION: &str = "structural-v1";
@@ -29,6 +37,13 @@ pub enum KnowledgeError {
     UnsupportedFormat(String),
     InvalidUtf8,
     IncompatibleSchema(i64),
+    ModelManifest(String),
+    ArtifactVerification(String),
+    ModelUnavailable,
+    Tokenizer(String),
+    InputTooLong,
+    InvalidEmbedding(String),
+    Inference(String),
 }
 
 impl std::fmt::Display for KnowledgeError {
@@ -42,6 +57,19 @@ impl std::fmt::Display for KnowledgeError {
             Self::IncompatibleSchema(version) => {
                 write!(f, "unsupported Knowledge schema version: {version}")
             }
+            Self::ModelManifest(message) => {
+                write!(f, "invalid Knowledge model manifest: {message}")
+            }
+            Self::ArtifactVerification(message) => {
+                write!(f, "Knowledge model artifact rejected: {message}")
+            }
+            Self::ModelUnavailable => {
+                f.write_str("Knowledge model is not installed or unavailable")
+            }
+            Self::Tokenizer(message) => write!(f, "Knowledge tokenizer error: {message}"),
+            Self::InputTooLong => f.write_str("Knowledge input cannot fit the model hard limit"),
+            Self::InvalidEmbedding(message) => write!(f, "invalid Knowledge embedding: {message}"),
+            Self::Inference(message) => write!(f, "Knowledge local inference error: {message}"),
         }
     }
 }
@@ -113,6 +141,67 @@ pub struct SearchResult {
     pub chunk_text: String,
     pub score: f64,
     pub provenance: Provenance,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddingGeneration {
+    pub generation_id: String,
+    pub model_id: String,
+    pub model_revision: String,
+    pub tokenizer_metadata: String,
+    pub runtime_backend: String,
+    pub runtime_version: String,
+    pub dimensions: usize,
+    pub max_input_tokens: usize,
+    pub query_prefix: String,
+    pub passage_prefix: String,
+    pub normalization: String,
+    pub artifact_variant: String,
+}
+
+impl From<&ModelGeneration> for EmbeddingGeneration {
+    fn from(model: &ModelGeneration) -> Self {
+        Self {
+            generation_id: model.generation_id.clone(),
+            model_id: model.model_id.clone(),
+            model_revision: model.revision.clone(),
+            tokenizer_metadata: "tokenizer.json+sentencepiece.bpe.model".to_owned(),
+            runtime_backend: model.runtime_backend.clone(),
+            runtime_version: model.runtime_version.clone(),
+            dimensions: model.dimensions,
+            max_input_tokens: model.max_input_tokens,
+            query_prefix: model.query_prefix.clone(),
+            passage_prefix: model.passage_prefix.clone(),
+            normalization: model.normalization.clone(),
+            artifact_variant: model.default_artifact_variant.clone(),
+        }
+    }
+}
+
+/// Local-only boundary: implementations may use ONNX Runtime, while the
+/// Knowledge store knows only the stable generation and normalized vectors.
+pub trait EmbeddingProvider {
+    fn generation(&self) -> &EmbeddingGeneration;
+    fn embed_query(&mut self, query: &str) -> Result<Vec<f32>>;
+    fn embed_passages(&mut self, passages: &[String]) -> Result<Vec<Vec<f32>>>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticSearchResult {
+    pub document_id: String,
+    pub source_name: String,
+    pub source_relative_path: String,
+    pub chunk_id: String,
+    pub chunk_text: String,
+    pub similarity: f32,
+    pub generation_id: String,
+    pub provenance: Provenance,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddingIndexOutcome {
+    pub embedded: usize,
+    pub reused: usize,
 }
 
 /// SQLite-backed derived Knowledge data for exactly one existing project.
@@ -286,6 +375,175 @@ impl KnowledgeStore {
             .map_err(Into::into)
     }
 
+    pub fn record_generation(&mut self, generation: &EmbeddingGeneration) -> Result<()> {
+        if generation.dimensions != 384 || generation.normalization != "l2-f32-le-v1" {
+            return Err(KnowledgeError::InvalidEmbedding(
+                "unsupported generation vector contract".to_owned(),
+            ));
+        }
+        self.connection.execute(
+            "INSERT INTO embedding_generations(generation_id, model_id, model_revision, tokenizer_metadata, runtime_backend, runtime_version, dimensions, max_input_tokens, query_prefix, passage_prefix, normalization, artifact_variant, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             ON CONFLICT(generation_id) DO NOTHING",
+            params![generation.generation_id, generation.model_id, generation.model_revision, generation.tokenizer_metadata, generation.runtime_backend, generation.runtime_version, generation.dimensions, generation.max_input_tokens, generation.query_prefix, generation.passage_prefix, generation.normalization, generation.artifact_variant, unix_seconds()],
+        )?;
+        Ok(())
+    }
+
+    /// Embeds only chunks that lack a valid vector for the requested immutable
+    /// generation. Vectors are inserted only after all bounded batches succeed.
+    pub fn index_embeddings(
+        &mut self,
+        provider: &mut dyn EmbeddingProvider,
+        batch_size: usize,
+    ) -> Result<EmbeddingIndexOutcome> {
+        let generation = provider.generation().clone();
+        self.record_generation(&generation)?;
+        let mut statement = self.connection.prepare(
+            "SELECT c.chunk_id, c.text FROM chunks c WHERE NOT EXISTS (
+                SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id=c.chunk_id
+                AND e.generation_id=?1 AND e.state='ready' AND e.dimensions=384
+            ) ORDER BY c.document_id, c.ordinal",
+        )?;
+        let pending = statement
+            .query_map([&generation.generation_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        let total = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                row.get::<_, i64>(0)
+            })? as usize;
+        if pending.is_empty() {
+            return Ok(EmbeddingIndexOutcome {
+                embedded: 0,
+                reused: total,
+            });
+        }
+        let size = batch_size.clamp(1, 64);
+        let mut produced = Vec::with_capacity(pending.len());
+        for batch in pending.chunks(size) {
+            let texts = batch
+                .iter()
+                .map(|(_, text)| text.clone())
+                .collect::<Vec<_>>();
+            let vectors = provider.embed_passages(&texts)?;
+            if vectors.len() != batch.len() {
+                return Err(KnowledgeError::InvalidEmbedding(
+                    "batch output count mismatch".to_owned(),
+                ));
+            }
+            for ((chunk_id, _), vector) in batch.iter().zip(vectors) {
+                validate_vector(&vector)?;
+                produced.push((chunk_id.clone(), serialize_vector(&vector)?));
+            }
+        }
+        let tx = self.connection.transaction()?;
+        for (chunk_id, vector) in &produced {
+            tx.execute(
+                "INSERT INTO chunk_embeddings(chunk_id, generation_id, vector, dimensions, normalized, state, embedded_at)
+                 VALUES(?1, ?2, ?3, 384, 1, 'ready', ?4)
+                 ON CONFLICT(chunk_id, generation_id) DO UPDATE SET vector=excluded.vector, dimensions=384, normalized=1, state='ready', embedded_at=excluded.embedded_at",
+                params![chunk_id, generation.generation_id, vector, unix_seconds()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(EmbeddingIndexOutcome {
+            embedded: produced.len(),
+            reused: total.saturating_sub(pending.len()),
+        })
+    }
+
+    pub fn semantic_search(
+        &self,
+        provider: &mut dyn EmbeddingProvider,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SemanticSearchResult>> {
+        if query.trim().is_empty() || limit == 0 {
+            return Ok(vec![]);
+        }
+        let generation = provider.generation().clone();
+        let query_vector = provider.embed_query(query)?;
+        validate_vector(&query_vector)?;
+        let mut statement = self.connection.prepare(
+            "SELECT c.document_id, ms.source_name, ms.source_relative_path, c.chunk_id, c.text,
+                    e.vector, e.generation_id, c.start_offset, c.end_offset, c.start_line, c.end_line,
+                    c.heading_path, c.structural_type
+             FROM chunk_embeddings e JOIN chunks c ON c.chunk_id=e.chunk_id
+             JOIN material_sources ms ON ms.document_id=c.document_id
+             WHERE e.generation_id=?1 AND e.state='ready' AND e.dimensions=384 AND e.normalized=1",
+        )?;
+        let rows = statement.query_map([&generation.generation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, usize>(7)?,
+                row.get::<_, usize>(8)?,
+                row.get::<_, usize>(9)?,
+                row.get::<_, usize>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+            ))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (
+                document_id,
+                source_name,
+                source_relative_path,
+                chunk_id,
+                chunk_text,
+                blob,
+                generation_id,
+                start_offset,
+                end_offset,
+                start_line,
+                end_line,
+                headings,
+                structural_type,
+            ) = row?;
+            let vector = deserialize_vector(&blob)?;
+            let similarity = dot_product(&query_vector, &vector)?;
+            results.push(SemanticSearchResult {
+                document_id,
+                source_name,
+                source_relative_path,
+                chunk_id,
+                chunk_text,
+                similarity,
+                generation_id,
+                provenance: Provenance {
+                    start_offset,
+                    end_offset,
+                    start_line,
+                    end_line,
+                    heading_path: headings
+                        .split('\u{1f}')
+                        .filter(|part| !part.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                    structural_type,
+                },
+            });
+        }
+        results.sort_by(|left, right| {
+            right
+                .similarity
+                .total_cmp(&left.similarity)
+                .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+        });
+        results.truncate(limit.min(100));
+        Ok(results)
+    }
+
     pub fn project_id(&self) -> &str {
         &self.project_id
     }
@@ -311,6 +569,16 @@ fn migrate(connection: &Connection) -> Result<()> {
         let version = value
             .parse()
             .map_err(|_| KnowledgeError::IncompatibleSchema(-1))?;
+        if version == 1 {
+            let tx = connection.unchecked_transaction()?;
+            create_embedding_tables(&tx)?;
+            tx.execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
         if version != SCHEMA_VERSION {
             return Err(KnowledgeError::IncompatibleSchema(version));
         }
@@ -340,8 +608,34 @@ fn migrate(connection: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS chunks_document_ordinal ON chunks(document_id, ordinal);
          CREATE INDEX IF NOT EXISTS material_sources_document ON material_sources(document_id);"
     )?;
+    create_embedding_tables(&tx)?;
     tx.execute("INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION.to_string()])?;
     tx.commit()?;
+    Ok(())
+}
+
+fn create_embedding_tables(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS embedding_generations (
+            generation_id TEXT PRIMARY KEY NOT NULL,
+            model_id TEXT NOT NULL, model_revision TEXT NOT NULL,
+            tokenizer_metadata TEXT NOT NULL, runtime_backend TEXT NOT NULL,
+            runtime_version TEXT NOT NULL, dimensions INTEGER NOT NULL CHECK(dimensions = 384),
+            max_input_tokens INTEGER NOT NULL, query_prefix TEXT NOT NULL,
+            passage_prefix TEXT NOT NULL, normalization TEXT NOT NULL,
+            artifact_variant TEXT NOT NULL, created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+            generation_id TEXT NOT NULL REFERENCES embedding_generations(generation_id) ON DELETE CASCADE,
+            vector BLOB NOT NULL, dimensions INTEGER NOT NULL CHECK(dimensions = 384),
+            normalized INTEGER NOT NULL CHECK(normalized IN (0, 1)),
+            state TEXT NOT NULL CHECK(state IN ('ready', 'error')),
+            embedded_at INTEGER NOT NULL,
+            PRIMARY KEY(chunk_id, generation_id)
+         );
+         CREATE INDEX IF NOT EXISTS chunk_embeddings_generation ON chunk_embeddings(generation_id, state);"
+    )?;
     Ok(())
 }
 
@@ -670,6 +964,55 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+
+/// The persistent vector format is exactly 384 IEEE-754 `f32` values in
+/// little-endian order. Stored vectors are L2-normalized once by the provider.
+pub fn serialize_vector(vector: &[f32]) -> Result<Vec<u8>> {
+    validate_vector(vector)?;
+    Ok(vector
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect())
+}
+
+pub fn deserialize_vector(bytes: &[u8]) -> Result<Vec<f32>> {
+    if bytes.len() != 384 * std::mem::size_of::<f32>() {
+        return Err(KnowledgeError::InvalidEmbedding(
+            "invalid vector byte length".to_owned(),
+        ));
+    }
+    let vector = bytes
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .collect::<Vec<_>>();
+    validate_vector(&vector)?;
+    Ok(vector)
+}
+
+fn validate_vector(vector: &[f32]) -> Result<()> {
+    if vector.len() != 384 || vector.iter().any(|value| !value.is_finite()) {
+        return Err(KnowledgeError::InvalidEmbedding(
+            "expected 384 finite f32 values".to_owned(),
+        ));
+    }
+    let norm_squared = vector.iter().map(|value| value * value).sum::<f32>();
+    if !(0.999..=1.001).contains(&norm_squared) {
+        return Err(KnowledgeError::InvalidEmbedding(
+            "expected L2-normalized vector".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn dot_product(left: &[f32], right: &[f32]) -> Result<f32> {
+    validate_vector(left)?;
+    validate_vector(right)?;
+    Ok(left
+        .iter()
+        .zip(right)
+        .map(|(left, right)| left * right)
+        .sum())
+}
 fn unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -822,5 +1165,90 @@ mod tests {
             Err(KnowledgeError::InvalidUtf8)
         ));
         assert_eq!(store.search("conservado", 10).unwrap().len(), 1);
+    }
+
+    fn generation() -> EmbeddingGeneration {
+        EmbeddingGeneration::from(ModelManifest::embedded().unwrap().active())
+    }
+    fn basis(index: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; 384];
+        vector[index] = 1.0;
+        vector
+    }
+    struct FakeEmbeddingProvider {
+        generation: EmbeddingGeneration,
+        calls: usize,
+    }
+    impl EmbeddingProvider for FakeEmbeddingProvider {
+        fn generation(&self) -> &EmbeddingGeneration {
+            &self.generation
+        }
+        fn embed_query(&mut self, _query: &str) -> Result<Vec<f32>> {
+            self.calls += 1;
+            Ok(basis(0))
+        }
+        fn embed_passages(&mut self, passages: &[String]) -> Result<Vec<Vec<f32>>> {
+            self.calls += passages.len();
+            Ok(passages
+                .iter()
+                .map(|text| {
+                    if text.contains("OpenShift") {
+                        basis(0)
+                    } else {
+                        basis(1)
+                    }
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn model_manifest_and_vector_contract_are_pinned() {
+        let model = ModelManifest::embedded().unwrap().active().clone();
+        assert_eq!(model.model_id, "intfloat/multilingual-e5-small");
+        assert_eq!(model.dimensions, 384);
+        assert_eq!(model.query_prefix, "query: ");
+        assert_eq!(model.passage_prefix, "passage: ");
+        assert_eq!(model.artifacts[0].bytes, 470_268_510);
+        let serialized = serialize_vector(&basis(0)).unwrap();
+        assert_eq!(serialized.len(), 1536);
+        assert_eq!(deserialize_vector(&serialized).unwrap(), basis(0));
+        assert!(deserialize_vector(&serialized[..1532]).is_err());
+        assert!(serialize_vector(&vec![0.0; 383]).is_err());
+    }
+
+    #[test]
+    fn semantic_index_reuses_current_generation_and_ranks_locally() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        store.index(&source("ops.txt"), b"OpenShift utiliza operadores para automatizar la administracion y el ciclo de vida de componentes.").unwrap();
+        let mut photos = source("plantas.txt");
+        photos.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        photos.relative_path = format!("inputs/{}/plantas.txt", photos.material_id);
+        store.index(&photos, b"La fotosintesis transforma energia luminica en energia quimica dentro de las plantas.").unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        assert_eq!(
+            store.index_embeddings(&mut provider, 8).unwrap().embedded,
+            2
+        );
+        let after_first = provider.calls;
+        assert_eq!(
+            store.index_embeddings(&mut provider, 8).unwrap().embedded,
+            0
+        );
+        assert_eq!(provider.calls, after_first);
+        let results = store
+            .semantic_search(
+                &mut provider,
+                "Como automatiza OpenShift la administracion?",
+                2,
+            )
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].chunk_text.contains("OpenShift"));
+        assert!(results[0].similarity > results[1].similarity);
     }
 }

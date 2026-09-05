@@ -14,6 +14,16 @@ does not inherit Fedora libraries. AppImage does not make a newer glibc
 portable, so `scripts/check-appimage-glibc` extracts every shipped ELF and
 rejects requirements above GLIBC 2.39.
 
+### Knowledge ONNX Runtime
+
+Linux AppImages bundle checksum-pinned Microsoft ONNX Runtime CPU 1.22.0 under
+`usr/lib/educai/onnxruntime/`; only the core/provider libraries and required
+loader symlinks are selected. The final artifact gate verifies hashes, links,
+model exclusion, and GLIBC (core 2.27; provider 2.2). The E5 model remains a
+verified first-use app-data download. Windows Knowledge DLL metadata is pinned,
+but its native runtime validation remains pending; existing Windows features
+remain HUMAN-PASS.
+
 ### Linux graphics-runtime boundary
 
 The AppImage bundles portable application libraries, including GTK/WebKitGTK

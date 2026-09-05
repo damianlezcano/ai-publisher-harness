@@ -2,8 +2,9 @@
 set -euo pipefail
 cd /workspace
 export CI=true
+export COREPACK_HOME=/workspace/.corepack
 ./scripts/fetch-sidecars linux-x86_64
-pnpm --dir app install --frozen-lockfile
+( cd app && pnpm install --frozen-lockfile )
 # tauri-bundler assembles the AppDir with the Ubuntu 24.04 dependency closure
 # and then runs linuxdeploy. linuxdeploy aborts on the pinned sidecars (static
 # executables: ldd exits 1) once the AppDir is complete, so fall back to
@@ -13,32 +14,28 @@ rm -rf app/src-tauri/target/release/bundle/appimage
 if ! ( cd app/src-tauri && cargo tauri build --bundles appimage ); then
   echo 'build-linux-appimage: note: tauri linuxdeploy step failed; packaging AppDir with appimagetool' >&2
 fi
-artifact="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | head -n 1)"
-if [[ -z "$artifact" ]]; then
-  appdir="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -type d -name '*.AppDir' | head -n 1)"
-  [[ -n "$appdir" ]] || { echo 'build-linux-appimage: FAIL: no AppImage and no AppDir produced' >&2; exit 1; }
-  if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
-    ln -sf EducAI.png "$appdir/educai.png"
-  fi
-  # linuxdeploy's bundled patchelf corrupts the pinned opencode sidecar
-  # (it adds a broken RUNPATH; the patched binary segfaults). Restore the
-  # checksum-verified pinned sidecars into the AppDir so the packaged
-  # artifact ships byte-exact sidecars.
-  cp sidecars/opencode-x86_64-unknown-linux-gnu "$appdir/usr/bin/opencode"
-  cp sidecars/cloudflared-x86_64-unknown-linux-gnu "$appdir/usr/bin/cloudflared"
-  ./packaging/linux/prepare-graphics-appdir "$appdir"
-  ./packaging/linux/prepare-webkit-appdir "$appdir"
-  appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
-  [[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
-  appimage="app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage"
-  rm -f "$appimage"
-  if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
-      "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
-    echo 'build-linux-appimage: FAIL: appimagetool packaging failed' >&2
-    exit 1
-  fi
-  artifact="$appimage"
+appdir="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -type d -name '*.AppDir' | head -n 1)"
+[[ -n "$appdir" ]] || { echo 'build-linux-appimage: FAIL: no AppDir produced' >&2; exit 1; }
+if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
+  ln -sf EducAI.png "$appdir/educai.png"
 fi
+# Always rebuild from the controlled AppDir after restoring/verifying our
+# component payloads. A linuxdeploy-produced AppImage may predate these copies.
+cp sidecars/opencode-x86_64-unknown-linux-gnu "$appdir/usr/bin/opencode"
+cp sidecars/cloudflared-x86_64-unknown-linux-gnu "$appdir/usr/bin/cloudflared"
+./packaging/linux/stage-onnxruntime-appdir "$appdir"
+./packaging/linux/prepare-graphics-appdir "$appdir"
+./packaging/linux/prepare-webkit-appdir "$appdir"
+appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
+[[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
+appimage="app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage"
+rm -f "$appimage"
+if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+    "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
+  echo 'build-linux-appimage: FAIL: appimagetool packaging failed' >&2
+  exit 1
+fi
+artifact="$appimage"
 artifact="$(readlink -f "$artifact")"
 ./scripts/check-appimage-glibc "$artifact" 2.39
 ./scripts/check-appimage-webkit-runtime "$artifact"
@@ -46,8 +43,5 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 ( cd "$workdir" && "$artifact" --appimage-extract >/dev/null )
 ./scripts/check-graphics-appdir "$workdir/squashfs-root"
+./scripts/check-appimage-onnxruntime "$artifact"
 sha256sum "$artifact"
-# pnpm (run via corepack in this root) records its packageManager in
-# app/package.json; discard that write so the controlled build leaves the
-# working tree clean.
-git restore -- app/package.json

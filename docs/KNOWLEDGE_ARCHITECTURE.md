@@ -244,6 +244,11 @@ without Python, Docker, GPU drivers or a daemon; the exact contract is
 [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md).
 Models are app-data downloads, not AppImage bytes.
 
+K2 now implements this Linux payload: the final extracted AppImage contains the
+approved ONNX Runtime CPU files under `usr/lib/educai/onnxruntime/`, passed the
+GLIBC <=2.39 gate (core 2.27, provider 2.2), and was used for real local E5
+inference. Windows Knowledge runtime validation remains a separate future gate.
+
 On Windows, the current app-data root supplies the future writable model/cache
 location. When Knowledge is implemented, the DLL payload specified in
 [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md)

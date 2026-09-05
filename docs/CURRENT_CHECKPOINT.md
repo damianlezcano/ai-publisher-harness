@@ -1,11 +1,12 @@
 # Current Checkpoint
 
-## KNOWLEDGE K2 LOCAL RUNTIME DISTRIBUTION DECISION — DESIGN RESOLVED, IMPLEMENTATION NOT RESUMED (2026-09-05)
+## KNOWLEDGE LOCAL EMBEDDINGS PASS COMPLETE (2026-09-05)
 
-- **Decision:** [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md) accepts bundled Microsoft ONNX Runtime CPU 1.22.0, dynamically loaded through `ort` with no build-time/runtime auto-download, plus a Rust-native tokenizer and first-use, checksum-verified fp32 `intfloat/multilingual-e5-small` model generation in application app-data. K2 has no implementation, dependency, native runtime, model file, downloader, packaging, vector retrieval, UI, or M11 change in this pass.
-- **Distribution state:** the current Windows feature set remains **HUMAN-PASS** exactly as recorded below. The future Knowledge native runtime **REQUIRES WINDOWS VALIDATION AFTER INTEGRATION**. Linux AppImage packaging remains unchanged and has not passed a Knowledge-runtime payload/GLIBC validation; its future controlled-build gate is recorded in ADR-0016.
-- **Next gate:** **KNOWLEDGE K2 BLOCKER RESOLVED AT DESIGN LEVEL — LOCAL EMBEDDINGS IMPLEMENTATION NOT YET RESUMED.** Resume only as a separate scoped K2 implementation task using the ADR's artifact, trust, offline, and platform-validation contract. **M11: NOT STARTED.**
-- **Validation:** `cargo fmt --all -- --check` PASS; `git diff --check` PASS. `./scripts/verify` reached its strict workspace-Clippy gate then stopped only on the two pre-existing, unchanged `unused_mut` warnings in `project-tunnel` and `project-opencode`, exactly as already recorded for K1 below; no Knowledge/documentation failure was reported.
+- **K2:** verified multilingual-e5-small fp32, Rust tokenizer, schema v2 vectors, incremental current-generation reuse, exact project-local semantic retrieval, and K1 lexical preservation are complete. DOCUMENT EMBEDDING REMOTE LLM CALLS: ZERO. QUERY EMBEDDING REMOTE LLM CALLS: ZERO.
+- **Linux package:** ONNX Runtime CPU 1.22.0 is checksum-gated from archive `8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3` (7,798,730 bytes); final AppImage payload is only core/provider libraries plus required links at `usr/lib/educai/onnxruntime/`. Extracted artifact GLIBC gate PASS (core 2.27, provider 2.2), model excluded; real extracted-path E5 inference was 384 dimensions, norm 1.000000, OpenShift 0.913079 > photosynthesis 0.793906.
+- **Model:** first-use checksum/atomic managed cache at `<app-data>/knowledge-models/intfloat--multilingual-e5-small/ccc66d3bcd826f577e26b9a4072cc5fe3a7ad6a3/`; model 470,268,510 bytes plus tokenizer artifacts, never AppImage content.
+- **Windows:** CURRENT WINDOWS RELEASED FEATURE SET: **HUMAN-PASS**. KNOWLEDGE LOCAL EMBEDDINGS WINDOWS RUNTIME: **NOT YET HUMAN-VALIDATED**. **M11: NOT STARTED.**
+- **Next:** HYBRID RETRIEVAL — FTS5 + SEMANTIC EXACT SEARCH + RRF (not started).
 
 ## KNOWLEDGE IMPLEMENTATION STARTED — FOUNDATION / LEXICAL INDEXING PASS COMPLETE (2026-09-05)
 
