@@ -71,6 +71,7 @@ fn prompt() -> AgentPrompt {
     AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     }
 }
 

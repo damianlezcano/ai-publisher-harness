@@ -34,6 +34,7 @@ fn prompt() -> AgentPrompt {
     AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     }
 }
 
@@ -136,6 +137,7 @@ fn send_preserves_quoted_and_special_text_exactly_in_request_body() {
         let req = AgentPrompt {
             text: text.to_owned(),
             model: None,
+            knowledge: None,
         };
         let task = engine.send(&session, &req).expect("send");
         assert_eq!(task.status, TaskStatus::Completed);

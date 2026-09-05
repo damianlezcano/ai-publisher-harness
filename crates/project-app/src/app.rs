@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use project_agent::model::{ModelRef, TaskStatus};
 use project_agent::{
-    AgentAttachment, AgentEngine, AgentPrompt, AgentRequest, AgentRunResult, AgentService,
-    AgentStatus, FilesystemCreationRegistrar, OpenCodeAgentEngine,
+    AgentAttachment, AgentEngine, AgentEvidenceProvenance, AgentKnowledgeContext,
+    AgentKnowledgeEntry, AgentPrompt, AgentRequest, AgentRunResult, AgentService, AgentStatus,
+    FilesystemCreationRegistrar, OpenCodeAgentEngine,
 };
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
@@ -24,6 +25,7 @@ use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
     PublicationSnapshotStore,
 };
+use project_knowledge::{ContextAssemblyOptions, HybridSearchOptions, KnowledgeStore};
 use project_opencode::OpenCodeBackend;
 use project_preview::PreviewServer;
 use project_provider::{
@@ -191,6 +193,7 @@ pub struct AgentRunInputs {
     prompt: String,
     model: Option<ModelRef>,
     attachments: Vec<AgentAttachment>,
+    knowledge: Option<AgentKnowledgeContext>,
 }
 
 impl AgentRunInputs {
@@ -863,6 +866,90 @@ where
             .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró ese material."))
     }
 
+    /// K5 activation is deterministic: an existing project-local index runs
+    /// K3 then K4 against this current user turn. No remote call is made.
+    fn prepare_knowledge_context(
+        &self,
+        project_id: &ProjectId,
+        user_query: &str,
+    ) -> AppResult<Option<AgentKnowledgeContext>> {
+        let root = self.base.join("projects").join(project_id.as_str());
+        if !root.join("knowledge/knowledge.sqlite").is_file() {
+            return Ok(None);
+        }
+        let started = std::time::Instant::now();
+        let store = KnowledgeStore::open(&root, project_id).map_err(|_| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos preparar el material de apoyo.",
+            )
+        })?;
+        let (candidates, semantic) = store
+            .hybrid_search(user_query, None, HybridSearchOptions::default())
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "No pudimos buscar el material de apoyo.",
+                )
+            })?;
+        let package = store
+            .assemble_context(user_query, &candidates, ContextAssemblyOptions::default())
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "No pudimos preparar el material de apoyo.",
+                )
+            })?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "[knowledge] retrieval candidates={} evidence selected={} budget_used={} budget_limit={} semantic_availability={semantic:?} request_preparation_ms={}",
+                candidates.len(),
+                package.entries.len(),
+                package.totals.estimated_budget_used,
+                package.totals.estimated_budget_limit,
+                started.elapsed().as_millis()
+            ),
+        );
+        if package.entries.is_empty() {
+            return Ok(None);
+        }
+        let entries: Vec<AgentKnowledgeEntry> = package
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| AgentKnowledgeEntry {
+                label: format!("E{}", index + 1),
+                source_label: format!("S{}", index + 1),
+                source_name: project_core::safe_file_name(&entry.source_name),
+                chunk_label: format!("C{}", index + 1),
+                line_start: Some(entry.provenance.start_line),
+                line_end: Some(entry.provenance.end_line),
+                heading_path: entry.heading_path.clone(),
+                text: entry.text.clone(),
+            })
+            .collect();
+        let citation_map = entries
+            .iter()
+            .map(|entry| AgentEvidenceProvenance {
+                label: entry.label.clone(),
+                source_label: entry.source_label.clone(),
+                chunk_label: entry.chunk_label.clone(),
+            })
+            .collect();
+        Ok(Some(AgentKnowledgeContext {
+            indexed_source_names: package
+                .entries
+                .iter()
+                .map(|entry| project_core::safe_file_name(&entry.source_name))
+                .collect(),
+            entries,
+            evidence_budget_used: package.totals.estimated_budget_used,
+            evidence_budget_limit: package.totals.estimated_budget_limit,
+            citation_map,
+        }))
+    }
+
     /// Resolves prompt attachments (M8 §6 / ADR-0011). Each opaque material ID
     /// is validated, authorized against the CURRENT project's materials (a
     /// foreign/unknown ID is rejected), and its bytes are read through the
@@ -1210,6 +1297,7 @@ where
             }
             None => self.selected_model_ref()?,
         };
+        let knowledge = self.prepare_knowledge_context(&project_id, prompt)?;
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
         Ok(AgentRunInputs {
             project_id,
@@ -1217,6 +1305,7 @@ where
             prompt: prompt.to_owned(),
             model,
             attachments,
+            knowledge,
         })
     }
 
@@ -1247,6 +1336,7 @@ where
             prompt: AgentPrompt {
                 text: inputs.prompt,
                 model: inputs.model,
+                knowledge: inputs.knowledge,
             },
             attachments: inputs.attachments,
         })

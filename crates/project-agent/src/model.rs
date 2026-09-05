@@ -19,8 +19,45 @@ pub struct ModelRef {
 }
 
 pub struct AgentPrompt {
+    /// The current user turn, kept distinct from untrusted evidence until
+    /// provider-independent request assembly.
     pub text: String,
     pub model: Option<ModelRef>,
+    pub knowledge: Option<AgentKnowledgeContext>,
+}
+
+/// Bounded, provider-neutral reference material. No SQLite, embeddings, or
+/// retrieval-provider details may cross this boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentKnowledgeContext {
+    pub entries: Vec<AgentKnowledgeEntry>,
+    pub evidence_budget_used: usize,
+    pub evidence_budget_limit: usize,
+    /// Local-only names of Knowledge-managed sources. The attachment provisioner
+    /// uses these solely to prevent full-file duplication in the same request.
+    pub indexed_source_names: Vec<String>,
+    /// Local citation-ready mapping; no database lookup is needed for E1.
+    pub citation_map: Vec<AgentEvidenceProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentKnowledgeEntry {
+    pub label: String,
+    pub source_label: String,
+    pub source_name: String,
+    pub chunk_label: String,
+    pub line_start: Option<usize>,
+    pub line_end: Option<usize>,
+    pub heading_path: Vec<String>,
+    /// Exactly the bounded K4 excerpt.
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentEvidenceProvenance {
+    pub label: String,
+    pub source_label: String,
+    pub chunk_label: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

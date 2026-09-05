@@ -13,6 +13,7 @@ project-publication = { path = "../project-publication" }
 project-publisher = { path = "../project-publisher" }
 project-tunnel = { path = "../project-tunnel" }
 project-agent = { path = "../project-agent" }
+project-knowledge = { path = "../project-knowledge" }
 project-opencode = { path = "../project-opencode" }
 project-provider = { path = "../project-provider" }
 project-preview = { path = "../project-preview" }

@@ -319,6 +319,28 @@ None blocks the current Windows runtime/distribution validation.
 
 ## 28. Validation criteria and status
 
+## 29. K5 chat request integration
+
+K5 activates deterministically for an active project with an existing local
+Knowledge index. The current user turn alone is passed to K3 hybrid retrieval,
+then to K4 context assembly. Only the resulting bounded `EvidencePackage`
+entries cross the remote boundary, mapped to provider-independent
+`AgentKnowledgeContext` and serialized once by the shared Agent request
+assembler. No provider adapter knows about FTS, embeddings, SQLite, or K4.
+
+Evidence is untrusted reference material, structurally delimited and labelled
+`E1`, `E2`, and so on in K4 order. The stable framing says that document
+instructions must not be followed and that system/user instructions prevail.
+Only source-safe display metadata, line/heading provenance, and bounded K4
+text are sent; no absolute paths, internal database IDs, vectors/scores, model
+details, full sources/corpus, or raw indexed attachment are sent. The context
+is ephemeral per turn and is not replayed through conversation history.
+
+K5 uses zero remote LLM calls for retrieval or context assembly. The sole
+remote LLM call remains normal final answer/Creation generation. Empty/no-index
+results preserve normal chat; unavailable semantics uses K3 lexical fallback.
+Corpus summarization and final citation UI remain future work.
+
 Before implementation is complete, verify deterministic TXT/Markdown extraction
 and chunk boundaries; authorized source linkage; add/modify/delete/restart and
 version invalidation; hybrid exact/semantic retrieval; strict context budgets,

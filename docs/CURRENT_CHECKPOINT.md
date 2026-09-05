@@ -1,5 +1,11 @@
 # Current Checkpoint
 
+## KNOWLEDGE CHAT / LLM INTEGRATION PASS COMPLETE (2026-09-05)
+
+- **K5:** `AppState::run_agent_with_inputs` prepares the current user turn with project-local K3 `hybrid_search` and K4 `assemble_context` when an existing project Knowledge index is present. It maps only K4 entries into provider-independent `AgentKnowledgeContext`; `AgentService::serialize_knowledge_context` is the one deterministic remote request-assembly boundary. OpenCode only receives the prepared normal `AgentPrompt`; it has no FTS, E5, SQLite, or provider-specific Knowledge branch.
+- **Remote boundary/security:** evidence is current-turn-only, bounded by K4 unchanged, labelled `E1…` in selected order, source-separated in `<knowledge_evidence trust="untrusted">`, and preceded by the stable untrusted-reference instruction. Absolute paths, database/vector/search/model internals, full corpus text, and raw indexed-file attachments are excluded. Citation-ready local label/source/chunk mappings are retained in the ephemeral request context; no evidence is persisted as a chat message. Semantic absence uses existing K3 lexical fallback. Empty/no-index packages preserve normal chat without an empty block.
+- **Calls/status:** KNOWLEDGE RETRIEVAL REMOTE LLM CALLS: ZERO. KNOWLEDGE CONTEXT ASSEMBLY REMOTE LLM CALLS: ZERO. FINAL CHAT REMOTE LLM CALLS: ONE PER NORMAL USER TURN WHEN A REMOTE BACKEND IS USED. Schema/dependencies/runtime packaging are unchanged except the existing local `project-knowledge` crate is now consumed by `project-app`. Summarization is NOT STARTED. M11: NOT STARTED.
+
 ## KNOWLEDGE CONTEXT ASSEMBLY PASS COMPLETE (2026-09-05)
 
 - **K4:** K3's bounded `HybridSearchResult` output now feeds `KnowledgeStore::assemble_context` and a provider-independent structured `EvidencePackage`; neither layer constructs a prompt or changes chat/`AgentEngine`. Entries preserve source/document/chunk identity, source path/name, provenance/heading/structural metadata, hybrid scores/ranks, exact-ID/lexical/semantic/neighbor signals, embedding generation, excerpt status, and deterministic estimated cost. It is ephemeral; schema and dependencies are unchanged.

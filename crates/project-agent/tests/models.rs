@@ -119,6 +119,7 @@ fn fake_engine_send_returns_scripted_artifacts_and_message() {
     let prompt = project_agent::AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     };
 
     let task = engine.send(&session, &prompt).unwrap();
@@ -162,6 +163,7 @@ fn fake_engine_fault_injection() {
     let prompt = project_agent::AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     };
     assert!(matches!(
         engine.send(&session, &prompt),
@@ -179,6 +181,7 @@ fn fake_engine_send_and_cancel_before_ready_error() {
     let prompt = project_agent::AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     };
 
     assert!(matches!(
@@ -204,6 +207,7 @@ fn fake_engine_shutdown_returns_to_stopped() {
     let prompt = project_agent::AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     };
     assert!(matches!(
         engine.send(&session, &prompt),
@@ -225,6 +229,7 @@ fn fake_engine_records_calls_in_order() {
     let prompt = project_agent::AgentPrompt {
         text: "create an activity".into(),
         model: None,
+        knowledge: None,
     };
     engine.send(&session, &prompt).unwrap();
     engine.cancel(&session).unwrap();

@@ -1167,6 +1167,7 @@ dependencies = [
  "project-agent",
  "project-core",
  "project-fs",
+ "project-knowledge",
  "project-opencode",
  "project-preview",
  "project-provider",

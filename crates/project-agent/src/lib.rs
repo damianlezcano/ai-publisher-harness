@@ -13,8 +13,9 @@ pub mod service;
 pub use error::{AgentError, AgentResult};
 pub use fake::{FakeAgentEngine, FakeCall};
 pub use model::{
-    AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact,
-    ArtifactKind, ModelRef, TaskStatus,
+    AgentBackendInfo, AgentEvidenceProvenance, AgentKnowledgeContext, AgentKnowledgeEntry,
+    AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact, ArtifactKind,
+    ModelRef, TaskStatus,
 };
 pub use opencode::OpenCodeAgentEngine;
 pub use port::AgentEngine;

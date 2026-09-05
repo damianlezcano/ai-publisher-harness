@@ -325,6 +325,20 @@ impl KnowledgeStore {
     pub fn database_path(&self) -> &Path {
         &self.database_path
     }
+
+    /// Whether this project-local index owns a material source. This exposes
+    /// only activation/deduplication state, never source text.
+    pub fn has_material_source(&self, material_id: &str) -> Result<bool> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT 1 FROM material_sources WHERE material_id=?1 LIMIT 1",
+                [material_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
     pub fn schema_version(&self) -> Result<i64> {
         Ok(self
             .connection
