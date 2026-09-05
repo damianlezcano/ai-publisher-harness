@@ -77,6 +77,7 @@ impl ChildGuard {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        configure_background_child(&mut cmd);
         for (key, value) in envs {
             cmd.env(key, value);
         }
@@ -192,6 +193,26 @@ impl ChildGuard {
     }
 }
 
+/// Applies the Windows creation policy for EducAI-owned background sidecars.
+///
+/// `ChildGuard` is used in production only for the supervised OpenCode and
+/// cloudflared children. `CREATE_NO_WINDOW` suppresses their console windows
+/// without detaching the child or changing its piped stdio handles.
+#[cfg(windows)]
+fn configure_background_child(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_background_child(_: &mut Command) {}
+
+/// Windows `CREATE_NO_WINDOW`, documented by the Win32 process-creation API.
+/// Kept local to avoid a Windows API dependency for this portable crate.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         // Disconnect the line consumer first so the forwarder cannot block
@@ -266,5 +287,14 @@ fn join_helpers(helpers: &mut Vec<JoinHandle<()>>, timeout: Duration) {
         match rx.recv_timeout(timeout) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) | Err(RecvTimeoutError::Timeout) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn background_children_use_only_create_no_window() {
+        assert_eq!(super::CREATE_NO_WINDOW, 0x0800_0000);
     }
 }
