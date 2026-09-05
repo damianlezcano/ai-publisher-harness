@@ -1,6 +1,6 @@
 # EducAI Knowledge Architecture
 
-Status: **DESIGNED / TECHNICALLY APPROVED FOR FUTURE IMPLEMENTATION** (bounded architecture pass; no implementation)
+Status: **IMPLEMENTED (K1–K5) — LINUX SEMANTIC RUNTIME HUMAN-PASS**; Windows Knowledge semantic runtime validation remains a separate future gate. Architecture design was approved in the bounded pass below; implementation and Linux runtime closure are recorded in `CURRENT_CHECKPOINT.md`.
 
 ## 1. Context and problem
 
@@ -267,7 +267,13 @@ Models are app-data downloads, not AppImage bytes.
 K2 now implements this Linux payload: the final extracted AppImage contains the
 approved ONNX Runtime CPU files under `usr/lib/educai/onnxruntime/`, passed the
 GLIBC <=2.39 gate (core 2.27, provider 2.2), and was used for real local E5
-inference. Windows Knowledge runtime validation remains a separate future gate.
+inference. The production K5 semantic flow (TXT/Markdown ingestion → K1 lexical
+→ K2 E5 embeddings → K3 hybrid → K4 bounded evidence → K5 deterministic request)
+was closed as **HUMAN-PASS on Linux** (see `CURRENT_CHECKPOINT.md`): real E5
+queries on Fedora with the real bundled ONNX Runtime resolved from the packaged
+path, exact `INC-12345` preference intact, lexical fallback proven, and the
+verified model cache at the production app-data root. Windows Knowledge runtime
+validation remains a separate future gate.
 
 On Windows, the current app-data root supplies the future writable model/cache
 location. When Knowledge is implemented, the DLL payload specified in

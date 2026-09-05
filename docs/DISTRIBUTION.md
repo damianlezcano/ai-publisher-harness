@@ -4,7 +4,7 @@
 
 | Platform | Official artifact | Minimum supported OS | Controlled build environment | Status |
 | --- | --- | --- | --- | --- |
-| Linux x86_64 | AppImage | Ubuntu 24.04 family / glibc 2.39 | Ubuntu 24.04 Podman image | technical gate implemented; target-machine validation pending |
+| Linux x86_64 | AppImage | Ubuntu 24.04 family / glibc 2.39 | Ubuntu 24.04 Podman image | technical gates PASS; Fedora Knowledge semantic runtime validated on 2026-09-05 (see `CURRENT_CHECKPOINT.md`) |
 | Windows x64 | NSIS installer | Windows 11 x64 | native Windows x64 MSVC runner | HUMAN-PASS |
 
 Linux uses Ubuntu 24.04 because it is the oldest evaluated LTS with both glibc
