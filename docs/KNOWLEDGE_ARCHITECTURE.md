@@ -50,11 +50,11 @@ Every chunker must also enforce a **hard embedding input limit** derived from th
 
 ## 8. Embeddings
 
-Recommended V1 model: **multilingual-e5-small** (or its maintained ONNX equivalent), CPU-friendly, multilingual Spanish/technical quality, approximately 384 dimensions and a modest disk/RAM footprint. Package the runtime behind an embedding-provider interface and benchmark it on representative Spanish technical/transcript queries. Alternatives: `bge-m3` (better multilingual coverage, substantially larger/slower) and `multilingual-e5-base` (quality gain, higher resources).
+Recommended V1 model: **multilingual-e5-small**, CPU-friendly, multilingual Spanish/technical quality, and 384 dimensions. The immutable fp32 ONNX export, Rust tokenizer boundary, bundled ONNX Runtime CPU 1.22.0, first-use model download, artifact checksums, and platform loading/validation contract are accepted in [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md). Package the runtime behind an embedding-provider interface and benchmark it on representative Spanish technical/transcript queries. Alternatives: `bge-m3` (better multilingual coverage, substantially larger/slower) and `multilingual-e5-base` (quality gain, higher resources).
 
 Each embedding generation has a versioned model contract containing at least: model identifier; immutable model version/revision; tokenizer and tokenizer version where applicable; embedding dimensionality; maximum effective input tokens; input formatting contract; and normalization behavior. The chunker consumes this contract to calculate its hard limit. For the E5 family, the V1 contract must format inputs as `query: <user query>` for queries and `passage: <document chunk>` for document embeddings. These prefixes are part of embedding-generation configuration, not ad-hoc call-site behavior. Record this complete contract in every index generation.
 
-Default distribution is an optional, signed first-use model download into an application-managed writable data directory, with a small offline-capable bundled option considered for a later edition. Downloads require HTTPS, a pinned signed manifest, checksums, atomic rename, and versioned directories. The manifest pins model ID, immutable revision, tokenizer/runtime compatibility, dimension, license notice, every file length and SHA-256. A model upgrade creates a new index generation and migrates/re-embeds in the background; old generations remain readable until success. This avoids inflating AppImage/NSIS while preserving reproducibility and offline behavior after first use.
+Default distribution is a bundled, checksum-pinned ONNX Runtime CPU payload plus an optional first-use model download into an application-managed writable data directory; see [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md). Downloads require HTTPS, a pinned manifest, checksums, atomic rename, and versioned directories. The manifest pins model ID, immutable revision, tokenizer/runtime compatibility, dimension, license notice, every file length and SHA-256. A model upgrade creates a new index generation and migrates/re-embeds in the background; old generations remain readable until success. This avoids inflating AppImage/NSIS with the model while preserving reproducibility and offline behavior after first use.
 
 ## 9. Embedded storage and indexes
 
@@ -238,16 +238,18 @@ growth and cold/warm query latency on representative Spanish technical and
 transcript fixtures for 100 and 1,000 documents.
 
 On Linux, no change to the controlled Ubuntu 24.04 / GLIBC <=2.39 AppImage or
-host graphics boundary is proposed. A future ONNX Runtime must be packaged and
-validated by the existing extracted-payload GLIBC gates, without Python, Docker,
-GPU drivers or a daemon. Models are app-data downloads, not AppImage bytes.
+host graphics boundary is proposed. The future bundled ONNX Runtime CPU payload
+must be packaged and validated by the existing extracted-payload GLIBC gates,
+without Python, Docker, GPU drivers or a daemon; the exact contract is
+[ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md).
+Models are app-data downloads, not AppImage bytes.
 
-On Windows, no change is required before the native Windows 11 x64 Tauri/NSIS
-runtime gate. The current app-data root already supplies the future writable
-model/cache location. When Knowledge is implemented, any ONNX Runtime DLL must
-be explicitly packaged/tested by the NSIS build, and the same signed manifest
-and checksum verification must apply to models. The current Windows artifact
-must be validated unchanged; this pass adds no sidecar or native dependency.
+On Windows, the current app-data root supplies the future writable model/cache
+location. When Knowledge is implemented, the DLL payload specified in
+[ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md)
+must be explicitly packaged/tested by the NSIS build, and its manifest/checksum
+verification applies to models. The current Windows artifact remains validated
+unchanged; its HUMAN-PASS does not validate the future Knowledge runtime.
 
 ## 26. Recommendation, alternatives and rejected approaches
 
@@ -273,19 +275,18 @@ portability, privacy or maintenance priorities.
 
 ## 27. ADR assessment and open questions
 
-No ADR is created now. The boundary is designed but exact model export,
-benchmark threshold and vector implementation remain deliberately unpinned.
-If V1 proceeds after the Windows gate, one ADR should record the actually
-selected local-first store/hybrid retrieval boundary and its pinned runtime;
-creating it now would falsely freeze untested dependencies.
+[ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md)
+records the exact multilingual-e5-small ONNX export/revision and local runtime
+distribution contract. It does not replace required benchmark and package
+validation evidence.
 
 The remaining evidence questions are narrowly scoped:
 
-1. Which exact multilingual-e5-small ONNX export/revision meets license,
-   Spanish technical retrieval and Windows/Linux package tests?
+1. Benchmark threshold for semantic quality, throughput, peak RAM, and disk on
+   representative Windows/Linux machines.
 2. Does exact blocked scoring meet agreed p95 behavior at corpus scale, or does
    measured evidence justify a pinned embedded ANN extension?
-3. What offline UX/package-size threshold merits a signed bundled-model option?
+3. What offline UX/package-size threshold merits a checksum-pinned bundled-model option?
 4. What coverage/citation language is understandable before remote hierarchical
    synthesis is enabled?
 

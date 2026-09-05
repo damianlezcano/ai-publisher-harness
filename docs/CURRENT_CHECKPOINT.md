@@ -1,5 +1,12 @@
 # Current Checkpoint
 
+## KNOWLEDGE K2 LOCAL RUNTIME DISTRIBUTION DECISION — DESIGN RESOLVED, IMPLEMENTATION NOT RESUMED (2026-09-05)
+
+- **Decision:** [ADR-0016](decisions/0016-knowledge-local-inference-runtime-distribution.md) accepts bundled Microsoft ONNX Runtime CPU 1.22.0, dynamically loaded through `ort` with no build-time/runtime auto-download, plus a Rust-native tokenizer and first-use, checksum-verified fp32 `intfloat/multilingual-e5-small` model generation in application app-data. K2 has no implementation, dependency, native runtime, model file, downloader, packaging, vector retrieval, UI, or M11 change in this pass.
+- **Distribution state:** the current Windows feature set remains **HUMAN-PASS** exactly as recorded below. The future Knowledge native runtime **REQUIRES WINDOWS VALIDATION AFTER INTEGRATION**. Linux AppImage packaging remains unchanged and has not passed a Knowledge-runtime payload/GLIBC validation; its future controlled-build gate is recorded in ADR-0016.
+- **Next gate:** **KNOWLEDGE K2 BLOCKER RESOLVED AT DESIGN LEVEL — LOCAL EMBEDDINGS IMPLEMENTATION NOT YET RESUMED.** Resume only as a separate scoped K2 implementation task using the ADR's artifact, trust, offline, and platform-validation contract. **M11: NOT STARTED.**
+- **Validation:** `cargo fmt --all -- --check` PASS; `git diff --check` PASS. `./scripts/verify` reached its strict workspace-Clippy gate then stopped only on the two pre-existing, unchanged `unused_mut` warnings in `project-tunnel` and `project-opencode`, exactly as already recorded for K1 below; no Knowledge/documentation failure was reported.
+
 ## KNOWLEDGE IMPLEMENTATION STARTED — FOUNDATION / LEXICAL INDEXING PASS COMPLETE (2026-09-05)
 
 - **Scope completed:** the new backend-only `project-knowledge` crate implements the bounded local foundation for authorized immutable TXT/Markdown Material bytes: deterministic UTF-8 validation, LF + NFC normalization, structural chunks with provenance, SHA-256 identity/version metadata, a project-owned SQLite database at `projects/<project-id>/knowledge/knowledge.sqlite`, WAL, foreign keys, transactional schema v1, and SQLite FTS5 lexical search. It has no Tauri, OpenCode, provider, HTTP, model, embedding, vector, or packaging dependency.
