@@ -341,6 +341,53 @@ remote LLM call remains normal final answer/Creation generation. Empty/no-index
 results preserve normal chat; unavailable semantics uses K3 lexical fallback.
 Corpus summarization and final citation UI remain future work.
 
+## 30. Durable material indexing status contract (K5A.1)
+
+Material acceptance and Knowledge indexing are deliberately distinct:
+acceptance means EducAI durably stored a project Material under `inputs/`; it
+does **not** mean that the Material is searchable or usable as Knowledge.
+Knowledge stores a project-local, Material-scoped operational record in
+`projects/<project-id>/knowledge/knowledge.sqlite`. The record belongs to the
+Material/source identity rather than to the shared canonical document, so two
+Materials with identical bytes retain independent state and deleting one does
+not alter the other's state.
+
+Schema v3 adds `material_index_state(material_id, state, failure_category,
+retryable, last_attempt_at, updated_at)`. It stores no source bytes, chunk text,
+query, arbitrary diagnostic, secret, or absolute path. `state` is one of:
+
+- `PENDING`: committed immediately before a supported Material's local index
+  attempt. It is retryable. The Material itself was already committed by the
+  project service; no distributed transaction is attempted.
+- `READY`: the source association and current lexical derivation were committed
+  successfully. Semantic readiness continues to use K2's active-generation
+  availability rules, so a later unavailable local semantic runtime preserves
+  K3 lexical fallback rather than creating another material state.
+- `FAILED`: the Material remains accepted, but local Knowledge derivation did
+  not complete. It is retryable and carries only a typed sanitized category.
+- `UNSUPPORTED`: the currently supported TXT/Markdown extractor boundary does
+  not accept the Material. It is not presented as indexed and is not retryable
+  until a supported extractor is added.
+
+Failure categories are `unsupported_format`, `invalid_text_encoding`,
+`read_failed`, `extraction_failed`, `model_unavailable`, `embedding_failed`,
+`storage_failed`, and `integrity_failed`. They are codes, not error dumps.
+`KnowledgeStore::material_index_status` provides the typed query API;
+`begin_material_indexing`, `index`, and `retry_material_index` provide the
+synchronous invocation/retry boundary. This pass creates no automatic worker,
+queue, scheduler, UI, provider wiring, or remote call.
+
+The indexing boundary commits in this order: (1) the existing project Material
+storage commit, (2) durable `PENDING`, (3) the local K1 derivation transaction,
+and (4) durable `READY` or `FAILED`. A crash after step 2 leaves `PENDING`
+visible and retryable after reopen; startup never silently changes it to
+`READY`. `KnowledgeStore::remove` removes both the Material source link and its
+status record transactionally, then uses the existing orphan-document cleanup.
+Retrieval continues to rely on K1/K2 active derivation integrity, not blindly
+on this operational status table.
+
+MATERIAL INDEX STATUS MANAGEMENT REMOTE LLM CALLS: ZERO.
+
 Before implementation is complete, verify deterministic TXT/Markdown extraction
 and chunk boundaries; authorized source linkage; add/modify/delete/restart and
 version invalidation; hybrid exact/semantic retrieval; strict context budgets,

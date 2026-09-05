@@ -29,7 +29,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 pub const NORMALIZATION_VERSION: &str = "nfc-lf-v1";
 pub const CHUNKER_ID: &str = "structural-v1";
 pub const CHUNKER_VERSION: &str = "structural-v1";
@@ -144,6 +144,90 @@ pub struct IndexOutcome {
     pub document_id: String,
     pub reused: bool,
     pub chunk_count: usize,
+}
+
+/// Durable operational state for one project Material's Knowledge derivation.
+/// This is deliberately separate from the Material's acceptance/storage state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaterialIndexState {
+    Pending,
+    Ready,
+    Failed,
+    Unsupported,
+}
+
+impl MaterialIndexState {
+    fn as_db(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "ready" => Ok(Self::Ready),
+            "failed" => Ok(Self::Failed),
+            "unsupported" => Ok(Self::Unsupported),
+            _ => Err(KnowledgeError::IncompatibleSchema(-1)),
+        }
+    }
+}
+
+/// Sanitized failure category persisted for material indexing. Arbitrary error
+/// strings, source text, paths, and provider details are intentionally absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaterialIndexFailure {
+    UnsupportedFormat,
+    InvalidTextEncoding,
+    ReadFailed,
+    ExtractionFailed,
+    ModelUnavailable,
+    EmbeddingFailed,
+    StorageFailed,
+    IntegrityFailed,
+}
+
+impl MaterialIndexFailure {
+    fn as_db(&self) -> &'static str {
+        match self {
+            Self::UnsupportedFormat => "unsupported_format",
+            Self::InvalidTextEncoding => "invalid_text_encoding",
+            Self::ReadFailed => "read_failed",
+            Self::ExtractionFailed => "extraction_failed",
+            Self::ModelUnavailable => "model_unavailable",
+            Self::EmbeddingFailed => "embedding_failed",
+            Self::StorageFailed => "storage_failed",
+            Self::IntegrityFailed => "integrity_failed",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "unsupported_format" => Ok(Self::UnsupportedFormat),
+            "invalid_text_encoding" => Ok(Self::InvalidTextEncoding),
+            "read_failed" => Ok(Self::ReadFailed),
+            "extraction_failed" => Ok(Self::ExtractionFailed),
+            "model_unavailable" => Ok(Self::ModelUnavailable),
+            "embedding_failed" => Ok(Self::EmbeddingFailed),
+            "storage_failed" => Ok(Self::StorageFailed),
+            "integrity_failed" => Ok(Self::IntegrityFailed),
+            _ => Err(KnowledgeError::IncompatibleSchema(-1)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialIndexStatus {
+    pub material_id: MaterialId,
+    pub state: MaterialIndexState,
+    pub failure: Option<MaterialIndexFailure>,
+    pub retryable: bool,
+    pub last_attempt_at: Option<i64>,
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -351,9 +435,134 @@ impl KnowledgeStore {
             .expect("schema version is controlled"))
     }
 
+    /// Returns this project's durable operational Knowledge state for a
+    /// Material. A missing row means this Material has not been submitted to
+    /// the Knowledge indexing boundary yet.
+    pub fn material_index_status(
+        &self,
+        material_id: &MaterialId,
+    ) -> Result<Option<MaterialIndexStatus>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT state, failure_category, retryable, last_attempt_at, updated_at
+                 FROM material_index_state WHERE material_id=?1",
+                [material_id.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(state, failure, retryable, last_attempt_at, updated_at)| {
+            Ok(MaterialIndexStatus {
+                material_id: material_id.clone(),
+                state: MaterialIndexState::from_db(&state)?,
+                failure: failure
+                    .as_deref()
+                    .map(MaterialIndexFailure::from_db)
+                    .transpose()?,
+                retryable,
+                last_attempt_at,
+                updated_at,
+            })
+        })
+        .transpose()
+    }
+
+    /// Persists `Pending` before an indexing attempt. Unsupported formats are
+    /// instead durably marked `Unsupported`; their bytes are never treated as
+    /// indexed. This commit is intentionally separate from Material storage.
+    pub fn begin_material_indexing(
+        &mut self,
+        source: &MaterialSource,
+    ) -> Result<MaterialIndexState> {
+        validate_source(source)?;
+        let now = unix_seconds();
+        match extractor_contract(source) {
+            Ok(_) => {
+                self.upsert_material_index_state(
+                    &source.material_id,
+                    MaterialIndexState::Pending,
+                    None,
+                    true,
+                    Some(now),
+                    now,
+                )?;
+                Ok(MaterialIndexState::Pending)
+            }
+            Err(KnowledgeError::UnsupportedFormat(_)) => {
+                self.upsert_material_index_state(
+                    &source.material_id,
+                    MaterialIndexState::Unsupported,
+                    Some(MaterialIndexFailure::UnsupportedFormat),
+                    false,
+                    Some(now),
+                    now,
+                )?;
+                Ok(MaterialIndexState::Unsupported)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Indexes bytes from an already authorized immutable project input.
-    /// No provider or process adapter is reachable from this code path.
+    /// No provider or process adapter is reachable from this code path. It
+    /// commits `Pending` first, then commits `Ready` or a sanitized `Failed`
+    /// result, so a crash cannot silently claim readiness.
     pub fn index(&mut self, source: &MaterialSource, bytes: &[u8]) -> Result<IndexOutcome> {
+        if self.begin_material_indexing(source)? == MaterialIndexState::Unsupported {
+            return Err(KnowledgeError::UnsupportedFormat(
+                source
+                    .media_type
+                    .clone()
+                    .unwrap_or_else(|| source.source_name.clone()),
+            ));
+        }
+        match self.index_derived(source, bytes) {
+            Ok(outcome) => {
+                let now = unix_seconds();
+                self.upsert_material_index_state(
+                    &source.material_id,
+                    MaterialIndexState::Ready,
+                    None,
+                    false,
+                    None,
+                    now,
+                )?;
+                Ok(outcome)
+            }
+            Err(error) => {
+                let now = unix_seconds();
+                self.upsert_material_index_state(
+                    &source.material_id,
+                    MaterialIndexState::Failed,
+                    Some(index_failure_category(&error)),
+                    true,
+                    Some(now),
+                    now,
+                )?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Explicit retry boundary for a previously failed or crash-interrupted
+    /// Material. It remains synchronous; this crate starts no worker.
+    pub fn retry_material_index(
+        &mut self,
+        source: &MaterialSource,
+        bytes: &[u8],
+    ) -> Result<IndexOutcome> {
+        self.index(source, bytes)
+    }
+
+    fn index_derived(&mut self, source: &MaterialSource, bytes: &[u8]) -> Result<IndexOutcome> {
         validate_source(source)?;
         let (extractor_id, extractor_version) = extractor_contract(source)?;
         let original_sha256 = sha256_hex(bytes);
@@ -410,6 +619,25 @@ impl KnowledgeStore {
         })
     }
 
+    fn upsert_material_index_state(
+        &self,
+        material_id: &MaterialId,
+        state: MaterialIndexState,
+        failure: Option<MaterialIndexFailure>,
+        retryable: bool,
+        last_attempt_at: Option<i64>,
+        updated_at: i64,
+    ) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO material_index_state(material_id, state, failure_category, retryable, last_attempt_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(material_id) DO UPDATE SET state=excluded.state, failure_category=excluded.failure_category,
+                 retryable=excluded.retryable, last_attempt_at=excluded.last_attempt_at, updated_at=excluded.updated_at",
+            params![material_id.as_str(), state.as_db(), failure.as_ref().map(MaterialIndexFailure::as_db), i64::from(retryable), last_attempt_at, updated_at],
+        )?;
+        Ok(())
+    }
+
     /// Removes one source link. Shared same-byte canonical documents remain
     /// available until their last source is removed.
     pub fn remove(&mut self, material_id: &MaterialId) -> Result<bool> {
@@ -418,6 +646,10 @@ impl KnowledgeStore {
             "DELETE FROM material_sources WHERE material_id = ?1",
             [material_id.as_str()],
         )? > 0;
+        tx.execute(
+            "DELETE FROM material_index_state WHERE material_id = ?1",
+            [material_id.as_str()],
+        )?;
         cleanup_orphaned_documents(&tx)?;
         tx.commit()?;
         Ok(removed)
@@ -1061,6 +1293,17 @@ fn migrate(connection: &Connection) -> Result<()> {
         if version == 1 {
             let tx = connection.unchecked_transaction()?;
             create_embedding_tables(&tx)?;
+            create_material_index_state_table(&tx)?;
+            tx.execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
+        if version == 2 {
+            let tx = connection.unchecked_transaction()?;
+            create_material_index_state_table(&tx)?;
             tx.execute(
                 "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
                 [SCHEMA_VERSION.to_string()],
@@ -1098,6 +1341,7 @@ fn migrate(connection: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS material_sources_document ON material_sources(document_id);"
     )?;
     create_embedding_tables(&tx)?;
+    create_material_index_state_table(&tx)?;
     tx.execute("INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION.to_string()])?;
     tx.commit()?;
     Ok(())
@@ -1126,6 +1370,47 @@ fn create_embedding_tables(tx: &Transaction<'_>) -> Result<()> {
          CREATE INDEX IF NOT EXISTS chunk_embeddings_generation ON chunk_embeddings(generation_id, state);"
     )?;
     Ok(())
+}
+
+fn create_material_index_state_table(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS material_index_state (
+            material_id TEXT PRIMARY KEY NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('pending', 'ready', 'failed', 'unsupported')),
+            failure_category TEXT CHECK(failure_category IN (
+                'unsupported_format', 'invalid_text_encoding', 'read_failed',
+                'extraction_failed', 'model_unavailable', 'embedding_failed',
+                'storage_failed', 'integrity_failed'
+            )),
+            retryable INTEGER NOT NULL CHECK(retryable IN (0, 1)),
+            last_attempt_at INTEGER,
+            updated_at INTEGER NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+fn index_failure_category(error: &KnowledgeError) -> MaterialIndexFailure {
+    match error {
+        KnowledgeError::UnsupportedFormat(_) => MaterialIndexFailure::UnsupportedFormat,
+        KnowledgeError::InvalidUtf8 => MaterialIndexFailure::InvalidTextEncoding,
+        KnowledgeError::Io(_) => MaterialIndexFailure::ReadFailed,
+        KnowledgeError::Sql(_) | KnowledgeError::IncompatibleSchema(_) => {
+            MaterialIndexFailure::StorageFailed
+        }
+        KnowledgeError::ModelUnavailable => MaterialIndexFailure::ModelUnavailable,
+        KnowledgeError::Tokenizer(_)
+        | KnowledgeError::InputTooLong
+        | KnowledgeError::InvalidEmbedding(_)
+        | KnowledgeError::Inference(_) => MaterialIndexFailure::EmbeddingFailed,
+        KnowledgeError::InvalidProjectRoot => MaterialIndexFailure::IntegrityFailed,
+        KnowledgeError::ModelManifest(_)
+        | KnowledgeError::ArtifactVerification(_)
+        | KnowledgeError::InvalidSearchOptions(_)
+        | KnowledgeError::InvalidContextAssemblyOptions(_) => {
+            MaterialIndexFailure::ExtractionFailed
+        }
+    }
 }
 
 fn document_is_current(
@@ -1654,6 +1939,233 @@ mod tests {
             Err(KnowledgeError::InvalidUtf8)
         ));
         assert_eq!(store.search("conservado", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn material_index_status_transitions_pending_ready_and_survives_reopen() {
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let source = source("guia.txt");
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+
+        assert_eq!(
+            store.begin_material_indexing(&source).unwrap(),
+            MaterialIndexState::Pending
+        );
+        let pending = store
+            .material_index_status(&source.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.state, MaterialIndexState::Pending);
+        assert!(pending.retryable);
+        assert!(pending.last_attempt_at.is_some());
+
+        store.index(&source, b"contenido indexado").unwrap();
+        drop(store);
+        let reopened = KnowledgeStore::open(&project_root, &pid).unwrap();
+        let ready = reopened
+            .material_index_status(&source.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.state, MaterialIndexState::Ready);
+        assert_eq!(ready.failure, None);
+        assert!(!ready.retryable);
+        assert_eq!(ready.last_attempt_at, None);
+    }
+
+    #[test]
+    fn failed_material_index_is_sanitized_and_explicit_retry_becomes_ready() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        let source = source("corrupto.txt");
+        assert!(matches!(
+            store.index(&source, &[0xff]),
+            Err(KnowledgeError::InvalidUtf8)
+        ));
+        let failed = store
+            .material_index_status(&source.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.state, MaterialIndexState::Failed);
+        assert_eq!(
+            failed.failure,
+            Some(MaterialIndexFailure::InvalidTextEncoding)
+        );
+        assert!(failed.retryable);
+        assert!(failed.last_attempt_at.is_some());
+
+        store
+            .retry_material_index(&source, b"contenido corregido")
+            .unwrap();
+        let ready = store
+            .material_index_status(&source.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.state, MaterialIndexState::Ready);
+        assert_eq!(ready.failure, None);
+        let stored_category: Option<String> = store
+            .connection
+            .query_row(
+                "SELECT failure_category FROM material_index_state WHERE material_id=?1",
+                [source.material_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(stored_category.as_deref(), Some("contenido corregido"));
+        let columns: Vec<String> = store
+            .connection
+            .prepare("SELECT name FROM pragma_table_info('material_index_state')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column.contains("text")));
+    }
+
+    #[test]
+    fn unsupported_and_crash_like_pending_states_are_never_silently_ready() {
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        let unsupported = source("archivo.pdf");
+        assert!(matches!(
+            store.index(&unsupported, b"not a PDF"),
+            Err(KnowledgeError::UnsupportedFormat(_))
+        ));
+        let status = store
+            .material_index_status(&unsupported.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, MaterialIndexState::Unsupported);
+        assert_eq!(
+            status.failure,
+            Some(MaterialIndexFailure::UnsupportedFormat)
+        );
+        assert!(!status.retryable);
+
+        let mut pending = source("pendiente.txt");
+        pending.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        pending.relative_path = format!("inputs/{}/pendiente.txt", pending.material_id);
+        store.begin_material_indexing(&pending).unwrap();
+        drop(store);
+        let reopened = KnowledgeStore::open(&project_root, &pid).unwrap();
+        let status = reopened
+            .material_index_status(&pending.material_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, MaterialIndexState::Pending);
+        assert!(status.retryable);
+    }
+
+    #[test]
+    fn material_status_is_project_local_and_delete_cleans_only_its_source_state() {
+        let (one, pid) = root();
+        let (two, pid2) = root();
+        let mut first = KnowledgeStore::open(one.path().join(PID), &pid).unwrap();
+        let mut second = KnowledgeStore::open(two.path().join(PID), &pid2).unwrap();
+        let one_source = source("uno.txt");
+        let mut alias = source("dos.txt");
+        alias.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        alias.relative_path = format!("inputs/{}/dos.txt", alias.material_id);
+        first.index(&one_source, b"contenido compartido").unwrap();
+        first.index(&alias, b"contenido compartido").unwrap();
+        second.index(&one_source, b"contenido aislado").unwrap();
+        assert_eq!(
+            first
+                .material_index_status(&one_source.material_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            MaterialIndexState::Ready
+        );
+        assert_eq!(first.search("compartido", 10).unwrap().len(), 2);
+        first.remove(&one_source.material_id).unwrap();
+        assert!(
+            first
+                .material_index_status(&one_source.material_id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(first.search("compartido", 10).unwrap().len(), 1);
+        assert_eq!(
+            first
+                .material_index_status(&alias.material_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            MaterialIndexState::Ready
+        );
+        assert_eq!(
+            second
+                .material_index_status(&one_source.material_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            MaterialIndexState::Ready
+        );
+    }
+
+    #[test]
+    fn v2_migration_preserves_k1_k2_data_and_adds_material_index_state() {
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let source = source("legacy.txt");
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        store
+            .index(&source, b"OpenShift conserva datos heredados")
+            .unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        store.index_embeddings(&mut provider, 8).unwrap();
+        store
+            .connection
+            .execute("DROP TABLE material_index_state", [])
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE schema_meta SET value='2' WHERE key='schema_version'",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        let upgraded = KnowledgeStore::open(&project_root, &pid).unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), 3);
+        assert_eq!(upgraded.search("OpenShift", 10).unwrap().len(), 1);
+        assert_eq!(
+            upgraded
+                .connection
+                .query_row("SELECT COUNT(*) FROM documents", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            upgraded
+                .connection
+                .query_row("SELECT COUNT(*) FROM chunks", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            upgraded
+                .connection
+                .query_row("SELECT COUNT(*) FROM chunk_embeddings", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            upgraded
+                .material_index_status(&source.material_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn generation() -> EmbeddingGeneration {
