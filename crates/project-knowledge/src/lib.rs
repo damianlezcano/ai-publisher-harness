@@ -6,8 +6,13 @@
 
 #![forbid(unsafe_code)]
 
+mod context;
 mod model;
 mod ort_provider;
+pub use context::{
+    BudgetEstimator, ConservativeCharBudgetEstimator, ContextAssembler, ContextAssemblyOptions,
+    EvidenceEntry, EvidencePackage, EvidenceQueryMetadata, EvidenceTotals, ExcerptKind,
+};
 pub use model::{
     ModelArtifact, ModelGeneration, ModelInstallState, ModelManager, ModelManifest,
     semantic_safe_subdivide, token_count, verify_artifact,
@@ -46,6 +51,7 @@ pub enum KnowledgeError {
     InvalidEmbedding(String),
     Inference(String),
     InvalidSearchOptions(String),
+    InvalidContextAssemblyOptions(String),
 }
 
 impl std::fmt::Display for KnowledgeError {
@@ -74,6 +80,9 @@ impl std::fmt::Display for KnowledgeError {
             Self::Inference(message) => write!(f, "Knowledge local inference error: {message}"),
             Self::InvalidSearchOptions(message) => {
                 write!(f, "invalid Knowledge hybrid search options: {message}")
+            }
+            Self::InvalidContextAssemblyOptions(message) => {
+                write!(f, "invalid Knowledge context assembly options: {message}")
             }
         }
     }
@@ -648,6 +657,122 @@ impl KnowledgeStore {
             fuse_hybrid_results(query, &lexical, &semantic, &options),
             availability,
         ))
+    }
+
+    /// Converts an already-bounded K3 result list into a provider-independent
+    /// evidence package. This method does not rerun FTS or semantic retrieval.
+    /// Neighbor rows, when enabled, are immediate same-document ordinal rows.
+    pub fn assemble_context(
+        &self,
+        query: &str,
+        candidates: &[HybridSearchResult],
+        options: ContextAssemblyOptions,
+    ) -> Result<EvidencePackage> {
+        context::validate_options(&options)?;
+        let direct = self.active_project_candidates(candidates, options.hybrid_candidate_limit)?;
+        let neighbors = self.neighbor_candidates(&direct, options.neighbor_radius)?;
+        ContextAssembler::assemble(&self.project_id, query, &direct, &neighbors, options)
+    }
+
+    /// Verifies that caller-supplied K3 results still resolve to this store's
+    /// project-local chunk and source link. This is an identity check, never a
+    /// replacement lexical/vector retrieval path.
+    fn active_project_candidates(
+        &self,
+        candidates: &[HybridSearchResult],
+        limit: usize,
+    ) -> Result<Vec<HybridSearchResult>> {
+        let mut active = Vec::new();
+        for candidate in candidates.iter().take(limit) {
+            let exists: Option<()> = self
+                .connection
+                .query_row(
+                    "SELECT 1 FROM chunks c JOIN material_sources ms ON ms.document_id=c.document_id
+                     WHERE c.chunk_id=?1 AND c.document_id=?2 AND ms.material_id=?3 AND ms.source_relative_path=?4",
+                    params![candidate.chunk_id, candidate.document_id, candidate.source_id, candidate.source_relative_path],
+                    |_| Ok(()),
+                )
+                .optional()?;
+            if exists.is_some() {
+                active.push(candidate.clone());
+            }
+        }
+        Ok(active)
+    }
+
+    fn neighbor_candidates(
+        &self,
+        direct: &[HybridSearchResult],
+        radius: usize,
+    ) -> Result<Vec<HybridSearchResult>> {
+        if radius == 0 {
+            return Ok(vec![]);
+        }
+        let radius = i64::try_from(radius).unwrap_or(0);
+        let mut neighbors = Vec::new();
+        for primary in direct {
+            let ordinal: Option<i64> = self
+                .connection
+                .query_row(
+                    "SELECT ordinal FROM chunks WHERE chunk_id=?1 AND document_id=?2",
+                    params![primary.chunk_id, primary.document_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(ordinal) = ordinal else { continue };
+            let mut statement = self.connection.prepare(
+                "SELECT chunk_id, text, start_offset, end_offset, start_line, end_line, heading_path, structural_type, ordinal
+                 FROM chunks WHERE document_id=?1 AND ordinal BETWEEN ?2 AND ?3 AND chunk_id != ?4
+                 ORDER BY ABS(ordinal - ?5), ordinal",
+            )?;
+            let rows = statement.query_map(
+                params![
+                    primary.document_id,
+                    ordinal - radius,
+                    ordinal + radius,
+                    primary.chunk_id,
+                    ordinal
+                ],
+                |row| {
+                    let headings: String = row.get(6)?;
+                    Ok(HybridSearchResult {
+                        document_id: primary.document_id.clone(),
+                        source_id: primary.source_id.clone(),
+                        source_name: primary.source_name.clone(),
+                        source_relative_path: primary.source_relative_path.clone(),
+                        chunk_id: row.get(0)?,
+                        chunk_text: row.get(1)?,
+                        provenance: Provenance {
+                            start_offset: row.get(2)?,
+                            end_offset: row.get(3)?,
+                            start_line: row.get(4)?,
+                            end_line: row.get(5)?,
+                            heading_path: headings
+                                .split('\u{1f}')
+                                .filter(|part| !part.is_empty())
+                                .map(str::to_owned)
+                                .collect(),
+                            structural_type: row.get(7)?,
+                        },
+                        lexical_rank: None,
+                        semantic_rank: None,
+                        lexical_score: None,
+                        semantic_score: None,
+                        // Assembly places every direct candidate before every neighbor.
+                        fusion_score: primary.fusion_score,
+                        embedding_generation_id: primary.embedding_generation_id.clone(),
+                        signals: HybridMatchSignals {
+                            lexical_match: false,
+                            semantic_match: false,
+                            exact_identifier_match: false,
+                            neighbor_of: Some(primary.chunk_id.clone()),
+                        },
+                    })
+                },
+            )?;
+            neighbors.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+        }
+        Ok(neighbors)
     }
 
     pub fn project_id(&self) -> &str {
@@ -1806,5 +1931,186 @@ mod tests {
             )
             .unwrap();
         assert_eq!(exact[0].source_name, "incidente.txt");
+    }
+
+    #[test]
+    fn context_assembly_packages_spanish_hybrid_evidence_with_provenance_and_budget() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        store.index(&source("openshift.md"), b"# Operaciones\n\nOpenShift usa operadores para automatizar la administracion del ciclo de vida de componentes.").unwrap();
+        let mut photos = source("plantas.txt");
+        photos.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        photos.relative_path = format!("inputs/{}/plantas.txt", photos.material_id);
+        store
+            .index(
+                &photos,
+                b"La fotosintesis convierte energia luminica en energia quimica.",
+            )
+            .unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        store.index_embeddings(&mut provider, 8).unwrap();
+        let (candidates, availability) = store
+            .hybrid_search(
+                "Como automatiza OpenShift la administracion del ciclo de vida de componentes?",
+                Some(&mut provider),
+                HybridSearchOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(availability, SemanticAvailability::Available);
+        let package = store
+            .assemble_context(
+                "Como automatiza OpenShift la administracion del ciclo de vida de componentes?",
+                &candidates,
+                ContextAssemblyOptions {
+                    max_evidence_budget: 120,
+                    reserve_margin: 10,
+                    max_entries: 1,
+                    max_entry_budget: 110,
+                    min_entry_budget: 20,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(package.entries[0].source_name, "openshift.md");
+        assert!(
+            package
+                .entries
+                .iter()
+                .all(|entry| entry.source_name != "plantas.txt")
+        );
+        assert_eq!(package.entries[0].document_id, candidates[0].document_id);
+        assert_eq!(package.entries[0].chunk_id, candidates[0].chunk_id);
+        assert_eq!(package.entries[0].provenance, candidates[0].provenance);
+        assert!(package.totals.estimated_budget_used <= package.totals.estimated_budget_limit);
+    }
+
+    #[test]
+    fn context_assembly_preserves_exact_identifier_and_project_isolation() {
+        let (one, pid) = root();
+        let (two, pid2) = root();
+        let mut first = KnowledgeStore::open(one.path().join(PID), &pid).unwrap();
+        let second = KnowledgeStore::open(two.path().join(PID), &pid2).unwrap();
+        first
+            .index(
+                &source("incidente.txt"),
+                b"INC-12345: se reinicio el servicio afectado.",
+            )
+            .unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        first.index_embeddings(&mut provider, 8).unwrap();
+        let (candidates, _) = first
+            .hybrid_search(
+                "Que ocurrio con INC-12345?",
+                Some(&mut provider),
+                HybridSearchOptions::default(),
+            )
+            .unwrap();
+        let package = first
+            .assemble_context(
+                "Que ocurrio con INC-12345?",
+                &candidates,
+                ContextAssemblyOptions::default(),
+            )
+            .unwrap();
+        assert!(package.entries[0].signals.exact_identifier_match);
+        assert_eq!(package.entries[0].source_name, "incidente.txt");
+        assert_eq!(package.query_metadata.project_id, first.project_id());
+        let empty = second
+            .assemble_context(
+                "Que ocurrio con INC-12345?",
+                &[],
+                ContextAssemblyOptions::default(),
+            )
+            .unwrap();
+        assert!(empty.entries.is_empty());
+        assert_eq!(empty.query_metadata.project_id, second.project_id());
+        let foreign = second
+            .assemble_context(
+                "Que ocurrio con INC-12345?",
+                &candidates,
+                ContextAssemblyOptions::default(),
+            )
+            .unwrap();
+        assert!(foreign.entries.is_empty());
+    }
+
+    #[test]
+    fn context_assembly_enforces_tight_budget_multisource_caps_and_neighbors() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        store.index(&source("uno.md"), b"# Plataforma\n\nautomatizacion de componentes con operadores\n\nEl vecino explica reconciliacion y actualizacion.").unwrap();
+        let mut two = source("dos.txt");
+        two.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db16").unwrap();
+        two.relative_path = format!("inputs/{}/dos.txt", two.material_id);
+        store
+            .index(
+                &two,
+                b"automatizacion de infraestructura mediante politicas.",
+            )
+            .unwrap();
+        let (candidates, _) = store
+            .hybrid_search(
+                "automatizacion",
+                None,
+                HybridSearchOptions {
+                    final_limit: 10,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let broad = store
+            .assemble_context(
+                "automatizacion",
+                &candidates,
+                ContextAssemblyOptions {
+                    max_evidence_budget: 500,
+                    reserve_margin: 0,
+                    max_entry_budget: 250,
+                    min_entry_budget: 10,
+                    max_per_document: 2,
+                    max_per_source: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(broad.totals.sources_represented >= 2);
+        assert!(
+            broad
+                .entries
+                .iter()
+                .any(|entry| entry.signals.neighbor_of.is_some())
+        );
+        let first_neighbor = broad
+            .entries
+            .iter()
+            .position(|entry| entry.signals.neighbor_of.is_some())
+            .unwrap();
+        assert!(
+            broad.entries[..first_neighbor]
+                .iter()
+                .all(|entry| entry.signals.neighbor_of.is_none())
+        );
+        let tight = store
+            .assemble_context(
+                "automatizacion",
+                &candidates,
+                ContextAssemblyOptions {
+                    max_evidence_budget: 45,
+                    reserve_margin: 0,
+                    max_entry_budget: 45,
+                    min_entry_budget: 10,
+                    neighbor_radius: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(tight.totals.estimated_budget_used <= 45);
+        assert!(tight.entries.len() <= broad.entries.len());
     }
 }
