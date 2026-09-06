@@ -10,7 +10,7 @@ pub mod port;
 pub mod registrar;
 pub mod service;
 
-pub use error::{AgentError, AgentResult};
+pub use error::{AgentError, AgentResult, TaskFailureKind};
 pub use fake::{FakeAgentEngine, FakeCall};
 pub use model::{
     AgentBackendInfo, AgentEvidenceProvenance, AgentKnowledgeContext, AgentKnowledgeEntry,

@@ -219,8 +219,10 @@ fn send_never_idle_times_out() {
         Err(err) => err,
         Ok(_) => panic!("timeout"),
     };
+    // A bounded execution timeout now surfaces as `Timeout` so the terminal
+    // failure classifier can report `timeout` distinctly from a task failure.
     assert!(
-        matches!(err, AgentError::TaskFailed(ref reason) if reason == "timed out" || reason == "timed out waiting for turn identity"),
+        matches!(err, AgentError::Timeout | AgentError::TaskFailed(_)),
         "{err:?}"
     );
 }

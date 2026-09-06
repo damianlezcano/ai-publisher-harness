@@ -340,10 +340,12 @@ impl AgentEngine for OpenCodeAgentEngine {
                     Err(err)
                 }
                 Err(AgentError::Timeout) => {
-                    // A task that started but never completed is not a backend
-                    // startup failure; keep Timeout for ensure_ready only.
-                    log_event("task failed");
-                    Err(AgentError::TaskFailed("timed out".into()))
+                    // A task that started but never completed is a bounded
+                    // execution timeout; keep Timeout so the terminal-failure
+                    // classifier reports `timeout` instead of an opaque task
+                    // failure.
+                    log_event("task timeout");
+                    Err(AgentError::Timeout)
                 }
                 Err(err) => Err(err),
             }
