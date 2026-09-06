@@ -335,4 +335,36 @@ describe("ComposerBar", () => {
     expect(screen.queryByText("/tmp/bad.exe")).not.toBeInTheDocument();
     expect(base.onMaterialsChanged).not.toHaveBeenCalled();
   });
+
+  it("collapses a large attachment set to a count toggle instead of unbounded chips", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    const manyIds = Array.from({ length: 51 }, (_, i) => `m${i}`);
+    render(
+      <ComposerBar
+        {...base}
+        materials={manyIds.map((id, i) => ({
+          id,
+          displayName: `nota-${i}.md`,
+          originalFileName: `nota-${i}.md`,
+          kind: "text",
+          byteSize: 128,
+          createdAt: "2026-08-28T15:00:00Z",
+        }))}
+        attachmentIds={manyIds}
+        onAttachmentIdsChange={() => {}}
+      />,
+    );
+    // Collapsed: the send button stays reachable, and only the first N chips
+    // plus a "51 archivos seleccionados · Ver todos" toggle are rendered.
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
+    expect(screen.getByText(/51 archivos seleccionados · Ver todos/)).toBeInTheDocument();
+    expect(screen.queryByText("nota-50.md")).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /51 archivos seleccionados · Ver todos/ }),
+    );
+    expect(screen.getByText("nota-50.md")).toBeInTheDocument();
+    // Expanding flips the toggle to "Ver menos".
+    expect(screen.getByRole("button", { name: "Ver menos" })).toBeInTheDocument();
+  });
 });

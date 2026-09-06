@@ -27,7 +27,7 @@ export interface CreationView {
 
 export interface MaterialImportResult {
   sourceName: string;
-  status: "added" | "duplicate" | "unsupported" | "failed";
+  status: "added" | "duplicate" | "duplicate_in_batch" | "unsupported" | "failed";
   materialId?: string;
   reason?: string;
   material?: MaterialView;
@@ -180,4 +180,19 @@ export interface SelectedModelView {
 export interface SessionLogEntry {
   level: "ERROR" | "WARN" | "INFO" | "DEBUG" | string;
   message: string;
+}
+
+export interface SummarizationReportView {
+  remoteCalls: number;
+  estimatedInputUnits: number;
+  cacheHits: number;
+  reused: number;
+  regenerated: number;
+  sourceCount: number;
+  hierarchyDepth: number;
+}
+
+export interface ProjectSummaryAnswerView {
+  report: SummarizationReportView;
+  globalSummary: string | null;
 }

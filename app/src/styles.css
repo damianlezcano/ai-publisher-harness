@@ -1365,6 +1365,26 @@ select {
   gap: var(--space-2);
 }
 
+.composer-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 132px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.composer-attachments .chip-list {
+  margin-bottom: 0;
+}
+
+.composer-attachment-toggle {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .composer-form {
   display: flex;
   flex-direction: column;

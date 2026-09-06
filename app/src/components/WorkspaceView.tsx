@@ -33,6 +33,8 @@ function importDetailLabel(item: MaterialImportResult): string {
       return messages.material.perFileAdded(item.sourceName);
     case "duplicate":
       return messages.material.perFileDuplicate(item.sourceName);
+    case "duplicate_in_batch":
+      return messages.material.perFileDuplicateInBatch(item.sourceName);
     default:
       return messages.material.perFileFailed(item.sourceName);
   }
@@ -91,7 +93,9 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       try {
         const report = await api.materialsAddFromPaths(project.id, paths);
         const added = report.items.filter((item) => item.status === "added").length;
-        const duplicate = report.items.filter((item) => item.status === "duplicate").length;
+        const duplicate = report.items.filter(
+          (item) => item.status === "duplicate" || item.status === "duplicate_in_batch",
+        ).length;
         const failed = report.items.filter(
           (item) => item.status === "unsupported" || item.status === "failed",
         ).length;

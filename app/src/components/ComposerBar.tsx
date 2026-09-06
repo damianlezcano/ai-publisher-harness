@@ -19,6 +19,7 @@ export interface ComposerBarProps {
 }
 
 const TEXTAREA_MAX_HEIGHT_PX = 150;
+const ATTACHMENT_COLLAPSE_THRESHOLD = 8;
 
 function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null {
   for (let i = 0; i < items.length; i++) {
@@ -45,6 +46,7 @@ export default function ComposerBar({
   const [prompt, setPrompt] = useState("");
   const [internalAttachmentIds, setInternalAttachmentIds] = useState<string[]>([]);
   const [pasteBusy, setPasteBusy] = useState(false);
+  const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
 
   const controlled = attachmentIdsProp !== undefined;
   const attachmentIds = controlled ? attachmentIdsProp : internalAttachmentIds;
@@ -140,12 +142,30 @@ export default function ComposerBar({
     void send();
   }
 
-  return (
-    <div className="composer-bar" role="region" aria-label={messages.assistant.panelLabel}>
-      {pickError !== null && <ErrorNotice error={pickError} />}
-      {attachmentIds.length > 0 && (
+  function renderAttachmentList() {
+    const compact = !attachmentsExpanded && attachmentIds.length > ATTACHMENT_COLLAPSE_THRESHOLD;
+    const visibleIds = compact
+      ? attachmentIds.slice(0, ATTACHMENT_COLLAPSE_THRESHOLD)
+      : attachmentIds;
+    return (
+      <div
+        className={`composer-attachments${compact ? " is-collapsed" : ""}`}
+        role="group"
+        aria-label={messages.assistant.selectedCount(attachmentIds.length)}
+      >
+        {attachmentIds.length > ATTACHMENT_COLLAPSE_THRESHOLD && (
+          <button
+            type="button"
+            className="ghost composer-attachment-toggle"
+            onClick={() => setAttachmentsExpanded((expanded) => !expanded)}
+          >
+            {compact
+              ? `${messages.assistant.selectedCount(attachmentIds.length)} · ${messages.assistant.showAll}`
+              : messages.assistant.hideAll}
+          </button>
+        )}
         <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
-          {attachmentIds.map((id) => {
+          {visibleIds.map((id) => {
             const material = materialById.get(id);
             const name = material?.displayName ?? messages.assistant.attachmentFallback;
             return (
@@ -164,7 +184,14 @@ export default function ComposerBar({
             );
           })}
         </ul>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="composer-bar" role="region" aria-label={messages.assistant.panelLabel}>
+      {pickError !== null && <ErrorNotice error={pickError} />}
+      {attachmentIds.length > 0 && renderAttachmentList()}
 
       <form
         className="composer-form"

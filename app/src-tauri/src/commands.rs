@@ -335,6 +335,17 @@ pub async fn open_public_url(
 }
 
 #[tauri::command]
+pub async fn summarize_project(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<project_app::ProjectSummaryAnswerView, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.summarize_project_with_backend(&project_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn agent_send(
     app: AppHandle,
     state: State<'_, SharedState>,
@@ -365,7 +376,13 @@ pub async fn agent_send(
         },
     );
     std::thread::spawn(move || {
-        let event = match shared.send_message_run(inputs) {
+        let summarize_intent = project_app::detect_summarize_intent(&prompt);
+        let run = if summarize_intent {
+            shared.send_summary_run(inputs)
+        } else {
+            shared.send_message_run(inputs)
+        };
+        let event = match run {
             Ok(run) => AgentTaskEvent {
                 project_id,
                 turn_id: run.turn_id.unwrap_or_default(),

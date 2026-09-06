@@ -18,6 +18,7 @@ import type {
   ProjectView,
   ProviderDetail,
   ProviderSummary,
+  ProjectSummaryAnswerView,
   PublicationView,
   SelectedModelView,
   SessionLogEntry,
@@ -65,6 +66,8 @@ export const api = {
     invoke<void>("creation_open_folder", { projectId, creationId }),
   creationsOpenFolder: (projectId: string) => invoke<void>("creations_open_folder", { projectId }),
   openPublicUrl: (projectId: string) => invoke<void>("open_public_url", { projectId }),
+  summarizeProject: (projectId: string) =>
+    invoke<ProjectSummaryAnswerView>("summarize_project", { projectId }),
   agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
     invoke<void>("agent_send", { projectId, prompt, attachmentIds }),
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),

@@ -45,6 +45,7 @@ pub fn run() {
             commands::preview_open_web,
             commands::preview_close,
             commands::open_public_url,
+            commands::summarize_project,
             commands::agent_send,
             commands::agent_cancel,
             commands::agent_status,

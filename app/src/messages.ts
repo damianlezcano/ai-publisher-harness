@@ -189,6 +189,11 @@ export const messages = {
     attachmentsAriaLabel: "Archivos adjuntos",
     attachMaterial: "Adjuntar",
     attachmentFallback: "Archivo adjunto",
+    selectedCount(count: number): string {
+      return `${count} archivos seleccionados`;
+    },
+    showAll: "Ver todos",
+    hideAll: "Ver menos",
     starting: "Preparando el asistente…",
     removeAttachment(name: string): string {
       return `Quitar ${name}`;
@@ -236,6 +241,9 @@ export const messages = {
     },
     perFileDuplicate(name: string): string {
       return `${name} ya estaba en el proyecto.`;
+    },
+    perFileDuplicateInBatch(name: string): string {
+      return `${name} ya estaba en esta selección.`;
     },
     perFileFailed(name: string): string {
       return `No se pudo agregar ${name}.`;
