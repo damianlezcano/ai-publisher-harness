@@ -220,3 +220,40 @@ pub struct SummarizationReportView {
     pub source_count: usize,
     pub hierarchy_depth: usize,
 }
+
+/// Whole-project summary answer: K6 accounting plus the user-facing global
+/// summary text (or `None` when the project has no indexed sources).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummaryAnswerView {
+    pub report: SummarizationReportView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_summary: Option<String>,
+    /// Conservative estimate of the whole corpus size (see K4 estimator shape),
+    /// used only to report an estimated reduction against naive full-corpus
+    /// context. Never a provider tokenizer claim.
+    pub naive_corpus_est_tokens: usize,
+}
+
+impl ProjectSummaryAnswerView {
+    /// The text to surface to the user, or `None` when there is nothing to say.
+    pub fn summarize_surface_text(&self) -> Option<String> {
+        self.global_summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    }
+
+    /// Estimated context reduction versus naive full-corpus context (percent,
+    /// 0..=100). A comparison estimate, not a claim of exact tokens saved.
+    pub fn reduction_pct_vs_naive_full_corpus(&self) -> usize {
+        if self.naive_corpus_est_tokens == 0 {
+            return 100;
+        }
+        let saved = self
+            .naive_corpus_est_tokens
+            .saturating_sub(self.report.estimated_input_units);
+        saved * 100 / self.naive_corpus_est_tokens
+    }
+}

@@ -132,6 +132,11 @@ pub struct AppState<
     /// One process-local, strictly local E5 provider. It is initialized only
     /// when both the verified model and bundled runtime are available.
     knowledge_provider: Mutex<Option<OrtEmbeddingProvider>>,
+    /// Shared OpenCode backend, used by the K6 remote summarizer to run
+    /// bounded synthesis in a dedicated scratch session. `None` in DI test
+    /// construction (`with_components`), which uses injected fake components
+    /// and never runs remote summarization.
+    summarizer_backend: Option<Arc<OpenCodeBackend>>,
     /// Live isolated web-preview servers keyed by their single-use token. Each
     /// entry serves one immutable copy of a creation's `outputs/<id>` tree on a
     /// loopback-only, token-guarded endpoint (ADR-0010). Removed (and torn down)
@@ -179,13 +184,10 @@ impl
             None => Box::new(PathBinaryResolver::new("cloudflared")),
         };
         let tunnel = CloudflareQuickTunnel::new(resolver);
-        Ok(Self::with_components(
-            config.data_dir,
-            engine,
-            tunnel,
-            connector,
-            restarter,
-        ))
+        let mut state =
+            Self::with_components(config.data_dir, engine, tunnel, connector, restarter);
+        state.summarizer_backend = Some(backend);
+        Ok(state)
     }
 }
 
@@ -254,6 +256,7 @@ where
             agent,
             provider,
             knowledge_provider: Mutex::new(None),
+            summarizer_backend: None,
             previews: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -448,24 +451,49 @@ where
 
     /// Multi-file import (M8 §5). Each input file is processed independently and
     /// reported in input order with a deterministic per-file status
-    /// (`added` / `duplicate` / `unsupported` / `failed`); one bad file never
-    /// aborts the batch. Sources are only ever read; originals are never
-    /// modified. Dedup uses content SHA-256 against existing project materials
-    /// and earlier entries in the same batch.
+    /// (`added` / `duplicate` / `duplicate_in_batch` / `unsupported` / `failed`);
+    /// one bad file never aborts the batch. `duplicate` means the content was
+    /// already a project material BEFORE this batch; `duplicate_in_batch` means
+    /// the same content appeared earlier in THIS batch (truthful copy, never
+    /// conflated with "already in the project"). Sources are only ever read;
+    /// originals are never modified. Dedup uses content SHA-256.
     pub fn import_materials(
         &self,
         project_id: &str,
         paths: Vec<String>,
     ) -> AppResult<MaterialsImportReport> {
         let pid = parse_project_id(project_id)?;
+        let pre_existing = self.project_material_hashes(&pid)?;
         let mut items = Vec::with_capacity(paths.len());
         for path in paths {
-            items.push(self.import_one_material(&pid, &path)?);
+            items.push(self.import_one_material(&pid, &path, &pre_existing)?);
         }
         Ok(MaterialsImportReport { items })
     }
 
-    fn import_one_material(&self, pid: &ProjectId, path: &str) -> AppResult<MaterialImportResult> {
+    fn project_material_hashes(
+        &self,
+        pid: &ProjectId,
+    ) -> AppResult<std::collections::HashSet<String>> {
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(pid)
+            .map_err(AppError::from_core)?;
+        Ok(project
+            .materials
+            .iter()
+            .map(|m| m.sha256.as_str().to_owned())
+            .collect())
+    }
+
+    fn import_one_material(
+        &self,
+        pid: &ProjectId,
+        path: &str,
+        pre_existing: &std::collections::HashSet<String>,
+    ) -> AppResult<MaterialImportResult> {
         let source_name = Path::new(path)
             .file_name()
             .and_then(|n| n.to_str())
@@ -530,11 +558,25 @@ where
                 let sha = sha256_hex(&bytes);
                 match self.find_material_by_sha(pid, &sha) {
                     Ok(Some(existing)) => {
+                        // Truthful cause classification: a hash present before
+                        // this batch is "already in the project"; a hash we
+                        // added earlier in THIS batch is a same-batch duplicate.
+                        let (status, reason) = if pre_existing.contains(&sha) {
+                            (
+                                "duplicate",
+                                "Ese archivo ya está en el proyecto.".to_owned(),
+                            )
+                        } else {
+                            (
+                                "duplicate_in_batch",
+                                "Ese archivo ya estaba en esta selección.".to_owned(),
+                            )
+                        };
                         return Ok(MaterialImportResult {
                             source_name,
-                            status: "duplicate".to_owned(),
+                            status: status.to_owned(),
                             material_id: Some(existing.id.as_str().to_owned()),
-                            reason: Some("Ese archivo ya está en el proyecto.".to_owned()),
+                            reason: Some(reason),
                             material: Some(material_view(&existing)),
                         });
                     }
@@ -641,14 +683,28 @@ where
             );
             return;
         }
-        if let Some(Err(_)) =
-            self.with_local_embedding_provider(|provider| store.index_embeddings(provider, 8))
+        let (embedded, reused) = match self
+            .with_local_embedding_provider(|provider| store.index_embeddings(provider, 8))
         {
+            (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused)),
+            (Some(Err(_)), _) | (None, _) => (None, None),
+        };
+        if embedded.is_none() {
             crate::session_log::record(
                 "WARN",
                 format!(
                     "[knowledge] embedding_index_failed material_id={}",
                     material.id
+                ),
+            );
+        } else {
+            crate::session_log::record(
+                "DEBUG",
+                format!(
+                    "[knowledge] indexed material_id={} embeddings_created={} embeddings_reused={}",
+                    material.id,
+                    embedded.unwrap_or(0),
+                    reused.unwrap_or(0)
                 ),
             );
         }
@@ -942,18 +998,23 @@ where
                 "No pudimos preparar el material de apoyo.",
             )
         })?;
-        let search = self.with_local_embedding_provider(|provider| {
-            store.hybrid_search(user_query, Some(provider), HybridSearchOptions::default())
+        let corpus = store
+            .corpus_stats()
+            .unwrap_or_else(|_| project_knowledge::KnowledgeCorpusStats::default());
+
+        let (search, mut semantic_state) = self.with_local_embedding_provider(|provider| {
+            store.hybrid_search_metrics(user_query, Some(provider), HybridSearchOptions::default())
         });
-        let (candidates, semantic) = match search {
-            Some(Ok(result)) => result,
+        let (candidates, metrics) = match search {
+            Some(Ok((results, metrics))) => (results, metrics),
             Some(Err(_)) => {
+                semantic_state = project_knowledge::SemanticProviderState::SemanticQueryFailed;
                 crate::session_log::record(
                     "WARN",
-                    "[knowledge] semantic_search_failed fallback=lexical",
+                    "[knowledge] semantic_query_failed fallback=lexical",
                 );
                 store
-                    .hybrid_search(user_query, None, HybridSearchOptions::default())
+                    .hybrid_search_metrics(user_query, None, HybridSearchOptions::default())
                     .map_err(|_| {
                         AppError::new(
                             ErrorCode::Internal,
@@ -962,7 +1023,7 @@ where
                     })?
             }
             None => store
-                .hybrid_search(user_query, None, HybridSearchOptions::default())
+                .hybrid_search_metrics(user_query, None, HybridSearchOptions::default())
                 .map_err(|_| {
                     AppError::new(
                         ErrorCode::Internal,
@@ -978,14 +1039,54 @@ where
                     "No pudimos preparar el material de apoyo.",
                 )
             })?;
+        let evidence_bytes: usize = package.entries.iter().map(|entry| entry.text.len()).sum();
+        let evidence_utf8_chars: usize = package
+            .entries
+            .iter()
+            .map(|entry| entry.text.chars().count())
+            .sum();
+        let evidence_est_tokens = package.totals.estimated_budget_used;
+        let naive_corpus_est_tokens = corpus.naive_corpus_est_tokens;
+        let context_reduction_pct_vs_naive_corpus = if naive_corpus_est_tokens == 0 {
+            100
+        } else {
+            let saved = naive_corpus_est_tokens.saturating_sub(evidence_est_tokens);
+            saved * 100 / naive_corpus_est_tokens
+        };
         crate::session_log::record(
             "INFO",
             format!(
-                "[knowledge] retrieval candidates={} evidence selected={} budget_used={} budget_limit={} semantic_availability={semantic:?} request_preparation_ms={}",
+                "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
+                if metrics.semantic_availability
+                    == project_knowledge::SemanticAvailability::Available
+                {
+                    "hybrid"
+                } else {
+                    "lexical"
+                },
                 candidates.len(),
                 package.entries.len(),
                 package.totals.estimated_budget_used,
                 package.totals.estimated_budget_limit,
+                format!("{:?}", metrics.semantic_availability).to_ascii_lowercase(),
+                semantic_state.as_str(),
+                metrics.lexical_candidates,
+                metrics.semantic_candidates,
+                metrics.fused_candidates,
+                evidence_bytes,
+                evidence_utf8_chars,
+                evidence_est_tokens,
+                naive_corpus_est_tokens,
+                context_reduction_pct_vs_naive_corpus,
+                corpus.material_count,
+                corpus.ready,
+                corpus.failed,
+                corpus.unsupported,
+                corpus.pending,
+                corpus.chunks_total,
+                corpus.embeddings_ready,
+                corpus.corpus_bytes,
+                corpus.corpus_utf8_chars,
                 started.elapsed().as_millis()
             ),
         );
@@ -1031,39 +1132,84 @@ where
     /// Runs an operation against the verified, bundled local E5 provider when
     /// it is available. Missing/corrupt model data or a missing runtime is an
     /// expected lexical-only state; this function never installs or contacts a
-    /// remote provider.
+    /// remote provider. Returns the sanitized provider state alongside the
+    /// operation result so callers can log a structural cause, not an exception
+    /// body.
     fn with_local_embedding_provider<Output>(
         &self,
         operation: impl FnOnce(&mut dyn EmbeddingProvider) -> project_knowledge::Result<Output>,
-    ) -> Option<project_knowledge::Result<Output>> {
+    ) -> (
+        Option<project_knowledge::Result<Output>>,
+        project_knowledge::SemanticProviderState,
+    ) {
         let mut provider = self
             .knowledge_provider
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if provider.is_none() {
-            *provider = self.load_local_embedding_provider();
+            let (loaded, state) = self.load_local_embedding_provider();
+            *provider = loaded;
+            if provider.is_none() {
+                return (None, state);
+            }
         }
-        provider.as_mut().map(|provider| operation(provider))
+        (
+            provider
+                .as_mut()
+                .map(|provider| operation(provider as &mut dyn EmbeddingProvider)),
+            project_knowledge::SemanticProviderState::Available,
+        )
     }
 
-    fn load_local_embedding_provider(&self) -> Option<OrtEmbeddingProvider> {
-        let manager = ModelManager::new(&self.base).ok()?;
-        let model_root = match manager.inspect().ok()? {
-            ModelInstallState::Verified(path) => path,
-            ModelInstallState::NotInstalled
-            | ModelInstallState::Incomplete
-            | ModelInstallState::Corrupt(_) => return None,
+    /// Probes the local E5 provider and reports a sanitized cause when it is
+    /// unavailable. Distinct structural codes (model install state, runtime
+    /// resolution/load, tokenizer, session build) are produced without ever
+    /// exposing a path or a provider error body.
+    fn load_local_embedding_provider(
+        &self,
+    ) -> (
+        Option<OrtEmbeddingProvider>,
+        project_knowledge::SemanticProviderState,
+    ) {
+        use project_knowledge::SemanticProviderState as State;
+        let manager = match ModelManager::new(&self.base) {
+            Ok(manager) => manager,
+            Err(_) => return (None, State::UnavailableOther),
         };
-        let executable = std::env::current_exe().ok()?;
-        let runtime = runtime_library_from_executable(&executable).ok()?;
-        let tokenizer = manager.load_tokenizer().ok()?;
-        OrtEmbeddingProvider::load(
+        let model_root = match manager.inspect() {
+            Ok(ModelInstallState::Verified(path)) => path,
+            Ok(ModelInstallState::NotInstalled) => return (None, State::ModelNotInstalled),
+            Ok(ModelInstallState::Incomplete) => return (None, State::ModelIncomplete),
+            Ok(ModelInstallState::Corrupt(_)) => return (None, State::ModelCorrupt),
+            Err(_) => return (None, State::UnavailableOther),
+        };
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(_) => return (None, State::UnavailableOther),
+        };
+        let runtime = match runtime_library_from_executable(&executable) {
+            Ok(runtime) => runtime,
+            Err(_) => return (None, State::RuntimeNotFound),
+        };
+        let tokenizer = match manager.load_tokenizer() {
+            Ok(tokenizer) => tokenizer,
+            Err(_) => return (None, State::TokenizerLoadFailed),
+        };
+        match OrtEmbeddingProvider::load(
             manager.generation(),
             tokenizer,
             &model_root.join("onnx/model.onnx"),
             &runtime,
-        )
-        .ok()
+        ) {
+            Ok(provider) => (Some(provider), State::Available),
+            Err(project_knowledge::OrtProviderLoadError::RuntimeInitFailed) => {
+                (None, State::RuntimeLoadFailed)
+            }
+            Err(project_knowledge::OrtProviderLoadError::SessionBuildFailed)
+            | Err(project_knowledge::OrtProviderLoadError::InputContractMismatch) => {
+                (None, State::ProviderInitializationFailed)
+            }
+        }
     }
 
     /// Resolves prompt attachments (M8 §6 / ADR-0011). Each opaque material ID
@@ -1168,7 +1314,105 @@ where
         attachment_ids: &[String],
     ) -> AppResult<AgentRunView> {
         let inputs = self.send_message_persist(project_id, prompt, attachment_ids)?;
+        if crate::summarize::detect_summarize_intent(prompt) && self.summarizer_backend.is_some() {
+            return self.send_summary_run(inputs);
+        }
         self.send_message_run(inputs)
+    }
+
+    /// Whole-project summary turn (K6): the user message is already persisted by
+    /// [`Self::send_message_persist`]; this runs the bounded hierarchical
+    /// summarization (never sending the corpus) and appends the user-facing
+    /// global summary as the assistant message. It never creates a normal agent
+    /// run or a scratch chat turn.
+    pub fn send_summary_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
+        let project_id = inputs.project_id.clone();
+        let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let started = std::time::Instant::now();
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "summary turn started conversation_id={} turn_id={}",
+                project_id,
+                turn_id.as_deref().unwrap_or("none")
+            ),
+        );
+        let answer = match self.summarize_project_with_backend(project_id.as_str()) {
+            Ok(answer) => answer,
+            Err(error) => {
+                let text = error.message.clone();
+                self.projects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .append_assistant_message(&project_id, &text, MessageStatus::Failed, &[])
+                    .map_err(AppError::from_core)?;
+                crate::session_log::record(
+                    "ERROR",
+                    format!(
+                        "summary turn terminal conversation_id={} turn_id={} status=failed failure_class=knowledge_failure failure_stage=summary duration_ms={}",
+                        project_id,
+                        turn_id.as_deref().unwrap_or("none"),
+                        started.elapsed().as_millis()
+                    ),
+                );
+                return Ok(AgentRunView {
+                    status: "failed".to_owned(),
+                    turn_id,
+                    registered_creation_ids: Vec::new(),
+                    message: Some(text),
+                });
+            }
+        };
+        let Some(surface) = answer.summarize_surface_text() else {
+            crate::session_log::record(
+                "INFO",
+                format!(
+                    "summary turn terminal conversation_id={} turn_id={} status=completed documents=0 summary_nodes_reused={} summary_cache_hits={} remote_summary_calls={} estimated_input_units={} duration_ms={}",
+                    project_id,
+                    turn_id.as_deref().unwrap_or("none"),
+                    answer.report.reused,
+                    answer.report.cache_hits,
+                    answer.report.remote_calls,
+                    answer.report.estimated_input_units,
+                    started.elapsed().as_millis()
+                ),
+            );
+            return Ok(AgentRunView {
+                status: "completed".to_owned(),
+                turn_id,
+                registered_creation_ids: Vec::new(),
+                message: None,
+            });
+        };
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_assistant_message(&project_id, &surface, MessageStatus::Ok, &[])
+            .map_err(AppError::from_core)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "summary turn terminal conversation_id={} turn_id={} status=completed documents={} summary_nodes_reused={} summary_cache_hits={} summary_nodes_generated={} remote_summary_calls={} hierarchy_depth={} estimated_input_units={} naive_corpus_est_tokens={} estimated_reduction_pct_vs_naive_full_corpus={} duration_ms={}",
+                project_id,
+                turn_id.as_deref().unwrap_or("none"),
+                answer.report.source_count,
+                answer.report.reused,
+                answer.report.cache_hits,
+                answer.report.regenerated,
+                answer.report.remote_calls,
+                answer.report.hierarchy_depth,
+                answer.report.estimated_input_units,
+                answer.naive_corpus_est_tokens,
+                answer.reduction_pct_vs_naive_full_corpus(),
+                started.elapsed().as_millis()
+            ),
+        );
+        Ok(AgentRunView {
+            status: "completed".to_owned(),
+            turn_id,
+            registered_creation_ids: Vec::new(),
+            message: Some(surface),
+        })
     }
 
     /// Validates the prompt/model/attachments and appends the raw user message
@@ -1308,6 +1552,7 @@ where
                 })
             }
             Err(other) => {
+                let failure_kind = other.task_failure_kind();
                 let err = AppError::from_agent(other);
                 self.projects
                     .lock()
@@ -1317,9 +1562,10 @@ where
                 crate::session_log::record(
                     "ERROR",
                     format!(
-                        "turn terminal conversation_id={} turn_id={} status=failed duration_ms={}",
+                        "turn terminal conversation_id={} turn_id={} status=failed failure_stage=agent failure_class={} duration_ms={}",
                         project_id,
                         turn_id.as_deref().unwrap_or("none"),
+                        failure_kind.as_str(),
                         started.elapsed().as_millis()
                     ),
                 );
@@ -1331,6 +1577,56 @@ where
                 })
             }
         }
+    }
+
+    /// Whole-project hierarchical summary (K6) through the shared OpenCode
+    /// backend in a dedicated scratch session. This never creates a chat turn
+    /// and never sends the corpus: only bounded per-node labelled evidence
+    /// crosses the remote boundary. Returns accounting plus the user-facing
+    /// global summary text (`None` when the project has no indexed sources).
+    pub fn summarize_project_with_backend(
+        &self,
+        project_id: &str,
+    ) -> AppResult<ProjectSummaryAnswerView> {
+        use crate::summarize::OpenCodeRemoteSummarizer;
+        let backend = self.summarizer_backend.as_ref().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos preparar el resumen del material.",
+            )
+        })?;
+        let scratch = self.base.join("opencode-scratch");
+        let summarizer = OpenCodeRemoteSummarizer::new(Arc::clone(backend), scratch);
+        let report = self.summarize_project(project_id, &summarizer)?;
+        let global_summary = self.global_summary_text(project_id)?;
+        let naive_corpus_est_tokens = self
+            .open_knowledge_store(project_id)?
+            .and_then(|store| store.corpus_stats().ok())
+            .map(|stats| stats.naive_corpus_est_tokens)
+            .unwrap_or(0);
+        Ok(ProjectSummaryAnswerView {
+            report,
+            global_summary,
+            naive_corpus_est_tokens,
+        })
+    }
+
+    /// Reads the `global`-level (or single-document) summary prose, if present.
+    fn global_summary_text(&self, project_id: &str) -> AppResult<Option<String>> {
+        let nodes = self.summary_status(project_id)?;
+        let global = nodes
+            .iter()
+            .filter(|node| node.level == "global" && node.state == "ready")
+            .filter_map(|node| node.content.as_ref().map(|c| c.summary.clone()))
+            .next()
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .filter(|node| node.level == "document" && node.state == "ready")
+                    .filter_map(|node| node.content.as_ref().map(|c| c.summary.clone()))
+                    .next()
+            });
+        Ok(global)
     }
 
     pub fn run_agent(

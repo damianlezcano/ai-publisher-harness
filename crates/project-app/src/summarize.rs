@@ -20,6 +20,51 @@ use serde_json::{Value, json};
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SUMMARY_TASK_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Provider- and language-independent whole-project summarization intent.
+///
+/// This is deliberately not a single hardcoded Spanish string trigger. It
+/// detects a *summary verb* plus an *all/corpus scope marker* across a small
+/// multilingual set, so "resumime todos los archivos", "summarize all files",
+/// "resumí el proyecto", etc. resolve to the same internal operation. Ordinary
+/// informational questions (which carry no corpus-scope marker) continue through
+/// K3/K4 chat.
+pub fn detect_summarize_intent(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    let has_summary_verb = SUMMARY_VERBS.iter().any(|verb| normalized.contains(verb));
+    if !has_summary_verb {
+        return false;
+    }
+    SCOPE_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+const SUMMARY_VERBS: &[&str] = &[
+    "resum",
+    "resumen",
+    "summar",
+    "síntesis",
+    "sintetiz",
+    "sintesis",
+];
+const SCOPE_MARKERS: &[&str] = &[
+    "todos",
+    "todas",
+    "todo el",
+    "toda la",
+    "los archivos",
+    "las notas",
+    "all files",
+    "all documents",
+    "el proyecto",
+    "the project",
+    "la reunión",
+    "carpeta entera",
+    "whole project",
+    "entire project",
+    "proyecto entero",
+];
+
 /// Executes one bounded summarization request against the shared OpenCode
 /// backend in an isolated scratch session.
 pub struct OpenCodeRemoteSummarizer {
@@ -190,5 +235,23 @@ mod tests {
         assert!(prompt.contains("Resumí."));
         assert!(prompt.contains("[E1]"));
         assert!(prompt.contains("Se definió el presupuesto."));
+    }
+
+    #[test]
+    fn summarize_intent_is_provider_and_language_independent() {
+        assert!(detect_summarize_intent("resumime todos los archivos"));
+        assert!(detect_summarize_intent("Resumí todo el proyecto"));
+        assert!(detect_summarize_intent("summarize all files"));
+        assert!(detect_summarize_intent("sintetizá todas las notas"));
+        assert!(detect_summarize_intent(
+            "hacé una síntesis de toda la reunión"
+        ));
+        // Ordinary informational questions must NOT route to summarization.
+        assert!(!detect_summarize_intent("¿cómo está el proyecto?"));
+        assert!(!detect_summarize_intent("qué decía la reunión 1"));
+        assert!(!detect_summarize_intent(
+            "resumime qué dijo Carla en la última reunión"
+        ));
+        assert!(!detect_summarize_intent(""));
     }
 }
