@@ -11,8 +11,8 @@ use project_agent::FakeAgentEngine;
 use project_app::AppState;
 use project_core::ProjectId;
 use project_knowledge::{
-    BatchOptions, KnowledgeStore, RemoteSummarizer, SummaryContent, SummaryFailure, SummaryLevel,
-    SummaryOutput, SummaryRequest, SummaryState,
+    BatchOptions, ContextAssemblyOptions, KnowledgeStore, RemoteSummarizer, SummaryContent,
+    SummaryFailure, SummaryLevel, SummaryOutput, SummaryRequest, SummaryState,
 };
 use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
 use project_tunnel::FakeTunnel;
@@ -578,4 +578,107 @@ fn summary_state_survives_restart() {
         "restart must reuse durable cached summaries"
     );
     assert!(calls2.lock().unwrap().is_empty());
+}
+
+/// Representative 51-file production flow: batch-import 51 Markdown meeting
+/// notes (Spanish/English, realistic sizes), verify corpus/index state, prove a
+/// bounded K3/K4 ordinary query, then K6 global summarization with cache reuse
+/// and no whole-corpus request. Non-sensitive synthetic fixtures only.
+#[test]
+fn representative_51_markdown_corpus_flow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let p = app.create_project("P").unwrap();
+
+    let dir = tmp.path().join("corpus");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..51 {
+        let name = format!("reunion-{i:02}.md");
+        let lang = if i % 2 == 0 { "es" } else { "en" };
+        let body = if lang == "es" {
+            format!(
+                "# Reunión {i}\n\nSe revisó el estado del proyecto de infraestructura.\n\n- Decisión: continuar con la migración a OpenShift.\n- Pendiente: preparar el inventario de aplicaciones.\n- Incidente INC-{i:05} en seguimiento.\n"
+            )
+        } else {
+            format!(
+                "# Meeting {i}\n\nReviewed the infrastructure project status.\n\n- Decision: continue the OpenShift migration.\n- Action: prepare the application inventory.\n- Incident INC-{i:05} being tracked.\n"
+            )
+        };
+        let path = dir.join(&name);
+        std::fs::write(&path, body).unwrap();
+        paths.push(path.to_str().unwrap().to_owned());
+    }
+
+    let report = app.import_materials(&p.id, paths).unwrap();
+    assert_eq!(report.items.len(), 51);
+    assert!(report.items.iter().all(|item| item.status == "added"));
+
+    // Corpus/index state: all 51 TXT/Markdown materials reach Ready, chunks and
+    // (without the local E5 runtime in this unit test) no ready embeddings but a
+    // measurable corpus.
+    let store = open_store(tmp.path(), &p.id);
+    let stats = store.corpus_stats().unwrap();
+    assert_eq!(stats.ready, 51);
+    assert_eq!(stats.failed, 0);
+    assert_eq!(stats.unsupported, 0);
+    assert!(stats.chunks_total >= 51);
+    assert_eq!(stats.material_count, 51);
+    assert!(stats.corpus_bytes > 0);
+    assert!(stats.corpus_utf8_chars > 0);
+    assert!(stats.naive_corpus_est_tokens > 0);
+
+    // Ordinary query uses K3 (lexical) + K4 bounded evidence; never the corpus.
+    let (results, _availability) = store
+        .hybrid_search(
+            "migración a OpenShift",
+            None,
+            project_knowledge::HybridSearchOptions::default(),
+        )
+        .unwrap();
+    let package = store
+        .assemble_context(
+            "migración a OpenShift",
+            &results,
+            ContextAssemblyOptions::default(),
+        )
+        .unwrap();
+    assert!(!package.entries.is_empty());
+    assert!(package.totals.estimated_budget_used <= package.totals.estimated_budget_limit);
+    let evidence_chars: usize = package.entries.iter().map(|e| e.text.chars().count()).sum();
+    assert!(
+        evidence_chars < stats.corpus_utf8_chars,
+        "evidence must be far smaller than the full corpus"
+    );
+
+    // K6 global summary: bounded hierarchy, then full cache reuse.
+    let (summarizer, calls) = CaptureSummarizer::new();
+    let first = app.summarize_project(&p.id, &summarizer).unwrap();
+    assert_eq!(first.source_count, 51);
+    assert!(
+        first.hierarchy_depth >= 3,
+        "51 docs must reduce in multiple levels"
+    );
+    let captured = calls.lock().unwrap();
+    let docs = captured
+        .iter()
+        .filter(|c| c.level == SummaryLevel::Document)
+        .count();
+    assert_eq!(docs, 51, "one document summary per source");
+    // No synthesis request carries the whole corpus: batch/global stay bounded.
+    for c in captured
+        .iter()
+        .filter(|c| c.level != SummaryLevel::Document)
+    {
+        assert!(
+            c.evidence_texts.len() <= BatchOptions::default().branching_factor,
+            "synthesis must be bounded, never the 51-document corpus"
+        );
+    }
+    drop(captured);
+
+    calls.lock().unwrap().clear();
+    let second = app.summarize_project(&p.id, &summarizer).unwrap();
+    assert_eq!(second.remote_calls, 0, "identical request must reuse cache");
+    assert!(calls.lock().unwrap().is_empty());
 }

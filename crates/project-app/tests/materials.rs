@@ -270,7 +270,7 @@ fn batch_import_dedups_within_the_same_batch() {
         )
         .unwrap();
     assert_eq!(report.items[0].status, "added");
-    assert_eq!(report.items[1].status, "duplicate");
+    assert_eq!(report.items[1].status, "duplicate_in_batch");
     assert_eq!(report.items[1].material_id, report.items[0].material_id);
     assert_eq!(app.open_project(&p.id).unwrap().materials.len(), 1);
 }
