@@ -18,7 +18,9 @@ pub use model::{
     ModelArtifact, ModelGeneration, ModelInstallState, ModelManager, ModelManifest,
     semantic_safe_subdivide, token_count, verify_artifact,
 };
-pub use ort_provider::{OrtEmbeddingProvider, runtime_library_from_executable};
+pub use ort_provider::{
+    OrtEmbeddingProvider, OrtProviderLoadError, runtime_library_from_executable,
+};
 pub use summary::{
     BatchOptions, RemoteSummarizer, SUMMARY_CONTRACT_VERSION, SummaryAccounting, SummaryContent,
     SummaryEvidenceRef, SummaryFailure, SummaryItem, SummaryLevel, SummaryNode, SummaryOutput,
@@ -341,10 +343,58 @@ impl Default for HybridSearchOptions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SemanticAvailability {
     Available,
+    #[default]
     Unavailable,
+}
+
+/// Sanitized, structural reason a local semantic provider is (un)available.
+///
+/// This is deliberately a closed set of codes, never an exception body: no
+/// model path, runtime path, or provider error string is exposed. The local E5
+/// provider is the only semantic provider; there is no remote embedding
+/// fallback, so an unavailable local provider degrades to lexical retrieval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticProviderState {
+    /// Local E5 loaded and a semantic query completed successfully.
+    Available,
+    /// The first-use model directory is not installed.
+    ModelNotInstalled,
+    /// The model directory exists but is missing one or more artifacts.
+    ModelIncomplete,
+    /// The model directory exists but an artifact fails checksum/size verification.
+    ModelCorrupt,
+    /// The bundled ONNX Runtime library cannot be resolved from the executable.
+    RuntimeNotFound,
+    /// `ort` failed to initialize from the resolved runtime library.
+    RuntimeLoadFailed,
+    /// The tokenizer could not be loaded.
+    TokenizerLoadFailed,
+    /// The ONNX session could not be built or its input contract was unexpected.
+    ProviderInitializationFailed,
+    /// The provider loaded, but a semantic query/embedding failed at runtime.
+    SemanticQueryFailed,
+    /// Any other sanitized, non-specific unavailability.
+    UnavailableOther,
+}
+
+impl SemanticProviderState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::ModelNotInstalled => "model_not_installed",
+            Self::ModelIncomplete => "model_incomplete",
+            Self::ModelCorrupt => "model_corrupt",
+            Self::RuntimeNotFound => "runtime_not_found",
+            Self::RuntimeLoadFailed => "runtime_load_failed",
+            Self::TokenizerLoadFailed => "tokenizer_load_failed",
+            Self::ProviderInitializationFailed => "provider_initialization_failed",
+            Self::SemanticQueryFailed => "semantic_query_failed",
+            Self::UnavailableOther => "unavailable_other",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -373,6 +423,36 @@ pub struct HybridSearchResult {
     pub fusion_score: f64,
     pub embedding_generation_id: Option<String>,
     pub signals: HybridMatchSignals,
+}
+
+/// Sanitized per-signal candidate counts for one hybrid retrieval. Counts only,
+/// never chunk text, queries, paths, or vectors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HybridSearchMetrics {
+    pub lexical_candidates: usize,
+    pub semantic_candidates: usize,
+    pub fused_candidates: usize,
+    pub semantic_availability: SemanticAvailability,
+}
+
+/// Sanitized, structural corpus/index state for one project. Counts and byte/
+/// character/token estimates only; no document bodies, paths, or vector data.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KnowledgeCorpusStats {
+    /// Number of materials with a durable Knowledge index-state record (the sum
+    /// of `pending` + `ready` + `failed` + `unsupported`).
+    pub material_count: usize,
+    pub pending: usize,
+    pub ready: usize,
+    pub failed: usize,
+    pub unsupported: usize,
+    pub chunks_total: usize,
+    pub embeddings_ready: usize,
+    pub corpus_bytes: u64,
+    pub corpus_utf8_chars: usize,
+    /// Conservative estimate: `ceil(corpus_bytes / 3)` (same shape as the K4
+    /// budget estimator), never a provider tokenizer claim.
+    pub naive_corpus_est_tokens: usize,
 }
 
 /// SQLite-backed derived Knowledge data for exactly one existing project.
@@ -441,6 +521,58 @@ impl KnowledgeStore {
             )?
             .parse()
             .expect("schema version is controlled"))
+    }
+
+    /// Structural corpus/index state for observability. Counts and byte/
+    /// character/token estimates only; never document bodies, paths, or vectors.
+    pub fn corpus_stats(&self) -> Result<KnowledgeCorpusStats> {
+        let material_count =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM material_index_state", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as usize;
+        let mut state_counts = std::collections::BTreeMap::new();
+        let mut statement = self
+            .connection
+            .prepare("SELECT state, COUNT(*) FROM material_index_state GROUP BY state")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        for row in rows {
+            let (state, count) = row?;
+            state_counts.insert(state, count);
+        }
+        let chunks_total = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                row.get::<_, i64>(0)
+            })? as usize;
+        let embeddings_ready = self.connection.query_row(
+            "SELECT COUNT(*) FROM chunk_embeddings WHERE state='ready'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        let (corpus_bytes, corpus_utf8_chars): (i64, i64) = self.connection.query_row(
+            "SELECT COALESCE(SUM(d.byte_size), 0), COALESCE(SUM(LENGTH(c.text)), 0)
+             FROM documents d LEFT JOIN chunks c ON c.document_id = d.document_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let corpus_bytes = u64::try_from(corpus_bytes).unwrap_or(u64::MAX);
+        let corpus_utf8_chars = usize::try_from(corpus_utf8_chars).unwrap_or(0);
+        Ok(KnowledgeCorpusStats {
+            material_count,
+            pending: state_counts.get("pending").copied().unwrap_or(0),
+            ready: state_counts.get("ready").copied().unwrap_or(0),
+            failed: state_counts.get("failed").copied().unwrap_or(0),
+            unsupported: state_counts.get("unsupported").copied().unwrap_or(0),
+            chunks_total,
+            embeddings_ready,
+            corpus_bytes,
+            corpus_utf8_chars,
+            naive_corpus_est_tokens: (corpus_bytes / 3) as usize
+                + usize::from(corpus_bytes % 3 != 0),
+        })
     }
 
     /// Returns this project's durable operational Knowledge state for a
@@ -924,11 +1056,33 @@ impl KnowledgeStore {
         provider: Option<&mut dyn EmbeddingProvider>,
         options: HybridSearchOptions,
     ) -> Result<(Vec<HybridSearchResult>, SemanticAvailability)> {
+        let (results, metrics) = self.hybrid_search_metrics(query, provider, options)?;
+        Ok((results, metrics.semantic_availability))
+    }
+
+    /// [`Self::hybrid_search`] plus sanitized per-signal candidate counts, so a
+    /// caller can report `retrieval_mode` / candidate counts without logging
+    /// content. The `SemanticProviderState` for query-time failure is left to
+    /// the caller (it knows the provider lifecycle), while this method reports
+    /// the `SemanticAvailability` that governs fusion.
+    pub fn hybrid_search_metrics(
+        &self,
+        query: &str,
+        provider: Option<&mut dyn EmbeddingProvider>,
+        options: HybridSearchOptions,
+    ) -> Result<(Vec<HybridSearchResult>, HybridSearchMetrics)> {
         validate_hybrid_options(&options)?;
         if fts_query(query).is_empty() {
-            return Ok((vec![], SemanticAvailability::Unavailable));
+            return Ok((
+                vec![],
+                HybridSearchMetrics {
+                    semantic_availability: SemanticAvailability::Unavailable,
+                    ..Default::default()
+                },
+            ));
         }
         let lexical = self.search(query, options.lexical_candidate_limit)?;
+        let lexical_candidates = lexical.len();
         let (semantic, availability) = match provider {
             None => (vec![], SemanticAvailability::Unavailable),
             Some(provider) => {
@@ -941,9 +1095,17 @@ impl KnowledgeStore {
                 }
             }
         };
+        let semantic_candidates = semantic.len();
+        let fused = fuse_hybrid_results(query, &lexical, &semantic, &options);
+        let fused_candidates = fused.len();
         Ok((
-            fuse_hybrid_results(query, &lexical, &semantic, &options),
-            availability,
+            fused,
+            HybridSearchMetrics {
+                lexical_candidates,
+                semantic_candidates,
+                fused_candidates,
+                semantic_availability: availability,
+            },
         ))
     }
 
@@ -2776,6 +2938,51 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].chunk_text.contains("OpenShift"));
         assert!(results[0].similarity > results[1].similarity);
+    }
+
+    #[test]
+    fn corpus_stats_reports_sanitized_material_and_corpus_counts() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+
+        let txt = source("reunion.txt");
+        store
+            .index(
+                &txt,
+                b"Primera reunion. Se definio el presupuesto para el trimestre.",
+            )
+            .unwrap();
+
+        let mut md = source("notas.md");
+        md.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db17").unwrap();
+        md.relative_path = format!("inputs/{}/notas.md", md.material_id);
+        store
+            .index(&md, b"# Notas\n\nAccion pendiente: preparar el informe.")
+            .unwrap();
+
+        let mut image = source("foto.png");
+        image.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db18").unwrap();
+        image.relative_path = format!("inputs/{}/foto.png", image.material_id);
+        image.media_type = Some("image/png".to_owned());
+        // Unsupported media type is durably marked Unsupported, never ready.
+        assert!(store.index(&image, b"\x89PNG").is_err());
+
+        let stats = store.corpus_stats().unwrap();
+        assert_eq!(stats.material_count, 3);
+        assert_eq!(stats.ready, 2);
+        assert_eq!(stats.unsupported, 1);
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.failed, 0);
+        assert!(stats.chunks_total >= 2);
+        assert_eq!(stats.embeddings_ready, 0);
+        assert!(stats.corpus_bytes > 0);
+        assert!(stats.corpus_utf8_chars > 0);
+        assert_eq!(
+            stats.naive_corpus_est_tokens,
+            (stats.corpus_bytes / 3) as usize + usize::from(!stats.corpus_bytes.is_multiple_of(3))
+        );
+        // Sanitized: the debug form never leaks document text.
+        assert!(!format!("{stats:?}").contains("reunion"));
     }
 
     fn synthetic_lexical(

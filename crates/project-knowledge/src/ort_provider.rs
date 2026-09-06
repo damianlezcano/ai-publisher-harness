@@ -11,6 +11,31 @@ use crate::{
     semantic_safe_subdivide,
 };
 
+/// Sanitized stage at which a local ONNX provider failed to load. Unit
+/// variants only: no path, runtime name, or `ort` error body is exposed, so
+/// callers can log a stable cause code without leaking private paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrtProviderLoadError {
+    /// `ort::init_from` failed to initialize the resolved runtime library.
+    RuntimeInitFailed,
+    /// The ONNX session could not be built from the model file.
+    SessionBuildFailed,
+    /// The session's input tensor names did not match the expected contract.
+    InputContractMismatch,
+}
+
+impl std::fmt::Display for OrtProviderLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RuntimeInitFailed => "local ONNX runtime failed to initialize",
+            Self::SessionBuildFailed => "local ONNX session could not be built",
+            Self::InputContractMismatch => "unexpected local ONNX input contract",
+        })
+    }
+}
+
+impl std::error::Error for OrtProviderLoadError {}
+
 pub struct OrtEmbeddingProvider {
     generation: EmbeddingGeneration,
     tokenizer: Tokenizer,
@@ -46,21 +71,19 @@ impl OrtEmbeddingProvider {
         tokenizer: Tokenizer,
         model_path: &Path,
         runtime_library: &Path,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, OrtProviderLoadError> {
         if !runtime_library.is_absolute() || !model_path.is_absolute() {
-            return Err(KnowledgeError::Inference(
-                "runtime and model paths must be absolute".to_owned(),
-            ));
+            return Err(OrtProviderLoadError::SessionBuildFailed);
         }
         ort::init_from(runtime_library.to_string_lossy())
             .commit()
-            .map_err(|error| KnowledgeError::Inference(error.to_string()))?;
+            .map_err(|_| OrtProviderLoadError::RuntimeInitFailed)?;
         let session = Session::builder()
-            .map_err(|error| KnowledgeError::Inference(error.to_string()))?
+            .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?
             .with_intra_threads(1)
-            .map_err(|error| KnowledgeError::Inference(error.to_string()))?
+            .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?
             .commit_from_file(model_path)
-            .map_err(|error| KnowledgeError::Inference(error.to_string()))?;
+            .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?;
         let input_names = session
             .inputs
             .iter()
@@ -72,9 +95,7 @@ impl OrtEmbeddingProvider {
                 *name != "input_ids" && *name != "attention_mask" && *name != "token_type_ids"
             })
         {
-            return Err(KnowledgeError::Inference(
-                "unexpected ONNX input contract".to_owned(),
-            ));
+            return Err(OrtProviderLoadError::InputContractMismatch);
         }
         Ok(Self {
             generation: EmbeddingGeneration::from(generation),
