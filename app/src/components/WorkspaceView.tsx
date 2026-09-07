@@ -312,38 +312,57 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
         />
         {project.acceptedImport && (
           <section className="import-progress" role="status" aria-live="polite">
-            <strong>{messages.processing.title(project.acceptedImport.total)}</strong>
-            <span>
-              {messages.processing.prepared(
-                project.acceptedImport.copied,
-                project.acceptedImport.total,
-              )}
-            </span>
-            <span>
-              {messages.processing.indexed(
-                project.acceptedImport.lexicalCompleted,
-                project.acceptedImport.total,
-              )}
-            </span>
-            <span>
-              {messages.processing.embeddings(
-                project.acceptedImport.embeddingsCreated,
-                project.acceptedImport.embeddingsReused,
-              )}
-            </span>
-            <span>{messages.processing.ready(project.acceptedImport.embeddingCompleted)}</span>
-            {project.acceptedImport.failed > 0 && (
-              <span>{messages.processing.errors(project.acceptedImport.failed)}</span>
-            )}
-            {processingNotice && <p className="import-progress-notice">{processingNotice.text}</p>}
-            {processingNotice?.retry && (
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={() => void resumeImport(project.acceptedImport!.operationId)}
-              >
-                {messages.common.retry}
-              </button>
+            {project.acceptedImport.state === "completed" ? (
+              <>
+                <strong>
+                  {project.acceptedImport.embeddingCompleted >= project.acceptedImport.total
+                    ? messages.processing.completed(project.acceptedImport.total)
+                    : messages.processing.completedWithProblems(project.acceptedImport.total)}
+                </strong>
+                {project.acceptedImport.embeddingCompleted < project.acceptedImport.total && (
+                  <span className="import-progress-notice">
+                    {messages.processing.semanticUnavailable}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <strong>{messages.processing.title(project.acceptedImport.total)}</strong>
+                <span>
+                  {messages.processing.prepared(
+                    project.acceptedImport.copied,
+                    project.acceptedImport.total,
+                  )}
+                </span>
+                <span>
+                  {messages.processing.indexed(
+                    project.acceptedImport.lexicalCompleted,
+                    project.acceptedImport.total,
+                  )}
+                </span>
+                <span>
+                  {messages.processing.embeddings(
+                    project.acceptedImport.embeddingsCreated,
+                    project.acceptedImport.embeddingsReused,
+                  )}
+                </span>
+                <span>{messages.processing.ready(project.acceptedImport.embeddingCompleted)}</span>
+                {project.acceptedImport.failed > 0 && (
+                  <span>{messages.processing.errors(project.acceptedImport.failed)}</span>
+                )}
+                {processingNotice && (
+                  <p className="import-progress-notice">{processingNotice.text}</p>
+                )}
+                {processingNotice?.retry && (
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => void resumeImport(project.acceptedImport!.operationId)}
+                  >
+                    {messages.common.retry}
+                  </button>
+                )}
+              </>
             )}
           </section>
         )}

@@ -415,6 +415,15 @@ export const messages = {
     title(count: number): string {
       return `Procesando ${count} archivos`;
     },
+    completed(count: number): string {
+      return count === 1 ? "1 archivo procesado" : `${count} archivos procesados`;
+    },
+    completedWithProblems(count: number): string {
+      return count === 1
+        ? "1 archivo procesado con problemas"
+        : `${count} archivos procesados con problemas`;
+    },
+    semanticUnavailable: "Indexación semántica no disponible",
     prepared(copied: number, total: number): string {
       return `Archivos preparados: ${copied} / ${total}`;
     },

@@ -228,14 +228,14 @@ export interface SessionKnowledgeMetrics {
   corpusBytes: number;
   corpusUtf8Chars: number;
   corpusEstTokens: number;
-  retrievalCandidateCount: number;
-  selectedEvidenceCount: number;
-  selectedEvidenceBytes: number;
-  selectedEvidenceUtf8Chars: number;
-  evidenceEstTokens: number;
-  contextReductionPct: number;
+  retrievalCandidateCount: number | null;
+  selectedEvidenceCount: number | null;
+  selectedEvidenceBytes: number | null;
+  selectedEvidenceUtf8Chars: number | null;
+  evidenceEstTokens: number | null;
+  contextReductionPct: number | null;
   semanticProviderState: string;
-  requestPreparationMs: number;
+  requestPreparationMs: number | null;
 }
 
 export interface SummarizationReportView {

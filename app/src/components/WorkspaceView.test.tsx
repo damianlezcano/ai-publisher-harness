@@ -656,6 +656,52 @@ describe("WorkspaceView", () => {
     expect(screen.queryByText(messages.error.storageUnavailable.title)).not.toBeInTheDocument();
   });
 
+  it("shows a compact completed state instead of Procesando once the operation is terminal", () => {
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-1",
+          state: "completed",
+          agentState: "completed",
+          total: 1,
+          copied: 1,
+          lexicalCompleted: 1,
+          embeddingCompleted: 1,
+          failed: 0,
+          embeddingsCreated: 1,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    expect(screen.getByText("1 archivo procesado")).toBeInTheDocument();
+    expect(screen.queryByText("Procesando 1 archivos")).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.processing.semanticUnavailable)).not.toBeInTheDocument();
+  });
+
+  it("shows a truthful degraded terminal state when semantic indexing failed", () => {
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-1",
+          state: "completed",
+          agentState: "completed",
+          total: 1,
+          copied: 1,
+          lexicalCompleted: 1,
+          embeddingCompleted: 0,
+          failed: 1,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    expect(screen.getByText("1 archivo procesado con problemas")).toBeInTheDocument();
+    expect(screen.getByText(messages.processing.semanticUnavailable)).toBeInTheDocument();
+    expect(screen.queryByText("Procesando 1 archivos")).not.toBeInTheDocument();
+  });
+
   it("shows typed recoverable copy for a pending_retry local interruption", () => {
     render(
       <WorkspaceView
