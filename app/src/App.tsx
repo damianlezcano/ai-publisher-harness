@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, isAppError } from "./api";
 import type { AgentPhase, BackendReadiness, ProjectSummary, ProjectView } from "./types";
 import { guidanceFromError } from "./guidance";
 import WorkspaceView from "./components/WorkspaceView";
@@ -27,6 +27,7 @@ export default function App() {
   const selectedIdRef = useRef(selectedId);
   const inFlightRef = useRef(new Map<string, string>());
   const resumeTriggeredRef = useRef(new Set<string>());
+  const [resumeFailure, setResumeFailure] = useState<string | null>(null);
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -177,16 +178,49 @@ export default function App() {
   useEffect(() => {
     const acceptedImport = conversation?.acceptedImport;
     if (!conversation || !acceptedImport) return;
+    if (!acceptedImport.operationId) return;
     if (acceptedImport.state === "completed") return;
     if (acceptedImport.agentState !== "not_started") return;
     if (acceptedImport.state === "pending_retry") return;
     const key = `${conversation.id}:${acceptedImport.operationId}`;
     if (resumeTriggeredRef.current.has(key)) return;
     resumeTriggeredRef.current.add(key);
+    console.info(
+      `[recovery-ui] incomplete operation detected operation_id=${acceptedImport.operationId} prepared=${acceptedImport.copied} indexed=${acceptedImport.lexicalCompleted} ready=${acceptedImport.embeddingCompleted} agent_state=${acceptedImport.agentState}`,
+    );
+    console.info(
+      `[recovery-ui] invoking agent_resume_import operation_id=${acceptedImport.operationId}`,
+    );
     void api
       .agentResumeImport(conversation.id, acceptedImport.operationId)
-      .catch(() => resumeTriggeredRef.current.delete(key));
+      .then(() => {
+        console.info(
+          `[recovery-ui] agent_resume_import accepted operation_id=${acceptedImport.operationId}`,
+        );
+        setResumeFailure(null);
+      })
+      .catch((error) => {
+        resumeTriggeredRef.current.delete(key);
+        const failureClass = isAppError(error) ? error.code : "unknown";
+        console.error(
+          `[recovery-ui] agent_resume_import failed operation_id=${acceptedImport.operationId} failure_class=${failureClass}`,
+        );
+        setResumeFailure(acceptedImport.operationId);
+      });
   }, [conversation]);
+
+  const handleResumeRetry = useCallback((operationId: string) => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    setResumeFailure(null);
+    void api
+      .agentResumeImport(id, operationId)
+      .then(() => {
+        void refreshConversationRef.current(id);
+        void refreshConversationsRef.current();
+      })
+      .catch(() => setResumeFailure(operationId));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -326,6 +360,8 @@ export default function App() {
               onRetryBackend={() => setBackendStatus("starting")}
               onOpenProvider={() => setSettingsOpen(true)}
               onProviderError={handleProviderError}
+              resumeFailure={resumeFailure}
+              onResumeRetry={handleResumeRetry}
             />
           </div>
         ) : selectedId ? (

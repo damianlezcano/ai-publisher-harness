@@ -427,6 +427,7 @@ export const messages = {
       return `Errores: ${count}`;
     },
     pendingRetry: "El procesamiento quedó pendiente. Podés reintentarlo.",
+    resumeFailed: "No pudimos reanudar el procesamiento local.",
     outcomeUnknown:
       "El resultado anterior quedó pendiente y no se puede continuar automáticamente.",
     cannotContinue: "No pudimos continuar el procesamiento local.",

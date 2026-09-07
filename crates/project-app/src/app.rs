@@ -1009,7 +1009,7 @@ where
             crate::session_log::record(
                 "INFO",
                 format!(
-                    "[knowledge][recovery] phase=lexical operation_id={operation_id} completed={indexed} total={}",
+                    "[knowledge][recovery] lexical_progress operation_id={operation_id} completed={indexed} total={}",
                     material_ids.len()
                 ),
             );
@@ -1054,7 +1054,7 @@ where
             crate::session_log::record(
                 if embedded.is_some() { "INFO" } else { "WARN" },
                 format!(
-                    "[knowledge][recovery] phase=embeddings operation_id={operation_id} created={} reused={}",
+                    "[knowledge][recovery] embedding_progress operation_id={operation_id} created={} reused={}",
                     embedded.unwrap_or(0),
                     reused.unwrap_or(0)
                 ),
@@ -2142,6 +2142,10 @@ where
         operation_id: &str,
     ) -> AppResult<AgentRunView> {
         let pid = parse_project_id(project_id)?;
+        crate::session_log::record(
+            "INFO",
+            format!("[knowledge][recovery] resume_requested operation_id={operation_id}"),
+        );
         let root = self.base.join("projects").join(pid.as_str());
         let store = KnowledgeStore::open(&root, &pid).map_err(|_| {
             record_recovery_error(operation_id, "durable_state_read_failed");
@@ -2164,7 +2168,8 @@ where
         crate::session_log::record(
             "INFO",
             format!(
-                "[knowledge][recovery] operation discovered operation_id={operation_id} prepared={} indexed={} ready={} agent_state={}",
+                "[knowledge][recovery] operation_loaded operation_id={operation_id} state={} prepared={} indexed={} ready={} agent_state={}",
+                accepted_import_state_str(operation.state),
                 operation.copied,
                 operation.lexical_completed,
                 operation.embedding_completed,
@@ -2172,6 +2177,12 @@ where
             ),
         );
         if operation.state == project_knowledge::AcceptedImportState::Completed {
+            crate::session_log::record(
+                "INFO",
+                format!(
+                    "[knowledge][recovery] resume_decision=denied reason=already_completed operation_id={operation_id}"
+                ),
+            );
             return Ok(AgentRunView {
                 status: "completed".to_owned(),
                 turn_id: Some(turn_id.to_owned()),
@@ -2180,6 +2191,12 @@ where
             });
         }
         if operation.agent_state == project_knowledge::AcceptedImportAgentState::Completed {
+            crate::session_log::record(
+                "INFO",
+                format!(
+                    "[knowledge][recovery] resume_decision=denied reason=already_completed operation_id={operation_id}"
+                ),
+            );
             self.finish_accepted_import_operation(&pid, operation_id, true);
             return Ok(AgentRunView {
                 status: "completed".to_owned(),
@@ -2191,6 +2208,12 @@ where
         // The remote boundary must be pristine. Any other agent state means a
         // prior provider request may already have happened; never auto-resend.
         if operation.agent_state != project_knowledge::AcceptedImportAgentState::NotStarted {
+            crate::session_log::record(
+                "WARN",
+                format!(
+                    "[knowledge][recovery] resume_decision=denied reason=remote_outcome_unknown operation_id={operation_id}"
+                ),
+            );
             record_recovery_error(operation_id, "remote_outcome_unknown");
             return Err(AppError::invalid(
                 "El resultado anterior quedó pendiente; no se puede reenviar automáticamente.",
@@ -2227,7 +2250,13 @@ where
         );
         crate::session_log::record(
             "INFO",
-            format!("[knowledge][recovery] local resume started operation_id={operation_id}"),
+            format!(
+                "[knowledge][recovery] resume_decision=allowed reason=safe_local_not_started operation_id={operation_id}"
+            ),
+        );
+        crate::session_log::record(
+            "INFO",
+            format!("[knowledge][recovery] local_resume_started operation_id={operation_id}"),
         );
         let result = self.run_accepted_staged_turn_inner(
             AcceptedStagedTurn {
@@ -2243,13 +2272,20 @@ where
                     crate::session_log::record(
                         "INFO",
                         format!(
-                            "[knowledge][recovery] local resume completed operation_id={operation_id} ready={} failed={}",
+                            "[knowledge][recovery] local_resume_completed operation_id={operation_id} ready={} failed={}",
                             progress.embedding_completed, progress.failed,
                         ),
                     );
                 }
             }
             Err(error) => {
+                crate::session_log::record(
+                    "ERROR",
+                    format!(
+                        "[knowledge][recovery] local_resume_failed operation_id={operation_id} phase=run failure_class={}",
+                        recovery_failure_class(error)
+                    ),
+                );
                 record_recovery_error(operation_id, recovery_failure_class(error));
             }
         }
@@ -3556,6 +3592,19 @@ fn accepted_import_agent_state_str(
     }
 }
 
+/// Structural, sanitized label for the accepted-import operation phase. Never
+/// a path, prompt, or payload.
+fn accepted_import_state_str(state: project_knowledge::AcceptedImportState) -> &'static str {
+    match state {
+        project_knowledge::AcceptedImportState::Accepted => "accepted",
+        project_knowledge::AcceptedImportState::Copying => "copying",
+        project_knowledge::AcceptedImportState::IndexingLexical => "indexing_lexical",
+        project_knowledge::AcceptedImportState::IndexingEmbeddings => "indexing_embeddings",
+        project_knowledge::AcceptedImportState::PendingRetry => "pending_retry",
+        project_knowledge::AcceptedImportState::Completed => "completed",
+    }
+}
+
 /// Sanitized recovery error log. Only the opaque operation id, the typed
 /// failure class, and structural counters are emitted — never document bodies,
 /// chunk text, prompts, assistant text, vectors, or absolute paths.
@@ -3673,25 +3722,8 @@ fn accepted_import_progress_view(
 ) -> AcceptedImportProgressView {
     AcceptedImportProgressView {
         operation_id: operation.operation_id,
-        state: match operation.state {
-            project_knowledge::AcceptedImportState::Accepted => "accepted",
-            project_knowledge::AcceptedImportState::Copying => "copying",
-            project_knowledge::AcceptedImportState::IndexingLexical => "indexing_lexical",
-            project_knowledge::AcceptedImportState::IndexingEmbeddings => "indexing_embeddings",
-            project_knowledge::AcceptedImportState::PendingRetry => "pending_retry",
-            project_knowledge::AcceptedImportState::Completed => "completed",
-        }
-        .to_owned(),
-        agent_state: match operation.agent_state {
-            project_knowledge::AcceptedImportAgentState::NotStarted => "not_started",
-            project_knowledge::AcceptedImportAgentState::StartedOutcomeUnknown => {
-                "started_outcome_unknown"
-            }
-            project_knowledge::AcceptedImportAgentState::Completed => "completed",
-            project_knowledge::AcceptedImportAgentState::FailedRetryable => "failed_retryable",
-            project_knowledge::AcceptedImportAgentState::FailedTerminal => "failed_terminal",
-        }
-        .to_owned(),
+        state: accepted_import_state_str(operation.state).to_owned(),
+        agent_state: accepted_import_agent_state_str(operation.agent_state).to_owned(),
         total: operation.total,
         copied: operation.copied,
         lexical_completed: operation.lexical_completed,

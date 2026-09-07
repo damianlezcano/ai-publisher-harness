@@ -489,6 +489,12 @@ pub async fn agent_resume_import(
     let shared = state.inner().clone();
     let resume_project = project_id.clone();
     let resume_operation = operation_id.clone();
+    // Structural recovery trace: proves the invoke crossed the Tauri boundary.
+    // Only the opaque operation id is emitted; never project content or paths.
+    project_app::session_log::record(
+        "INFO",
+        format!("[knowledge][recovery] command_received operation_id={operation_id}"),
+    );
     // Validate the identity against the durable ledger before emitting any
     // event, so a bogus operation id cannot manufacture a "working" turn.
     let turn_id = blocking(shared.clone(), move |app_state| {

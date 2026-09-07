@@ -31,6 +31,8 @@ interface WorkspaceViewProps {
   onRetryBackend?: () => void;
   onOpenProvider: () => void;
   onProviderError: () => void;
+  resumeFailure?: string | null;
+  onResumeRetry?: (operationId: string) => void;
 }
 
 function importDetailLabel(item: MaterialImportResult): string {
@@ -59,10 +61,11 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     onRetryBackend,
     onOpenProvider,
     onProviderError,
+    resumeFailure,
+    onResumeRetry,
   } = props;
 
   const [sendError, setSendError] = useState<unknown | null>(null);
-  const [resumeError, setResumeError] = useState<unknown | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{
     text: string;
     materialIds: string[];
@@ -232,13 +235,12 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   }
 
   async function resumeImport(operationId: string) {
-    setResumeError(null);
-    try {
-      await api.agentResumeImport(project.id, operationId);
-      await onRefresh();
-    } catch (err) {
-      setResumeError(err);
+    if (onResumeRetry) {
+      onResumeRetry(operationId);
+      return;
     }
+    await api.agentResumeImport(project.id, operationId);
+    await onRefresh();
   }
 
   const acceptedImport = project.acceptedImport ?? null;
@@ -254,11 +256,14 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     ) {
       return { text: messages.processing.cannotContinue, retry: false };
     }
+    if (resumeFailure === acceptedImport.operationId) {
+      return { text: messages.processing.resumeFailed, retry: true };
+    }
     if (acceptedImport.state === "pending_retry" && acceptedImport.agentState === "not_started") {
       return { text: messages.processing.pendingRetry, retry: true };
     }
     return null;
-  }, [acceptedImport]);
+  }, [acceptedImport, resumeFailure]);
 
   return (
     <div className={workspaceClass}>
@@ -372,7 +377,6 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       </div>
 
       {materialError !== null && <ErrorNotice error={materialError} />}
-      {resumeError !== null && <ErrorNotice error={resumeError} />}
 
       {backendStatus === "starting" && (
         <p className="notice composer-import-status" role="status">
