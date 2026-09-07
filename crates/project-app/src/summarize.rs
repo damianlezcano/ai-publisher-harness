@@ -63,6 +63,19 @@ const SCOPE_MARKERS: &[&str] = &[
     "whole project",
     "entire project",
     "proyecto entero",
+    // Explicit single-source summarization: "resumime el archivo", "resumí
+    // este documento", "sintetizá el material". These route to K6 so a single
+    // supported indexed document is summarized through bounded evidence instead
+    // of being raw-forwarded AND then also summarized by a normal chat run.
+    "el archivo",
+    "este archivo",
+    "el documento",
+    "este documento",
+    "el material",
+    "este material",
+    "el adjunto",
+    "el texto",
+    "este texto",
 ];
 
 /// Executes one bounded summarization request against the shared OpenCode
@@ -334,6 +347,9 @@ mod tests {
         assert!(detect_summarize_intent(
             "hacé una síntesis de toda la reunión"
         ));
+        assert!(detect_summarize_intent("resumime el archivo"));
+        assert!(detect_summarize_intent("resumí este documento"));
+        assert!(detect_summarize_intent("sintetizá el material adjunto"));
         // Ordinary informational questions must NOT route to summarization.
         assert!(!detect_summarize_intent("¿cómo está el proyecto?"));
         assert!(!detect_summarize_intent("qué decía la reunión 1"));

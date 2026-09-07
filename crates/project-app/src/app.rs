@@ -1473,8 +1473,31 @@ where
                 started.elapsed().as_millis()
             ),
         );
+        // The attachment-provisioner dedup contract keys off EVERY durably
+        // READY-indexed source name, not just the small set this turn retrieved.
+        // A supported indexed TXT/Markdown the user attaches must be served
+        // through bounded Knowledge retrieval, never raw-forwarded as a full
+        // workspace attachment — even when this specific query retrieved zero
+        // evidence. Unsupported/media attachments are never `ready`, so they
+        // keep their raw-forwarding path.
+        let indexed_source_names: Vec<String> = store
+            .ready_source_names()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|name| project_core::safe_file_name(&name))
+            .collect();
         if package.entries.is_empty() {
-            return Ok(None);
+            // No evidence for this turn, but the dedup contract still applies.
+            if indexed_source_names.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(AgentKnowledgeContext {
+                indexed_source_names,
+                entries: Vec::new(),
+                evidence_budget_used: 0,
+                evidence_budget_limit: package.totals.estimated_budget_limit,
+                citation_map: Vec::new(),
+            }));
         }
         let entries: Vec<AgentKnowledgeEntry> = package
             .entries
@@ -1500,11 +1523,7 @@ where
             })
             .collect();
         Ok(Some(AgentKnowledgeContext {
-            indexed_source_names: package
-                .entries
-                .iter()
-                .map(|entry| project_core::safe_file_name(&entry.source_name))
-                .collect(),
+            indexed_source_names,
             entries,
             evidence_budget_used: package.totals.estimated_budget_used,
             evidence_budget_limit: package.totals.estimated_budget_limit,
@@ -1711,6 +1730,7 @@ where
     pub fn send_summary_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let inputs_model = inputs.model.clone();
         let started = std::time::Instant::now();
         crate::session_log::record(
             "INFO",
@@ -1797,6 +1817,13 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .append_assistant_message(&project_id, &surface, MessageStatus::Ok, &[])
             .map_err(AppError::from_core)?;
+        record_summary_turn_usage(
+            project_id.as_str(),
+            turn_id.as_deref(),
+            inputs_model.as_ref(),
+            &answer.report,
+            started.elapsed().as_millis(),
+        );
         crate::session_log::record(
             "INFO",
             format!(
@@ -2030,19 +2057,28 @@ where
             Some(&accepted.operation_id),
             recovering,
         );
-        accepted.inputs.knowledge = match self
-            .prepare_knowledge_context(&accepted.inputs.project_id, &accepted.inputs.prompt)
-        {
-            Ok(knowledge) => knowledge,
-            Err(error) => {
-                self.finish_accepted_import_operation(
-                    &accepted.inputs.project_id,
-                    &accepted.operation_id,
-                    false,
-                );
-                return Err(error);
-            }
-        };
+        // A whole-corpus or explicit single-source summarization ("resumime el
+        // archivo"/"resumime todos los archivos") routes to K6, not to a normal
+        // chat run. This mirrors `send_message` so an accepted staged send with
+        // an attached supported document cannot both raw-forward the file AND
+        // run a second normal-chat summary for the same logical request.
+        let summarize_intent = crate::summarize::detect_summarize_intent(&accepted.inputs.prompt)
+            && self.summarizer_backend.is_some();
+        if !summarize_intent {
+            accepted.inputs.knowledge = match self
+                .prepare_knowledge_context(&accepted.inputs.project_id, &accepted.inputs.prompt)
+            {
+                Ok(knowledge) => knowledge,
+                Err(error) => {
+                    self.finish_accepted_import_operation(
+                        &accepted.inputs.project_id,
+                        &accepted.operation_id,
+                        false,
+                    );
+                    return Err(error);
+                }
+            };
+        }
         let project_id = accepted.inputs.project_id.clone();
         // The durable ledger now says that the remote terminal outcome is
         // unknown. A process loss after this point must never auto-resend a
@@ -2052,7 +2088,12 @@ where
             &accepted.operation_id,
             project_knowledge::AcceptedImportAgentState::StartedOutcomeUnknown,
         );
-        match self.send_message_run(accepted.inputs) {
+        let run = if summarize_intent {
+            self.send_summary_run(accepted.inputs)
+        } else {
+            self.send_message_run(accepted.inputs)
+        };
+        match run {
             Ok(run) => {
                 let agent_state = if run.status == "completed" {
                     project_knowledge::AcceptedImportAgentState::Completed
@@ -2342,6 +2383,19 @@ where
             .map(|model| format!("{}/{}", model.provider_id, model.model_id))
             .unwrap_or_else(|| "default".to_owned());
         let started = std::time::Instant::now();
+        // Whatever raw attachments survive the Knowledge dedup will be
+        // provisioned into `workspace/materials` and reach the remote model
+        // through a content route additional to bounded evidence. Mirrors the
+        // exact predicate `agent` uses (`provision_attachments`), so the
+        // structural warning is truthful, never a false alarm.
+        let indexed_names: std::collections::HashSet<String> = inputs
+            .knowledge
+            .as_ref()
+            .map(|ctx| ctx.indexed_source_names.iter().cloned().collect())
+            .unwrap_or_default();
+        let additional_attachment_route = inputs.attachments.iter().any(|attachment| {
+            !indexed_names.contains(&project_core::safe_file_name(&attachment.display_name))
+        });
         crate::session_log::record(
             "INFO",
             format!(
@@ -2358,6 +2412,8 @@ where
                     model_ref.as_ref(),
                     &result.task.usage,
                     started.elapsed().as_millis(),
+                    "normal_chat",
+                    additional_attachment_route,
                 );
                 let creation_ids: Vec<CreationId> = result
                     .registered
@@ -3508,6 +3564,9 @@ fn embedding_index_failure_state(
         project_knowledge::KnowledgeError::Inference(_)
         | project_knowledge::KnowledgeError::InvalidEmbedding(_)
         | project_knowledge::KnowledgeError::InputTooLong => SemanticProviderState::InferenceFailed,
+        project_knowledge::KnowledgeError::EmbeddingPersistFailed => {
+            SemanticProviderState::EmbeddingPersistFailed
+        }
         project_knowledge::KnowledgeError::Sql(_) | project_knowledge::KnowledgeError::Io(_) => {
             SemanticProviderState::EmbeddingPersistFailed
         }
@@ -4002,10 +4061,18 @@ fn record_turn_usage(
     model: Option<&ModelRef>,
     usage: &RemoteUsage,
     turn_duration_ms: u128,
+    reason: &str,
+    additional_attachment_route: bool,
 ) {
     let (provider, model) = model
         .map(|model| (model.provider_id.clone(), model.model_id.clone()))
         .unwrap_or_else(|| ("unavailable".to_owned(), "unavailable".to_owned()));
+    let source = match usage.source {
+        UsageSource::ProviderActual => "provider_actual",
+        UsageSource::Estimated => "estimated",
+        UsageSource::Unavailable => "unavailable",
+    };
+    let remote_calls = if usage.available() { Some(1) } else { None };
     crate::session_log::record_usage(crate::session_log::SessionUsage {
         conversation_id: conversation_id.to_owned(),
         turn_id: turn_id.unwrap_or("unavailable").to_owned(),
@@ -4018,12 +4085,49 @@ fn record_turn_usage(
         total_tokens: usage.total_tokens,
         cost_usd: usage.cost_usd,
         turn_duration_ms: Some(turn_duration_ms),
-        source: match usage.source {
-            UsageSource::ProviderActual => "provider_actual",
-            UsageSource::Estimated => "estimated",
-            UsageSource::Unavailable => "unavailable",
-        }
-        .to_owned(),
+        source: source.to_owned(),
+        remote_calls,
+        reason: reason.to_owned(),
+        additional_attachment_route,
+    });
+}
+
+/// Records the AGGREGATE provider usage for a K6 summarization turn. The K6
+/// per-node `SummaryAccounting` already sums every document/batch/global call,
+/// so one record represents the whole logical turn. `reason` is always
+/// `summary_global`; token fields stay `None` (and render "No disponible")
+/// when the summarizer reported no actual provider telemetry.
+fn record_summary_turn_usage(
+    conversation_id: &str,
+    turn_id: Option<&str>,
+    model: Option<&ModelRef>,
+    report: &SummarizationReportView,
+    turn_duration_ms: u128,
+) {
+    let (provider, model) = model
+        .map(|model| (model.provider_id.clone(), model.model_id.clone()))
+        .unwrap_or_else(|| ("unavailable".to_owned(), "unavailable".to_owned()));
+    let source = if report.provider_usage_actual {
+        "provider_actual"
+    } else {
+        "unavailable"
+    };
+    crate::session_log::record_usage(crate::session_log::SessionUsage {
+        conversation_id: conversation_id.to_owned(),
+        turn_id: turn_id.unwrap_or("unavailable").to_owned(),
+        provider,
+        model,
+        input_tokens: report.input_tokens,
+        output_tokens: report.output_tokens,
+        cache_read_tokens: report.cache_read_tokens,
+        cache_write_tokens: report.cache_write_tokens,
+        total_tokens: None,
+        cost_usd: report.cost_usd,
+        turn_duration_ms: Some(turn_duration_ms),
+        source: source.to_owned(),
+        remote_calls: Some(report.remote_calls),
+        reason: "summary_global".to_owned(),
+        additional_attachment_route: false,
     });
 }
 

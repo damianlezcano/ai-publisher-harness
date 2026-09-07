@@ -62,6 +62,10 @@ pub enum KnowledgeError {
     Inference(String),
     InvalidSearchOptions(String),
     InvalidContextAssemblyOptions(String),
+    /// A nonzero number of valid vectors failed to commit to the local index;
+    /// the vector contract itself is fine. This separates a persistence-only
+    /// failure from an inference/serialization failure at the same boundary.
+    EmbeddingPersistFailed,
 }
 
 impl std::fmt::Display for KnowledgeError {
@@ -93,6 +97,9 @@ impl std::fmt::Display for KnowledgeError {
             }
             Self::InvalidContextAssemblyOptions(message) => {
                 write!(f, "invalid Knowledge context assembly options: {message}")
+            }
+            Self::EmbeddingPersistFailed => {
+                write!(f, "Knowledge embedding vectors could not be persisted")
             }
         }
     }
@@ -587,6 +594,11 @@ impl KnowledgeStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
+        // A concurrent reader/writer (e.g. the reopen-recovery seam racing the
+        // live accepted-turn pipeline before its remote-boundary claim) must not
+        // fail the whole local index with an immediate SQLITE_BUSY. Wait briefly
+        // instead of surfacing `embedding_persist_failed` on a transient lock.
+        connection.pragma_update(None, "busy_timeout", 5000_i64)?;
         migrate(&connection)?;
         Ok(Self {
             project_id: project_id.as_str().to_owned(),
@@ -819,6 +831,22 @@ impl KnowledgeStore {
             )?
             .parse()
             .expect("schema version is controlled"))
+    }
+
+    /// Sanitized display names of every READY-indexed source in this project.
+    /// Used by the request boundary to suppress raw workspace attachment
+    /// forwarding for supported documents the product already serves through
+    /// bounded Knowledge retrieval. Only the source display name is returned —
+    /// never a path, id, or content.
+    pub fn ready_source_names(&self) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT ms.source_name FROM material_sources ms
+             JOIN material_index_state mis ON mis.material_id = ms.material_id
+             WHERE mis.state = 'ready' ORDER BY ms.source_name",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     /// Structural corpus/index state for observability. Counts and byte/
@@ -1299,9 +1327,11 @@ impl KnowledgeStore {
                  VALUES(?1, ?2, ?3, 384, 1, 'ready', ?4)
                  ON CONFLICT(chunk_id, generation_id) DO UPDATE SET vector=excluded.vector, dimensions=384, normalized=1, state='ready', embedded_at=excluded.embedded_at",
                 params![chunk_id, generation.generation_id, vector, unix_seconds()],
-            )?;
+            )
+            .map_err(|_| KnowledgeError::EmbeddingPersistFailed)?;
         }
-        tx.commit()?;
+        tx.commit()
+            .map_err(|_| KnowledgeError::EmbeddingPersistFailed)?;
         Ok(EmbeddingIndexOutcome {
             embedded: produced.len(),
             reused: total.saturating_sub(pending.len()),
@@ -2388,6 +2418,7 @@ fn index_failure_category(error: &KnowledgeError) -> MaterialIndexFailure {
         | KnowledgeError::InvalidContextAssemblyOptions(_) => {
             MaterialIndexFailure::ExtractionFailed
         }
+        KnowledgeError::EmbeddingPersistFailed => MaterialIndexFailure::StorageFailed,
     }
 }
 
@@ -3429,6 +3460,33 @@ mod tests {
         );
         // Sanitized: the debug form never leaks document text.
         assert!(!format!("{stats:?}").contains("reunion"));
+    }
+
+    #[test]
+    fn ready_source_names_returns_only_sanitized_ready_names_for_dedup() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        store
+            .index(&source("reunion.txt"), b"Se definio el presupuesto.")
+            .unwrap();
+        let mut md = source("notas.md");
+        md.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db19").unwrap();
+        md.relative_path = format!("inputs/{}/notas.md", md.material_id);
+        store
+            .index(&md, b"# Notas\n\nPendiente el informe.")
+            .unwrap();
+        // An unsupported source is never `ready`, so it is never in the dedup set.
+        let mut image = source("foto.png");
+        image.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db22").unwrap();
+        image.relative_path = format!("inputs/{}/foto.png", image.material_id);
+        image.media_type = Some("image/png".to_owned());
+        let _ = store.index(&image, b"\x89PNG");
+
+        let names = store.ready_source_names().unwrap();
+        assert_eq!(names, vec!["notas.md".to_owned(), "reunion.txt".to_owned()]);
+        // Sanitized: names are display names, never paths or ids.
+        assert!(!names.iter().any(|name| name.contains("inputs/")));
+        assert!(!names.iter().any(|name| name.contains("0198e4a6")));
     }
 
     #[test]

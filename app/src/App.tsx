@@ -191,6 +191,13 @@ export default function App() {
     if (acceptedImport.state === "completed") return;
     if (acceptedImport.agentState !== "not_started") return;
     if (acceptedImport.state === "pending_retry") return;
+    // Never auto-resume while this project's accepted turn is still in flight
+    // in this process. The reopen-recovery seam exists to resume a CRASHED
+    // turn after restart; firing it while the first turn is actively running
+    // (agentPhase "working", or the turn id is already tracked in-flight) would
+    // re-run the local pipeline and issue a second remote request for the SAME
+    // logical user turn, producing a duplicate assistant response.
+    if (inFlightRef.current.has(conversation.id) || agentPhase === "working") return;
     const key = `${conversation.id}:${acceptedImport.operationId}`;
     if (resumeTriggeredRef.current.has(key)) return;
     resumeTriggeredRef.current.add(key);
@@ -211,7 +218,7 @@ export default function App() {
         void api.sessionLogRecord(failed).catch(() => {});
         setResumeFailure(acceptedImport.operationId);
       });
-  }, [conversation]);
+  }, [conversation, agentPhase]);
 
   const handleResumeRetry = useCallback((operationId: string) => {
     const id = selectedIdRef.current;
