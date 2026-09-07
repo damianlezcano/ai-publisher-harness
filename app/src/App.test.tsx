@@ -44,6 +44,19 @@ const projectView: ProjectView = {
   messages: [],
 };
 
+const incompleteImport: NonNullable<ProjectView["acceptedImport"]> = {
+  operationId: "op-52",
+  state: "copying",
+  agentState: "not_started",
+  total: 52,
+  copied: 52,
+  lexicalCompleted: 0,
+  embeddingCompleted: 0,
+  failed: 0,
+  embeddingsCreated: 0,
+  embeddingsReused: 0,
+};
+
 const freeModel = {
   providerId: "opencode",
   modelId: "big-pickle",
@@ -1086,5 +1099,127 @@ describe("App", () => {
     await waitForWorkspace();
     expect(invokeMock.mock.calls.some((c) => c[0] === "agent_resume_import")).toBe(false);
     expect(screen.getByText(messages.processing.outcomeUnknown)).toBeInTheDocument();
+  });
+
+  it("does not re-invoke resume on unrelated re-renders", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: { [baseSummary.id]: { acceptedImport: incompleteImport } },
+    });
+    captureTaskListener();
+    render(<App />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_resume_import", {
+        projectId: baseSummary.id,
+        operationId: "op-52",
+      }),
+    );
+
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 1,
+        payload: {
+          projectId: baseSummary.id,
+          status: "completed",
+          message: null,
+          registeredCreationIds: [],
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter((call) => call[0] === "agent_resume_import"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("does not invoke resume for an already-complete operation", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: { acceptedImport: { ...incompleteImport, state: "completed" } },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_resume_import")).toBe(false);
+  });
+
+  it("never auto-resumes a started-outcome-unknown operation regardless of local state", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: {
+          acceptedImport: { ...incompleteImport, agentState: "started_outcome_unknown" },
+        },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_resume_import")).toBe(false);
+    expect(screen.getByText(messages.processing.outcomeUnknown)).toBeInTheDocument();
+  });
+
+  it("does not invoke resume for a failed-terminal operation", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: {
+          acceptedImport: { ...incompleteImport, agentState: "failed_terminal" },
+        },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_resume_import")).toBe(false);
+    expect(screen.getByText(messages.processing.cannotContinue)).toBeInTheDocument();
+  });
+
+  it("does not invoke resume when the accepted import has no operation id", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: { acceptedImport: { ...incompleteImport, operationId: "" } },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_resume_import")).toBe(false);
+    expect(screen.getByText("Procesando 52 archivos")).toBeInTheDocument();
+  });
+
+  it("surfaces a typed recoverable state when auto-resume fails and retries the same operation", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: { [baseSummary.id]: { acceptedImport: incompleteImport } },
+    });
+    const baseImpl = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "agent_resume_import") {
+        return Promise.reject({
+          code: "internal",
+          message: "No pudimos recuperar los materiales.",
+        });
+      }
+      return (baseImpl as (cmd: string, args?: unknown) => Promise<unknown>)(cmd, args);
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByText(messages.processing.resumeFailed)).toBeInTheDocument(),
+    );
+    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_resume_import")).toHaveLength(
+      1,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: messages.common.retry }));
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter((call) => call[0] === "agent_resume_import"),
+      ).toHaveLength(2),
+    );
+    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_resume_import")[1][1]).toEqual(
+      { projectId: baseSummary.id, operationId: "op-52" },
+    );
   });
 });

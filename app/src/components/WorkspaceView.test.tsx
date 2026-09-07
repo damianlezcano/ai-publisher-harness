@@ -732,4 +732,30 @@ describe("WorkspaceView", () => {
     expect(baseProps.onRefresh).toHaveBeenCalled();
     expect(invokeMock.mock.calls.some((call) => call[0] === "agent_send_staged")).toBe(false);
   });
+
+  it("shows typed recoverable copy after an auto-resume failure and retries through the same path", async () => {
+    const onResumeRetry = vi.fn();
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-52",
+          state: "copying",
+          agentState: "not_started",
+          total: 52,
+          copied: 52,
+          lexicalCompleted: 0,
+          embeddingCompleted: 0,
+          failed: 0,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+        resumeFailure="op-52"
+        onResumeRetry={onResumeRetry}
+      />,
+    );
+    expect(screen.getByText(messages.processing.resumeFailed)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: messages.common.retry }));
+    expect(onResumeRetry).toHaveBeenCalledWith("op-52");
+  });
 });
