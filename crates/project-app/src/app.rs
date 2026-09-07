@@ -557,17 +557,10 @@ where
                     let _ = store.bind_accepted_import_material(operation_id, &material_id);
                 }
             }
-            let _ = store.update_accepted_import_operation(
-                operation_id,
-                None,
-                project_knowledge::AcceptedImportState::Copying,
-                accepted.len(),
-                0,
-                0,
-                0,
-                0,
-                0,
-            );
+            // The `copied` (prepared) counter is deliberately NOT advanced here.
+            // `prepared > 0` must never be durable before the owning user turn is
+            // persisted, so the caller publishes the first `copied > 0` state
+            // together with the turn link in one ledger update.
         }
         Ok(MaterialsImportReport { items })
     }
@@ -1956,9 +1949,31 @@ where
             .iter()
             .filter_map(|item| item.material_id.clone())
             .collect::<Vec<_>>();
-        // Every selected path remains accounted for by the operation.  A
+        // Persist the user turn (the durable user intent required for recovery)
+        // before the operation ledger can expose `prepared > 0`. The lifecycle
+        // invariant is: `prepared > 0 => turn_id != NULL`. Derived Knowledge
+        // work is deliberately deferred to the caller's accepted-turn pipeline,
+        // allowing the UI to refresh and render durable progress without a fake
+        // percentage.
+        let mut inputs =
+            self.resolve_agent_inputs_without_knowledge(project_id, prompt, &attachment_ids)?;
+        let material_ids = attachment_ids
+            .iter()
+            .map(|id| parse_material_id(id))
+            .collect::<AppResult<Vec<_>>>()?;
+        let user_message = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_user_message(&pid, prompt, &material_ids)
+            .map_err(AppError::from_core)?;
+        inputs.turn_id = Some(user_message.id);
+        // Every selected path remains accounted for by the operation. A
         // duplicate can legitimately bind the already durable Material; it is
-        // not silently discarded merely because no new copy was needed.
+        // not silently discarded merely because no new copy was needed. The
+        // first durable `copied > 0` write and the turn link happen together,
+        // so a crash between acceptance and this point leaves `prepared == 0`
+        // and can never fabricate a recoverable operation without its turn.
         if let Ok(mut store) = KnowledgeStore::open(&root, &pid) {
             for id in &attachment_ids {
                 if let Ok(material_id) = MaterialId::parse(id) {
@@ -1973,7 +1988,7 @@ where
             let terminal_without_materials = attachment_ids.is_empty();
             let _ = store.update_accepted_import_operation(
                 &operation_id,
-                None,
+                inputs.turn_id(),
                 if terminal_without_materials {
                     project_knowledge::AcceptedImportState::PendingRetry
                 } else {
@@ -1985,38 +2000,6 @@ where
                 failures,
                 0,
                 0,
-            );
-        }
-        // Persist the user turn immediately after its accepted sources are
-        // durable.  Derived Knowledge work is deliberately deferred to the
-        // caller's accepted-turn pipeline, allowing the UI to refresh and
-        // render durable progress without a fake percentage.
-        let mut inputs =
-            self.resolve_agent_inputs_without_knowledge(project_id, prompt, &attachment_ids)?;
-        let material_ids = attachment_ids
-            .iter()
-            .map(|id| parse_material_id(id))
-            .collect::<AppResult<Vec<_>>>()?;
-        let user_message = self
-            .projects
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .append_user_message(&pid, prompt, &material_ids)
-            .map_err(AppError::from_core)?;
-        inputs.turn_id = Some(user_message.id);
-        if let Ok(mut store) = KnowledgeStore::open(&root, &pid)
-            && let Ok(Some(progress)) = store.accepted_import_operation(&operation_id)
-        {
-            let _ = store.update_accepted_import_operation(
-                &operation_id,
-                inputs.turn_id(),
-                progress.state,
-                progress.copied,
-                progress.lexical_completed,
-                progress.embedding_completed,
-                progress.failed,
-                progress.embeddings_created,
-                progress.embeddings_reused,
             );
         }
         Ok(AcceptedStagedTurn {
