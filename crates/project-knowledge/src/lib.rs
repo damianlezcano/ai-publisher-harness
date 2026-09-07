@@ -39,7 +39,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 6;
 pub const NORMALIZATION_VERSION: &str = "nfc-lf-v1";
 pub const CHUNKER_ID: &str = "structural-v1";
 pub const CHUNKER_VERSION: &str = "structural-v1";
@@ -112,6 +112,13 @@ impl From<rusqlite::Error> for KnowledgeError {
 
 pub type Result<T> = std::result::Result<T, KnowledgeError>;
 
+fn to_sql_error(_error: KnowledgeError) -> rusqlite::Error {
+    // A checked enum value in an application-owned table is a schema/data
+    // integrity failure. `rusqlite` closures require their own error type;
+    // the public boundary maps it back to `KnowledgeError::Sql`.
+    rusqlite::Error::InvalidQuery
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterialSource {
     pub material_id: MaterialId,
@@ -154,6 +161,94 @@ pub struct IndexOutcome {
     pub document_id: String,
     pub reused: bool,
     pub chunk_count: usize,
+}
+
+/// Truthful, durable progress for one explicitly accepted material-import
+/// operation. This is deliberately project-local application state, not a
+/// general job queue: only an accepted turn may create one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptedImportOperation {
+    pub operation_id: String,
+    pub turn_id: Option<String>,
+    pub state: AcceptedImportState,
+    /// The remote agent boundary is separate from local Material/Knowledge
+    /// progress. A restart must never infer that an outbound request did not
+    /// happen merely because operation completion was not persisted.
+    pub agent_state: AcceptedImportAgentState,
+    pub total: usize,
+    pub copied: usize,
+    pub lexical_completed: usize,
+    pub embedding_completed: usize,
+    pub failed: usize,
+    pub embeddings_created: usize,
+    pub embeddings_reused: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceptedImportState {
+    Accepted,
+    Copying,
+    IndexingLexical,
+    IndexingEmbeddings,
+    PendingRetry,
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceptedImportAgentState {
+    NotStarted,
+    StartedOutcomeUnknown,
+    Completed,
+    FailedRetryable,
+    FailedTerminal,
+}
+
+impl AcceptedImportState {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Copying => "copying",
+            Self::IndexingLexical => "indexing_lexical",
+            Self::IndexingEmbeddings => "indexing_embeddings",
+            Self::PendingRetry => "pending_retry",
+            Self::Completed => "completed",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "accepted" => Ok(Self::Accepted),
+            "copying" => Ok(Self::Copying),
+            "indexing_lexical" => Ok(Self::IndexingLexical),
+            "indexing_embeddings" => Ok(Self::IndexingEmbeddings),
+            "pending_retry" => Ok(Self::PendingRetry),
+            "completed" => Ok(Self::Completed),
+            _ => Err(KnowledgeError::IncompatibleSchema(-1)),
+        }
+    }
+}
+
+impl AcceptedImportAgentState {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::StartedOutcomeUnknown => "started_outcome_unknown",
+            Self::Completed => "completed",
+            Self::FailedRetryable => "failed_retryable",
+            Self::FailedTerminal => "failed_terminal",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "not_started" => Ok(Self::NotStarted),
+            "started_outcome_unknown" => Ok(Self::StartedOutcomeUnknown),
+            "completed" => Ok(Self::Completed),
+            "failed_retryable" => Ok(Self::FailedRetryable),
+            "failed_terminal" => Ok(Self::FailedTerminal),
+            _ => Err(KnowledgeError::IncompatibleSchema(-1)),
+        }
+    }
 }
 
 /// Durable operational state for one project Material's Knowledge derivation.
@@ -502,6 +597,203 @@ impl KnowledgeStore {
 
     pub fn database_path(&self) -> &Path {
         &self.database_path
+    }
+
+    /// Creates the durable ledger at the accepted-turn boundary, before any
+    /// project-owned Material copy. `operation_id` is supplied by the
+    /// application so it can be correlated with a user turn without exposing
+    /// a storage implementation detail to the UI.
+    pub fn create_accepted_import_operation(
+        &mut self,
+        operation_id: &str,
+        total: usize,
+    ) -> Result<()> {
+        let now = unix_seconds();
+        self.connection.execute(
+            "INSERT INTO accepted_import_operations(
+                operation_id, turn_id, state, total, copied, lexical_completed,
+                embedding_completed, failed, embeddings_created, embeddings_reused, agent_state,
+                created_at, updated_at
+             ) VALUES(?1, NULL, 'accepted', ?2, 0, 0, 0, 0, 0, 0, 'not_started', ?3, ?3)",
+            params![operation_id, total as i64, now],
+        )?;
+        Ok(())
+    }
+
+    /// Records only the final remote-agent boundary. This intentionally does
+    /// not alter local Material/Knowledge progress counters.
+    pub fn update_accepted_import_agent_state(
+        &mut self,
+        operation_id: &str,
+        agent_state: AcceptedImportAgentState,
+    ) -> Result<()> {
+        self.connection.execute(
+            "UPDATE accepted_import_operations SET agent_state=?2, updated_at=?3 WHERE operation_id=?1",
+            params![operation_id, agent_state.as_db(), unix_seconds()],
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // mirrors the durable ledger columns exactly
+    pub fn update_accepted_import_operation(
+        &mut self,
+        operation_id: &str,
+        turn_id: Option<&str>,
+        state: AcceptedImportState,
+        copied: usize,
+        lexical_completed: usize,
+        embedding_completed: usize,
+        failed: usize,
+        embeddings_created: usize,
+        embeddings_reused: usize,
+    ) -> Result<()> {
+        self.connection.execute(
+            "UPDATE accepted_import_operations SET turn_id=COALESCE(?2, turn_id),
+                state=?3, copied=?4, lexical_completed=?5, embedding_completed=?6,
+                failed=?7, embeddings_created=?8, embeddings_reused=?9, updated_at=?10
+             WHERE operation_id=?1",
+            params![
+                operation_id,
+                turn_id,
+                state.as_db(),
+                copied as i64,
+                lexical_completed as i64,
+                embedding_completed as i64,
+                failed as i64,
+                embeddings_created as i64,
+                embeddings_reused as i64,
+                unix_seconds()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Binds an already persisted project Material to the accepted operation.
+    /// The material remains the source of truth for its own Pending/Ready/
+    /// Failed/Unsupported state; this table only makes recovery ownership
+    /// explicit.
+    pub fn bind_accepted_import_material(
+        &mut self,
+        operation_id: &str,
+        material_id: &MaterialId,
+    ) -> Result<()> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO accepted_import_materials(operation_id, material_id)
+             VALUES(?1, ?2)",
+            params![operation_id, material_id.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn accepted_import_material_ids(&self, operation_id: &str) -> Result<Vec<MaterialId>> {
+        let mut statement = self.connection.prepare(
+            "SELECT material_id FROM accepted_import_materials WHERE operation_id=?1 ORDER BY material_id",
+        )?;
+        statement
+            .query_map([operation_id], |row| {
+                MaterialId::parse(row.get::<_, String>(0)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn accepted_import_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<AcceptedImportOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_id, turn_id, state, agent_state, total, copied, lexical_completed,
+                    embedding_completed, failed, embeddings_created, embeddings_reused
+             FROM accepted_import_operations WHERE operation_id=?1",
+                [operation_id],
+                |row| {
+                    Ok(AcceptedImportOperation {
+                        operation_id: row.get(0)?,
+                        turn_id: row.get(1)?,
+                        state: AcceptedImportState::from_db(&row.get::<_, String>(2)?)
+                            .map_err(to_sql_error)?,
+                        agent_state: AcceptedImportAgentState::from_db(
+                            &row.get::<_, String>(3)?,
+                        )
+                        .map_err(to_sql_error)?,
+                        total: row.get::<_, i64>(4)? as usize,
+                        copied: row.get::<_, i64>(5)? as usize,
+                        lexical_completed: row.get::<_, i64>(6)? as usize,
+                        embedding_completed: row.get::<_, i64>(7)? as usize,
+                        failed: row.get::<_, i64>(8)? as usize,
+                        embeddings_created: row.get::<_, i64>(9)? as usize,
+                        embeddings_reused: row.get::<_, i64>(10)? as usize,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Incomplete operations are intentionally surfaced to recovery; opening
+    /// a store never advances them, so the application cannot silently run
+    /// arbitrary background work after restart.
+    pub fn incomplete_accepted_import_operations(&self) -> Result<Vec<AcceptedImportOperation>> {
+        let mut statement = self.connection.prepare(
+            "SELECT operation_id, turn_id, state, agent_state, total, copied, lexical_completed,
+                    embedding_completed, failed, embeddings_created, embeddings_reused
+             FROM accepted_import_operations WHERE state != 'completed' ORDER BY created_at",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok(AcceptedImportOperation {
+                    operation_id: row.get(0)?,
+                    turn_id: row.get(1)?,
+                    state: AcceptedImportState::from_db(&row.get::<_, String>(2)?)
+                        .map_err(to_sql_error)?,
+                    agent_state: AcceptedImportAgentState::from_db(&row.get::<_, String>(3)?)
+                        .map_err(to_sql_error)?,
+                    total: row.get::<_, i64>(4)? as usize,
+                    copied: row.get::<_, i64>(5)? as usize,
+                    lexical_completed: row.get::<_, i64>(6)? as usize,
+                    embedding_completed: row.get::<_, i64>(7)? as usize,
+                    failed: row.get::<_, i64>(8)? as usize,
+                    embeddings_created: row.get::<_, i64>(9)? as usize,
+                    embeddings_reused: row.get::<_, i64>(10)? as usize,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Most recent accepted operation for the project.  This is a compact UI
+    /// read model; the ledger remains the durable recovery source of truth.
+    pub fn latest_accepted_import_operation(&self) -> Result<Option<AcceptedImportOperation>> {
+        self.connection
+            .query_row(
+                "SELECT operation_id, turn_id, state, agent_state, total, copied, lexical_completed,
+                    embedding_completed, failed, embeddings_created, embeddings_reused
+                 FROM accepted_import_operations ORDER BY created_at DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(AcceptedImportOperation {
+                        operation_id: row.get(0)?,
+                        turn_id: row.get(1)?,
+                        state: AcceptedImportState::from_db(&row.get::<_, String>(2)?)
+                            .map_err(to_sql_error)?,
+                        agent_state: AcceptedImportAgentState::from_db(
+                            &row.get::<_, String>(3)?,
+                        )
+                        .map_err(to_sql_error)?,
+                        total: row.get::<_, i64>(4)? as usize,
+                        copied: row.get::<_, i64>(5)? as usize,
+                        lexical_completed: row.get::<_, i64>(6)? as usize,
+                        embedding_completed: row.get::<_, i64>(7)? as usize,
+                        failed: row.get::<_, i64>(8)? as usize,
+                        embeddings_created: row.get::<_, i64>(9)? as usize,
+                        embeddings_reused: row.get::<_, i64>(10)? as usize,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Whether this project-local index owns a material source. This exposes
@@ -908,25 +1200,74 @@ impl KnowledgeStore {
         provider: &mut dyn EmbeddingProvider,
         batch_size: usize,
     ) -> Result<EmbeddingIndexOutcome> {
+        self.index_embeddings_for_materials(provider, batch_size, &[])
+    }
+
+    /// Batch boundary for an accepted import. A non-empty material list limits
+    /// selection to chunks reachable from those materials; it never performs a
+    /// repeated whole-corpus scan for every newly accepted file. An empty list
+    /// preserves the existing explicit full-repair/rebuild behavior.
+    pub fn index_embeddings_for_materials(
+        &mut self,
+        provider: &mut dyn EmbeddingProvider,
+        batch_size: usize,
+        material_ids: &[MaterialId],
+    ) -> Result<EmbeddingIndexOutcome> {
         let generation = provider.generation().clone();
         self.record_generation(&generation)?;
-        let mut statement = self.connection.prepare(
+        let scoped = !material_ids.is_empty();
+        let ids = material_ids
+            .iter()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>();
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = if scoped {
+            format!(
+                "SELECT DISTINCT c.chunk_id, c.text FROM chunks c
+                JOIN material_sources ms ON ms.document_id=c.document_id
+                WHERE ms.material_id IN ({placeholders}) AND NOT EXISTS (
+                    SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id=c.chunk_id
+                    AND e.generation_id=?1 AND e.state='ready' AND e.dimensions=384
+                ) ORDER BY c.chunk_id"
+            )
+        } else {
             "SELECT c.chunk_id, c.text FROM chunks c WHERE NOT EXISTS (
                 SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id=c.chunk_id
                 AND e.generation_id=?1 AND e.state='ready' AND e.dimensions=384
-            ) ORDER BY c.document_id, c.ordinal",
-        )?;
+            ) ORDER BY c.document_id, c.ordinal"
+                .to_owned()
+        };
+        let mut values = vec![rusqlite::types::Value::Text(
+            generation.generation_id.clone(),
+        )];
+        values.extend(
+            ids.into_iter()
+                .map(|id| rusqlite::types::Value::Text(id.to_owned())),
+        );
+        let mut statement = self.connection.prepare(&query)?;
         let pending = statement
-            .query_map([&generation.generation_id], |row| {
+            .query_map(rusqlite::params_from_iter(values), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(statement);
-        let total = self
-            .connection
-            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
-                row.get::<_, i64>(0)
-            })? as usize;
+        let total = if scoped {
+            let placeholders = std::iter::repeat_n("?", material_ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            self.connection.query_row(
+                &format!("SELECT COUNT(DISTINCT c.chunk_id) FROM chunks c JOIN material_sources ms ON ms.document_id=c.document_id WHERE ms.material_id IN ({placeholders})"),
+                rusqlite::params_from_iter(material_ids.iter().map(|id| id.as_str())),
+                |row| row.get::<_, i64>(0),
+            )? as usize
+        } else {
+            self.connection
+                .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as usize
+        };
         if pending.is_empty() {
             return Ok(EmbeddingIndexOutcome {
                 embedded: 0,
@@ -1817,6 +2158,8 @@ fn migrate(connection: &Connection) -> Result<()> {
             let tx = connection.unchecked_transaction()?;
             create_embedding_tables(&tx)?;
             create_material_index_state_table(&tx)?;
+            create_summary_tables(&tx)?;
+            create_accepted_import_operation_tables(&tx)?;
             tx.execute(
                 "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
                 [SCHEMA_VERSION.to_string()],
@@ -1827,6 +2170,8 @@ fn migrate(connection: &Connection) -> Result<()> {
         if version == 2 {
             let tx = connection.unchecked_transaction()?;
             create_material_index_state_table(&tx)?;
+            create_summary_tables(&tx)?;
+            create_accepted_import_operation_tables(&tx)?;
             tx.execute(
                 "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
                 [SCHEMA_VERSION.to_string()],
@@ -1837,6 +2182,30 @@ fn migrate(connection: &Connection) -> Result<()> {
         if version == 3 {
             let tx = connection.unchecked_transaction()?;
             create_summary_tables(&tx)?;
+            create_accepted_import_operation_tables(&tx)?;
+            tx.execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
+        if version == 4 {
+            let tx = connection.unchecked_transaction()?;
+            create_accepted_import_operation_tables(&tx)?;
+            tx.execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
+                [SCHEMA_VERSION.to_string()],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
+        if version == 5 {
+            let tx = connection.unchecked_transaction()?;
+            tx.execute(
+                "ALTER TABLE accepted_import_operations ADD COLUMN agent_state TEXT NOT NULL DEFAULT 'not_started'",
+                [],
+            )?;
             tx.execute(
                 "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
                 [SCHEMA_VERSION.to_string()],
@@ -1876,8 +2245,43 @@ fn migrate(connection: &Connection) -> Result<()> {
     create_embedding_tables(&tx)?;
     create_material_index_state_table(&tx)?;
     create_summary_tables(&tx)?;
+    create_accepted_import_operation_tables(&tx)?;
     tx.execute("INSERT INTO schema_meta(key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION.to_string()])?;
     tx.commit()?;
+    Ok(())
+}
+
+fn create_accepted_import_operation_tables(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS accepted_import_operations (
+            operation_id TEXT PRIMARY KEY NOT NULL,
+            turn_id TEXT,
+            state TEXT NOT NULL CHECK(state IN (
+                'accepted', 'copying', 'indexing_lexical', 'indexing_embeddings',
+                'pending_retry', 'completed'
+            )),
+            total INTEGER NOT NULL CHECK(total >= 0),
+            copied INTEGER NOT NULL CHECK(copied >= 0),
+            lexical_completed INTEGER NOT NULL CHECK(lexical_completed >= 0),
+            embedding_completed INTEGER NOT NULL CHECK(embedding_completed >= 0),
+            failed INTEGER NOT NULL CHECK(failed >= 0),
+            embeddings_created INTEGER NOT NULL CHECK(embeddings_created >= 0),
+            embeddings_reused INTEGER NOT NULL CHECK(embeddings_reused >= 0),
+            agent_state TEXT NOT NULL CHECK(agent_state IN (
+                'not_started', 'started_outcome_unknown', 'completed',
+                'failed_retryable', 'failed_terminal'
+            )),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS accepted_import_operations_state
+           ON accepted_import_operations(state, created_at);
+         CREATE TABLE IF NOT EXISTS accepted_import_materials (
+            operation_id TEXT NOT NULL REFERENCES accepted_import_operations(operation_id) ON DELETE CASCADE,
+            material_id TEXT NOT NULL,
+            PRIMARY KEY(operation_id, material_id)
+         );",
+    )?;
     Ok(())
 }
 
@@ -2400,6 +2804,37 @@ mod tests {
             media_type: None,
         }
     }
+
+    #[test]
+    fn accepted_import_operation_is_durable_and_never_auto_completes() {
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        store
+            .create_accepted_import_operation("accepted-51", 51)
+            .unwrap();
+        store
+            .update_accepted_import_operation(
+                "accepted-51",
+                None,
+                AcceptedImportState::IndexingLexical,
+                17,
+                17,
+                0,
+                0,
+                0,
+                0,
+            )
+            .unwrap();
+        drop(store);
+
+        let reopened = KnowledgeStore::open(&project_root, &pid).unwrap();
+        let incomplete = reopened.incomplete_accepted_import_operations().unwrap();
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].state, AcceptedImportState::IndexingLexical);
+        assert_eq!(incomplete[0].copied, 17);
+        assert_eq!(incomplete[0].total, 51);
+    }
     #[test]
     fn txt_and_markdown_are_deterministic_and_keep_provenance() {
         let txt = extract(&source("a.txt"), b"Uno\r\n\r\nDos\n").unwrap();
@@ -2708,7 +3143,7 @@ mod tests {
         drop(store);
 
         let upgraded = KnowledgeStore::open(&project_root, &pid).unwrap();
-        assert_eq!(upgraded.schema_version().unwrap(), 4);
+        assert_eq!(upgraded.schema_version().unwrap(), SCHEMA_VERSION);
         assert_eq!(upgraded.search("OpenShift", 10).unwrap().len(), 1);
         assert_eq!(
             upgraded
@@ -2779,7 +3214,7 @@ mod tests {
         drop(store);
 
         let upgraded = KnowledgeStore::open(&project_root, &pid).unwrap();
-        assert_eq!(upgraded.schema_version().unwrap(), 4);
+        assert_eq!(upgraded.schema_version().unwrap(), SCHEMA_VERSION);
         assert_eq!(upgraded.search("OpenShift", 10).unwrap().len(), 1);
         assert_eq!(upgraded.summary_ids().unwrap().len(), 0);
         let columns: Vec<String> = upgraded

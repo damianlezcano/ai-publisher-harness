@@ -42,6 +42,12 @@ pub struct OrtEmbeddingProvider {
     session: Session,
 }
 
+/// An extraction chunk is character-bounded while the model is
+/// tokenizer-bounded. Keep pathological tokenizer expansion bounded without
+/// rejecting an otherwise valid accepted Material or allocating one enormous
+/// ONNX batch.
+const MAX_SUBDIVIDED_PIECES_PER_INPUT: usize = 32;
+
 /// Resolves the bundled runtime solely from the application executable. Linux
 /// packages place it under `usr/lib/educai/onnxruntime`; Windows places both
 /// runtime DLLs beside `educai.exe`.
@@ -104,18 +110,10 @@ impl OrtEmbeddingProvider {
         })
     }
 
-    fn embed(&mut self, prefix: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    /// Embeds one or more already tokenizer-safe passages in one ONNX call.
+    fn embed_batch(&mut self, prefix: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut encodings = Vec::new();
         for text in texts {
-            let pieces = semantic_safe_subdivide(
-                &self.tokenizer,
-                prefix,
-                text,
-                self.generation.max_input_tokens,
-            )?;
-            if pieces.len() != 1 {
-                return Err(KnowledgeError::InputTooLong);
-            }
             encodings.push(
                 self.tokenizer
                     .encode(format!("{prefix}{text}"), true)
@@ -223,6 +221,58 @@ impl OrtEmbeddingProvider {
                 "unexpected ONNX output shape: {dimensions:?}"
             ))),
         }
+    }
+
+    /// Splits character-bounded extractor chunks against the actual tokenizer,
+    /// embeds those pieces in the normal bounded batch size, then mean-pools
+    /// them back to one normalized vector per original input. This preserves
+    /// the `EmbeddingProvider` output contract and avoids a retry/recreate path
+    /// for deterministic input-length expansion.
+    fn embed(&mut self, prefix: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut flattened = Vec::new();
+        let mut owners = Vec::new();
+        for (owner, text) in texts.iter().enumerate() {
+            let pieces = semantic_safe_subdivide(
+                &self.tokenizer,
+                prefix,
+                text,
+                self.generation.max_input_tokens,
+            )?;
+            if pieces.len() > MAX_SUBDIVIDED_PIECES_PER_INPUT {
+                return Err(KnowledgeError::InputTooLong);
+            }
+            for piece in pieces {
+                owners.push(owner);
+                flattened.push(piece);
+            }
+        }
+        if flattened.is_empty() {
+            return Err(KnowledgeError::InputTooLong);
+        }
+        let mut pooled = vec![vec![0.0_f32; 384]; texts.len()];
+        let mut counts = vec![0_usize; texts.len()];
+        // Preserve the established accepted-batch bound (eight source chunks)
+        // even if one source expands to several tokenizer-safe pieces.
+        let source_batch_size = texts.len().clamp(1, 8);
+        for start in (0..flattened.len()).step_by(source_batch_size) {
+            let end = (start + source_batch_size).min(flattened.len());
+            let vectors = self.embed_batch(prefix, &flattened[start..end])?;
+            for (owner, vector) in owners[start..end].iter().zip(vectors) {
+                for (target, value) in pooled[*owner].iter_mut().zip(vector) {
+                    *target += value;
+                }
+                counts[*owner] += 1;
+            }
+        }
+        for (vector, count) in pooled.iter_mut().zip(counts) {
+            if count == 0 {
+                return Err(KnowledgeError::InvalidEmbedding(
+                    "missing subdivided embedding".to_owned(),
+                ));
+            }
+            normalize(vector)?;
+        }
+        Ok(pooled)
     }
 }
 

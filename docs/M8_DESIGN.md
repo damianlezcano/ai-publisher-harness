@@ -79,13 +79,14 @@ Flow:
 ```
 paste event (Ctrl+V) on prompt/textarea
   -> inspect event.clipboardData.items
-     - image file item (type image/*)  -> read Blob -> ArrayBuffer -> command
+     - image file item (type image/*)  -> read Blob -> ArrayBuffer -> composer-local staging ID
      - text item only                  -> default text paste (unchanged)
-  -> invoke "material_add_image(projectId, fileName, contentType, data: Vec<u8>)"
-  -> backend: validate -> store via ProjectService.add_material -> MaterialView
+  -> show removable pending chip; no project Material or history row exists
+  -> Enviar invokes the accepted-turn command with staged paths/image bytes
+  -> backend: validate -> durable accepted operation -> Material -> Knowledge
 ```
 
-Backend `material_add_image` validation (all fail-closed):
+At the accepted-turn boundary, pasted-image validation is fail-closed:
 
 - `content_type` must be an allowed image type: `image/png`, `image/jpeg`,
   `image/webp`, `image/gif`, `image/bmp`, `image/svg+xml`.
@@ -100,8 +101,8 @@ Backend `material_add_image` validation (all fail-closed):
   (`captura-<timestamp>.png`), sanitized through `safe_file_name`. The display
   name is human-friendly ("Captura").
 - **Duplicate paste**: content SHA-256 is compared against existing project
-  materials; a re-paste of the same bytes returns the existing material and
-  reports "duplicate" (see §5), so Ctrl+V twice does not create two copies.
+  materials only after Enviar; a re-paste of the same bytes then binds the
+  existing Material rather than creating a second copy.
 - **Atomic creation**: `ProjectService.add_material` already writes content
   first, then commits metadata under optimistic concurrency (§M1). A failed
   import leaves no metadata reference.
@@ -241,7 +242,7 @@ The provider/model selection (M7) applies to attached prompts exactly as today
 
 `project-app` (facade additions):
 
-- `add_material_image(project_id, file_name, content_type, bytes)` — §4.
+- accepted-turn staged-image import (`send_staged_message_persist`) — §4.
 - `import_materials(project_id, paths) -> MaterialsImportReport` — §5.
 - `remove_material(project_id, material_id)`.
 - `material_path(project_id, material_id)` + `open_material(...)` (system

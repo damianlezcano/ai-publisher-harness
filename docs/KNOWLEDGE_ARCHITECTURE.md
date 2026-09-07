@@ -104,9 +104,27 @@ Content hash identifies identical bytes; normalized-content hash detects renamed
 
 Evidence carries source attachment, relative path/name, section/heading, speaker, timestamp, and future page/sheet/range fields when available, plus chunk id and character offsets. Local processing is the default privacy boundary. Only selected excerpts/intermediate summaries cross the provider boundary, and future UX should show indexed sources and what is being sent.
 
-## 14. Background work and failure recovery
+## 14. Accepted-turn processing and failure recovery
 
-A bounded Rust worker pool performs extraction/indexing with cancellation, progress, partial readiness, and durable checkpoints. One bad document records a per-document error and does not poison the conversation. Handle odd encodings with loss-marked decoding, parser/model absence with actionable pending states, corruption with rebuild-from-source, disk-full with pause/resume, interruption with idempotent jobs, and incompatible schema/model with explicit migration or a new generation.
+Knowledge does not autonomously process arbitrary background work. Pre-send
+selection is non-durable UI state only: it creates no Material, project copy,
+Knowledge database row, embedding, history entry, remote provider call, or
+operation.
+
+An explicitly accepted turn containing Materials may own one durable,
+project-local import/index operation (ADR-0017). Its ledger is committed before
+the first project-owned copy and records `accepted`, `copying`,
+`indexing_lexical`, `indexing_embeddings`, `pending_retry`, or `completed` plus
+truthful counters. SQLite and filesystem are deliberately separate durable
+boundaries; no false cross-store atomicity is claimed. Materials retain their
+own durable Pending/Ready/Failed/Unsupported Knowledge state.
+
+On restart an incomplete operation is discoverable and stays recoverable
+`pending_retry` until explicit retry; reopening never starts an always-running
+worker or silently changes it to Ready. One bad document records a sanitized
+per-Material error and does not poison independent work. Post-acceptance
+cancellation is not supported because filesystem, Material, and derived state
+cannot yet be rolled back atomically.
 
 ## 15. Performance expectations
 
@@ -137,7 +155,11 @@ Rejected sending the whole corpus, embeddings-only retrieval, provider-managed k
 
 ## 20. Implementation phases and validation
 
-Implement only after the Windows native distribution/runtime gate. Then add domain/storage contracts, TXT/Markdown ingestion, indexing workers, hybrid retrieval/context assembly, and migration tests. Validate determinism, add/modify/delete/restart behavior, provenance, privacy logging, corruption recovery, 100/1,000-document benchmarks, offline operation, AppImage portability, and Windows NSIS/runtime packaging. Architecture status is **READY FOR REVIEW**; Windows remains the next runtime/distribution gate.
+The accepted-turn lifecycle is implemented before the Windows runtime gate;
+Windows Knowledge validation itself remains unchanged. Validate determinism,
+add/modify/delete/restart behavior, provenance, privacy logging, corruption
+recovery, 100/1,000-document benchmarks, offline operation, AppImage
+portability, and Windows NSIS/runtime packaging at their respective gates.
 
 ## 21. Concrete project boundary and durable layout
 
