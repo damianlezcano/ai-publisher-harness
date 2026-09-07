@@ -65,6 +65,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   const [materialError, setMaterialError] = useState<unknown | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [importDetails, setImportDetails] = useState<MaterialImportResult[] | null>(null);
+  const [importDetailsOpen, setImportDetailsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -90,6 +91,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       setMaterialError(null);
       setImportNotice(null);
       setImportDetails(null);
+      setImportDetailsOpen(false);
       try {
         const report = await api.materialsAddFromPaths(project.id, paths);
         const added = report.items.filter((item) => item.status === "added").length;
@@ -100,7 +102,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           (item) => item.status === "unsupported" || item.status === "failed",
         ).length;
         setImportNotice(messages.material.importSummary(added, duplicate, failed));
-        if (duplicate > 0 || failed > 0) {
+        if (report.items.length > 1) {
           setImportDetails(report.items);
         }
         await onRefresh();
@@ -247,25 +249,41 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
             busy: share.busy === "publishing",
           }}
         />
+        {importing && (
+          <p className="notice import-result-status" role="status">
+            <span className="spinner" aria-hidden="true" />
+            {messages.progress.importing}
+          </p>
+        )}
+        {importNotice && (
+          <section className="import-result" aria-label="Resultado de archivos agregados">
+            <p className="notice import-result-status">{importNotice}</p>
+            {importDetails && importDetails.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className="button-secondary import-result-toggle"
+                  aria-expanded={importDetailsOpen}
+                  onClick={() => setImportDetailsOpen((open) => !open)}
+                >
+                  {importDetailsOpen ? "Ocultar detalle" : "Ver detalle"}
+                </button>
+                {importDetailsOpen && (
+                  <ul className="chip-list import-result-details">
+                    {importDetails.map((item, index) => (
+                      <li key={`${item.sourceName}-${index}`} className="chip">
+                        {importDetailLabel(item)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </section>
+        )}
       </div>
 
       {materialError !== null && <ErrorNotice error={materialError} />}
-      {importing && (
-        <p className="notice composer-import-status" role="status">
-          <span className="spinner" aria-hidden="true" />
-          {messages.progress.importing}
-        </p>
-      )}
-      {importNotice && <p className="notice composer-import-status">{importNotice}</p>}
-      {importDetails && importDetails.length > 0 && (
-        <ul className="chip-list composer-import-details">
-          {importDetails.map((item) => (
-            <li key={item.sourceName} className="chip">
-              {importDetailLabel(item)}
-            </li>
-          ))}
-        </ul>
-      )}
 
       {backendStatus === "starting" && (
         <p className="notice composer-import-status" role="status">

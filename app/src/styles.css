@@ -1473,9 +1473,22 @@ select {
   flex: 0 0 auto;
 }
 
-.composer-import-status,
-.composer-import-details {
-  margin: 0 var(--space-4) var(--space-2);
+.import-result {
+  margin-top: var(--space-3);
+}
+
+.import-result-status {
+  margin: 0 0 var(--space-2);
+}
+
+.import-result-toggle {
+  min-height: 2rem;
+}
+
+.import-result-details {
+  max-height: min(12rem, 25vh);
+  margin: var(--space-2) 0 0;
+  overflow-y: auto;
 }
 
 /* -- T5c: chat-first timeline + resources-in-context ------------------------- */

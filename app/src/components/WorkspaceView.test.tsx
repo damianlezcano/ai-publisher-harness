@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -522,6 +522,75 @@ describe("WorkspaceView", () => {
       screen.getByText(droppedMaterial.displayName).closest(".message-user"),
     ).toBeInTheDocument();
     expect(screen.getByText(droppedMaterial.displayName).closest(".creation-card")).toBeNull();
+  });
+
+  for (const count of [1, 5, 8, 9, 16, 51, 100]) {
+    it(`keeps the composer reachable and collapses ${count} dropped-file results by default`, async () => {
+      const batch: MaterialsImportReport = {
+        items: Array.from({ length: count }, (_, index) => ({
+          sourceName: `nota-${index + 1}.md`,
+          status: "added" as const,
+          materialId: `batch-${index + 1}`,
+          material: {
+            id: `batch-${index + 1}`,
+            displayName: `nota-${index + 1}.md`,
+            originalFileName: `nota-${index + 1}.md`,
+            kind: "text" as const,
+            byteSize: 128,
+            createdAt: "2026-09-06T12:00:00Z",
+          },
+        })),
+      };
+      const { dropHandler } = mockDragDrop();
+      setupApi({ importReport: batch });
+      render(<WorkspaceView project={makeProject()} {...baseProps} />);
+
+      await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+      act(() => {
+        dropHandler({
+          payload: { type: "drop", paths: batch.items.map((item) => `/fake/${item.sourceName}`) },
+        });
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(count === 1 ? "1 agregado" : `${count} agregados`),
+        ).toBeInTheDocument(),
+      );
+      const composer = screen.getByLabelText("Pedido a la IA").closest(".workspace-composer");
+      expect(composer).not.toBeNull();
+      expect(within(composer as HTMLElement).getByRole("button", { name: "Enviar" })).toBeVisible();
+
+      if (count > 1) {
+        expect(screen.getByRole("button", { name: "Ver detalle" })).toHaveAttribute(
+          "aria-expanded",
+          "false",
+        );
+        expect(screen.queryByText(`Se agregó nota-${count}.md.`)).not.toBeInTheDocument();
+      }
+    });
+  }
+
+  it("keeps truthful duplicate states available only after expanding import detail", async () => {
+    const importReport: MaterialsImportReport = {
+      items: [
+        { sourceName: "nueva.md", status: "added", materialId: "new" },
+        { sourceName: "previa.md", status: "duplicate", materialId: "old" },
+        { sourceName: "repetida.md", status: "duplicate_in_batch", materialId: "new" },
+      ],
+    };
+    const { dropHandler } = mockDragDrop();
+    setupApi({ importReport });
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    act(() => {
+      dropHandler({ payload: { type: "drop", paths: ["/fake/nueva.md", "/fake/previa.md"] } });
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ver detalle" })).toBeVisible());
+    expect(screen.queryByText("previa.md ya estaba en el proyecto.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Ver detalle" }));
+    expect(screen.getByText("previa.md ya estaba en el proyecto.")).toBeInTheDocument();
+    expect(screen.getByText("repetida.md ya estaba en esta selección.")).toBeInTheDocument();
   });
 
   it("does not attach dropped materials while the agent is working", async () => {

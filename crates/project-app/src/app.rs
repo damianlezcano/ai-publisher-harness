@@ -27,7 +27,8 @@ use project_fs::{
 };
 use project_knowledge::{
     ContextAssemblyOptions, EmbeddingProvider, HybridSearchOptions, KnowledgeStore, MaterialSource,
-    ModelInstallState, ModelManager, OrtEmbeddingProvider, runtime_library_from_executable,
+    ModelInstallState, ModelManager, OrtEmbeddingProvider, SemanticProviderState,
+    runtime_library_from_executable,
 };
 use project_opencode::OpenCodeBackend;
 use project_preview::PreviewServer;
@@ -683,18 +684,22 @@ where
             );
             return;
         }
-        let (embedded, reused) = match self
+        let (embedded, reused, failure_state) = match self
             .with_local_embedding_provider(|provider| store.index_embeddings(provider, 8))
         {
-            (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused)),
-            (Some(Err(_)), _) | (None, _) => (None, None),
+            (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None),
+            (Some(Err(error)), _) => (None, None, Some(embedding_index_failure_state(&error))),
+            (None, state) => (None, None, Some(state)),
         };
         if embedded.is_none() {
             crate::session_log::record(
                 "WARN",
                 format!(
-                    "[knowledge] embedding_index_failed material_id={}",
-                    material.id
+                    "[knowledge] embedding_index_failed material_id={} failure_class={}",
+                    material.id,
+                    failure_state
+                        .unwrap_or(SemanticProviderState::OtherTypedLocalFailure)
+                        .as_str(),
                 ),
             );
         } else {
@@ -1179,18 +1184,18 @@ where
         use project_knowledge::SemanticProviderState as State;
         let manager = match ModelManager::new(&self.base) {
             Ok(manager) => manager,
-            Err(_) => return (None, State::UnavailableOther),
+            Err(_) => return (None, State::OtherTypedLocalFailure),
         };
         let model_root = match manager.inspect() {
             Ok(ModelInstallState::Verified(path)) => path,
             Ok(ModelInstallState::NotInstalled) => return (None, State::ModelNotInstalled),
             Ok(ModelInstallState::Incomplete) => return (None, State::ModelIncomplete),
             Ok(ModelInstallState::Corrupt(_)) => return (None, State::ModelCorrupt),
-            Err(_) => return (None, State::UnavailableOther),
+            Err(_) => return (None, State::OtherTypedLocalFailure),
         };
         let executable = match std::env::current_exe() {
             Ok(executable) => executable,
-            Err(_) => return (None, State::UnavailableOther),
+            Err(_) => return (None, State::OtherTypedLocalFailure),
         };
         let runtime = match runtime_library_from_executable(&executable) {
             Ok(runtime) => runtime,
@@ -2651,6 +2656,27 @@ where
             version: APP_VERSION.to_owned(),
             agent: self.agent_status().to_owned(),
         }
+    }
+}
+
+/// Maps an embedding-index operation error to a closed, sanitized local
+/// failure class. The error itself can contain runtime or SQLite detail, so it
+/// must never be logged. Provider-load failures are classified separately by
+/// `load_local_embedding_provider` before an operation is attempted.
+fn embedding_index_failure_state(
+    error: &project_knowledge::KnowledgeError,
+) -> SemanticProviderState {
+    match error {
+        project_knowledge::KnowledgeError::Inference(_)
+        | project_knowledge::KnowledgeError::InvalidEmbedding(_)
+        | project_knowledge::KnowledgeError::InputTooLong => SemanticProviderState::InferenceFailed,
+        project_knowledge::KnowledgeError::Sql(_) | project_knowledge::KnowledgeError::Io(_) => {
+            SemanticProviderState::EmbeddingPersistFailed
+        }
+        project_knowledge::KnowledgeError::Tokenizer(_) => {
+            SemanticProviderState::TokenizerLoadFailed
+        }
+        _ => SemanticProviderState::OtherTypedLocalFailure,
     }
 }
 

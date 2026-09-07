@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Manual packaging smoke test for the controlled Linux AppImage track.
 #
-# NOT part of `scripts/verify`. Fetches pinned sidecars, builds AppImage + RPM,
-# inspects the AppImage payload for bundled sidecars, and prints manual demo steps.
+# NOT part of `scripts/verify`. The AppImage pass invokes the authoritative
+# controlled Ubuntu build, then inspects its final payload on Fedora. RPM stays
+# a Fedora-native smoke artifact and is never a release-AppImage substitute.
 #
 # Exit codes: 0 = PASS, 1 = FAIL, 2 = usage, 3 = SKIP (missing prerequisites or network).
 #
@@ -41,11 +42,15 @@ fail() {
   exit 1
 }
 
-if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+if [[ "$mode" == "appimage" || "$mode" == "all" ]] && ! command -v podman >/dev/null 2>&1; then
+  skip "podman not available for the controlled Ubuntu 24.04 AppImage build"
+fi
+
+if [[ "$mode" == "rpm" || "$mode" == "all" ]] && ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
   skip "webkit2gtk-4.1 pkg-config not found (install webkit2gtk4.1-devel)"
 fi
 
-if ! cargo tauri --version >/dev/null 2>&1; then
+if [[ "$mode" == "rpm" || "$mode" == "all" ]] && ! cargo tauri --version >/dev/null 2>&1; then
   skip "cargo tauri CLI not available (no 'cargo tauri')"
 fi
 
@@ -59,9 +64,6 @@ fi
 
 cd "$repo_root"
 
-echo "$SCRIPT: fetching pinned sidecars"
-"$repo_root/scripts/fetch-sidecars"
-
 run_tauri_build() {
   local bundles="$1"
   (
@@ -71,52 +73,22 @@ run_tauri_build() {
 }
 
 if [[ "$mode" == "appimage" || "$mode" == "all" ]]; then
-  rm -rf "$appimage_dir"
-  echo "$SCRIPT: building AppImage bundle (for release use ./scripts/package linux-appimage)"
-  # tauri-bundler runs linuxdeploy for the AppImage. On Fedora 44 linuxdeploy is
-  # incompatible (its bundled strip cannot read `.relr.dyn` sections and its
-  # bundled patchelf 0.8 corrupts Bun-style sidecar binaries), so the linuxdeploy
-  # step may exit non-zero AFTER tauri has already assembled a complete AppDir.
-  # If no AppImage is produced, package that AppDir directly with appimagetool.
-  if ! run_tauri_build appimage; then
-    echo "$SCRIPT: note: tauri linuxdeploy step failed; falling back to direct appimagetool packaging" >&2
-  fi
-
+  echo "$SCRIPT: building AppImage in the controlled Ubuntu 24.04 packaging root"
+  "$repo_root/scripts/package" linux-appimage
   mapfile -t appimages < <(find "$appimage_dir" -maxdepth 1 -type f -name '*.AppImage' 2>/dev/null || true)
-  if (( ${#appimages[@]} == 0 )); then
-    mapfile -t appdirs < <(find "$appimage_dir" -maxdepth 1 -type d -name '*.AppDir' 2>/dev/null || true)
-    if (( ${#appdirs[@]} != 1 )); then
-      fail "no AppImage artifact and no single AppDir to package (expected $appimage_dir/*.AppImage or one *.AppDir)"
-    fi
-    appdir="${appdirs[0]}"
-    # appimagetool needs the desktop file Icon resolvable at the AppDir root.
-    if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
-      ln -sf EducAI.png "$appdir/educai.png"
-    fi
-    appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
-    if [[ ! -f "$appimagetool" ]]; then
-      fail "appimagetool not found at $appimagetool (expected from a prior tauri bundling step)"
-    fi
-    appimage="$appimage_dir/EducAI_0.1.0_amd64.AppImage"
-    echo "$SCRIPT: packaging AppDir with appimagetool: $appimage"
-    rm -f "$appimage"
-    if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
-        "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
-      fail "appimagetool packaging failed for $appdir"
-    fi
-    appimages=("$appimage")
-  fi
+  (( ${#appimages[@]} == 1 )) || fail "controlled build did not produce exactly one AppImage"
   appimage="${appimages[0]}"
-  if (( ${#appimages[@]} > 1 )); then
-    echo "$SCRIPT: note: multiple AppImages found; inspecting ${appimages[0]}" >&2
-  fi
   echo "$SCRIPT: found AppImage: $appimage"
   "$repo_root/scripts/check-appimage-glibc" "$appimage" 2.39
+  "$repo_root/scripts/check-appimage-webkit-runtime" "$appimage"
+  "$repo_root/scripts/check-appimage-onnxruntime" "$appimage"
 else
   appimage=""
 fi
 
 if [[ "$mode" == "rpm" || "$mode" == "all" ]]; then
+  echo "$SCRIPT: fetching pinned sidecars"
+  "$repo_root/scripts/fetch-sidecars"
   echo "$SCRIPT: building RPM bundle"
   run_tauri_build rpm
 

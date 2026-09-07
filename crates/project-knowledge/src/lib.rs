@@ -374,10 +374,14 @@ pub enum SemanticProviderState {
     TokenizerLoadFailed,
     /// The ONNX session could not be built or its input contract was unexpected.
     ProviderInitializationFailed,
+    /// The local provider generated invalid output or could not run inference.
+    InferenceFailed,
+    /// Derived embedding bytes could not be committed to the local index.
+    EmbeddingPersistFailed,
     /// The provider loaded, but a semantic query/embedding failed at runtime.
     SemanticQueryFailed,
-    /// Any other sanitized, non-specific unavailability.
-    UnavailableOther,
+    /// Any other local failure not represented by a more specific safe code.
+    OtherTypedLocalFailure,
 }
 
 impl SemanticProviderState {
@@ -391,8 +395,10 @@ impl SemanticProviderState {
             Self::RuntimeLoadFailed => "runtime_load_failed",
             Self::TokenizerLoadFailed => "tokenizer_load_failed",
             Self::ProviderInitializationFailed => "provider_initialization_failed",
+            Self::InferenceFailed => "inference_failed",
+            Self::EmbeddingPersistFailed => "embedding_persist_failed",
             Self::SemanticQueryFailed => "semantic_query_failed",
-            Self::UnavailableOther => "unavailable_other",
+            Self::OtherTypedLocalFailure => "other_typed_local_failure",
         }
     }
 }

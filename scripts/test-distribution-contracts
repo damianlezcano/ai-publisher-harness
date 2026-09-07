@@ -75,6 +75,11 @@ rg -Fq './packaging/linux/prepare-graphics-appdir "$appdir"' packaging/linux/bui
 rg -Fq 'readlink -f "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate on the absolute artifact path (graphics gate extracts into a temp workdir)'
 rg -Fq './scripts/check-appimage-webkit-runtime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged WebKitGTK runtime'
 rg -Fq './scripts/check-appimage-onnxruntime "$artifact"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must inspect the final packaged ONNX Runtime payload'
+rg -Fq '"$repo_root/scripts/package" linux-appimage' scripts/smoke-package || fail 'Fedora smoke AppImage must invoke the controlled Ubuntu packaging path'
+rg -Fq 'check-appimage-onnxruntime' scripts/smoke-package || fail 'Fedora smoke AppImage must gate its final ONNX Runtime payload'
+if rg -Fq 'run_tauri_build appimage' scripts/smoke-package; then
+  fail 'Fedora smoke package must not build an AppImage from Fedora host libraries'
+fi
 rg -Fq './scripts/check-graphics-appdir "$workdir/squashfs-root"' packaging/linux/build-linux-appimage || fail 'Linux controlled build must gate the packaged graphics boundary'
 for library in libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.0; do
   rg -Fq "$library" packaging/linux/prepare-graphics-appdir || fail "graphics preparation must remove $library"
