@@ -382,6 +382,14 @@ remote LLM call remains normal final answer/Creation generation. Empty/no-index
 results preserve normal chat; unavailable semantics uses K3 lexical fallback.
 Corpus summarization and final citation UI remain future work.
 
+The raw-attachment dedup predicate (`indexed_source_names`) keys off **every**
+durably READY-indexed source name in the active project, not merely the small
+set this turn retrieved. A supported indexed TXT/Markdown the user attaches is
+served through bounded Knowledge retrieval (or K6 single-document synthesis for
+an explicit summary request), never raw-forwarded as a full workspace
+attachment — even when the current query retrieves zero evidence. Unsupported/
+media sources are never `ready`, so they keep their raw-forwarding path.
+
 ## 30. Durable material indexing status contract (K5A.1)
 
 Material acceptance and Knowledge indexing are deliberately distinct:
