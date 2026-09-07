@@ -122,6 +122,7 @@ function mockBackend(options: MockOptions = {}) {
             messages: extra.messages ?? projectView.messages,
             creations: extra.creations ?? projectView.creations,
             materials: extra.materials ?? projectView.materials,
+            acceptedImport: extra.acceptedImport ?? projectView.acceptedImport,
           };
         };
         const hold = projectId ? holdOpen[projectId] : undefined;
@@ -979,5 +980,111 @@ describe("App", () => {
         messages.conversations.sharedLabel,
       );
     });
+  });
+
+  it("auto-resumes an incomplete not-started accepted import once on reopen", async () => {
+    const acceptedImportViews: Record<string, NonNullable<ProjectView["acceptedImport"]>> = {};
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: {
+          messages: [
+            {
+              id: "turn-1",
+              role: "user",
+              text: "haceme un resumen por fecha",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+        },
+      },
+    });
+    const baseImpl = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "project_open") {
+        const { projectId } = (args as { projectId: string }) ?? {};
+        const ai = projectId ? acceptedImportViews[projectId] : undefined;
+        return Promise.resolve({
+          ...projectView,
+          id: projectId ?? projectView.id,
+          messages: [
+            {
+              id: "turn-1",
+              role: "user",
+              text: "haceme un resumen por fecha",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+          acceptedImport: ai,
+        });
+      }
+      return (baseImpl as (cmd: string, args?: unknown) => Promise<unknown>)(cmd, args);
+    });
+    acceptedImportViews[baseSummary.id] = {
+      operationId: "op-52",
+      state: "copying",
+      agentState: "not_started",
+      total: 52,
+      copied: 52,
+      lexicalCompleted: 0,
+      embeddingCompleted: 0,
+      failed: 0,
+      embeddingsCreated: 0,
+      embeddingsReused: 0,
+    };
+
+    render(<App />);
+    await waitForWorkspace();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_resume_import", {
+        projectId: baseSummary.id,
+        operationId: "op-52",
+      }),
+    );
+    const resumeCalls = invokeMock.mock.calls.filter((c) => c[0] === "agent_resume_import");
+    expect(resumeCalls).toHaveLength(1);
+  });
+
+  it("never auto-resumes an outcome-unknown accepted import", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: {
+        [baseSummary.id]: {
+          messages: [
+            {
+              id: "turn-1",
+              role: "user",
+              text: "haceme un resumen por fecha",
+              status: "ok",
+              createdAt: "2026-08-31T10:00:00Z",
+              materialIds: [],
+              creationIds: [],
+            },
+          ],
+          acceptedImport: {
+            operationId: "op-52",
+            state: "pending_retry",
+            agentState: "started_outcome_unknown",
+            total: 52,
+            copied: 52,
+            lexicalCompleted: 0,
+            embeddingCompleted: 0,
+            failed: 0,
+            embeddingsCreated: 0,
+            embeddingsReused: 0,
+          },
+        },
+      },
+    });
+    render(<App />);
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((c) => c[0] === "agent_resume_import")).toBe(false);
+    expect(screen.getByText(messages.processing.outcomeUnknown)).toBeInTheDocument();
   });
 });

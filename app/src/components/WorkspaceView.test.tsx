@@ -113,6 +113,12 @@ function makeProject(extraMaterials?: MaterialView[]): ProjectView {
   };
 }
 
+function makeAcceptedImport(
+  acceptedImport: NonNullable<ProjectView["acceptedImport"]>,
+): ProjectView {
+  return { ...makeProject(), acceptedImport };
+}
+
 const baseProps = {
   agentPhase: "idle" as const,
   agentMessage: null as string | null,
@@ -623,5 +629,107 @@ describe("WorkspaceView", () => {
     );
     expect(screen.getByText(messages.error.aiUnavailable.title)).toBeInTheDocument();
     expect(screen.queryByText(messages.assistant.starting)).not.toBeInTheDocument();
+  });
+
+  it("reconstructs the processing card from the durable operation read model", () => {
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-1",
+          state: "indexing_lexical",
+          agentState: "not_started",
+          total: 52,
+          copied: 52,
+          lexicalCompleted: 0,
+          embeddingCompleted: 0,
+          failed: 0,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    expect(screen.getByText("Procesando 52 archivos")).toBeInTheDocument();
+    expect(screen.getByText("Archivos preparados: 52 / 52")).toBeInTheDocument();
+    expect(screen.getByText("Indexación: 0 / 52")).toBeInTheDocument();
+    expect(screen.getByText("Listos: 0")).toBeInTheDocument();
+    expect(screen.queryByText(messages.error.storageUnavailable.title)).not.toBeInTheDocument();
+  });
+
+  it("shows typed recoverable copy for a pending_retry local interruption", () => {
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-1",
+          state: "pending_retry",
+          agentState: "not_started",
+          total: 52,
+          copied: 52,
+          lexicalCompleted: 0,
+          embeddingCompleted: 0,
+          failed: 0,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    expect(screen.getByText(messages.processing.pendingRetry)).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: messages.common.retry });
+    expect(retry).toBeInTheDocument();
+  });
+
+  it("never shows generic fatal copy for an outcome-unknown remote state", () => {
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-1",
+          state: "pending_retry",
+          agentState: "started_outcome_unknown",
+          total: 52,
+          copied: 52,
+          lexicalCompleted: 0,
+          embeddingCompleted: 0,
+          failed: 0,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    expect(screen.getByText(messages.processing.outcomeUnknown)).toBeInTheDocument();
+    expect(screen.queryByText(messages.error.internal.title)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.error.storageUnavailable.title)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: messages.common.retry })).not.toBeInTheDocument();
+  });
+
+  it("invokes the explicit resume command when Reintentar is pressed", async () => {
+    setupApi();
+    render(
+      <WorkspaceView
+        project={makeAcceptedImport({
+          operationId: "op-52",
+          state: "pending_retry",
+          agentState: "not_started",
+          total: 52,
+          copied: 52,
+          lexicalCompleted: 0,
+          embeddingCompleted: 0,
+          failed: 1,
+          embeddingsCreated: 0,
+          embeddingsReused: 0,
+        })}
+        {...baseProps}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.common.retry }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_resume_import", {
+        projectId,
+        operationId: "op-52",
+      }),
+    );
+    expect(baseProps.onRefresh).toHaveBeenCalled();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_send_staged")).toBe(false);
   });
 });
