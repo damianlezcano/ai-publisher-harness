@@ -660,6 +660,16 @@ select {
   overflow-wrap: anywhere;
 }
 
+.metrics-warning {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border: 1px solid var(--warning-border, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg, transparent);
+  color: var(--warning, var(--muted));
+  font-size: var(--font-size-meta);
+}
+
 @media (max-width: 520px) {
   .conversation-metrics-grid {
     grid-template-columns: minmax(0, 1fr);

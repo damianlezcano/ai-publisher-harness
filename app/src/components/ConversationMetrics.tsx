@@ -91,7 +91,16 @@ function ProviderMetrics({ usage }: { usage: SessionUsage | null }) {
           label={messages.conversationDetails.metrics.turnDuration}
           value={duration(usage?.turnDurationMs)}
         />
+        <Metric
+          label={messages.conversationDetails.metrics.remoteCalls}
+          value={unavailable(usage?.remoteCalls ?? null)}
+        />
       </dl>
+      {usage?.additionalAttachmentRoute && (
+        <p className="metrics-warning" role="status">
+          {messages.conversationDetails.metrics.additionalAttachmentRoute}
+        </p>
+      )}
     </section>
   );
 }

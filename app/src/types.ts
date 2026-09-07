@@ -217,6 +217,9 @@ export interface SessionUsage {
   costUsd: number | null;
   turnDurationMs: number | null;
   source: "provider_actual" | "estimated" | "unavailable" | string;
+  remoteCalls?: number | null;
+  reason?: string;
+  additionalAttachmentRoute?: boolean;
 }
 
 export interface SessionKnowledgeMetrics {

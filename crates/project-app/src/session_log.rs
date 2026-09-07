@@ -39,6 +39,12 @@ pub struct SessionLogEntry {
 }
 
 /// Sanitized, per-turn remote-provider accounting for the session viewer.
+///
+/// One logical user turn may legitimately cause several remote calls (K6
+/// document/batch/global synthesis). This record is the AGGREGATE of every
+/// remote call that turn caused, correlated to the durable user turn id and a
+/// reason code. Missing fields mean the backend did not report that value; they
+/// are never converted to zero.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUsage {
@@ -56,6 +62,16 @@ pub struct SessionUsage {
     /// structural timing, not provider billing telemetry.
     pub turn_duration_ms: Option<u128>,
     pub source: String,
+    /// Number of distinct remote provider calls this logical turn caused,
+    /// including K6 hierarchical/retry synthesis where applicable.
+    pub remote_calls: Option<usize>,
+    /// Why the remote call(s) were made: `normal_chat`, `summary_global`,
+    /// `recovery`, `retry`, or `other`. Structural only, never content.
+    pub reason: String,
+    /// True when the remote request boundary also carried content through the
+    /// raw attachment route in addition to (or instead of) bounded Knowledge
+    /// evidence. Never asserted when raw forwarding was correctly suppressed.
+    pub additional_attachment_route: bool,
 }
 
 /// Local architectural estimates. These are deliberately separate from remote
@@ -105,7 +121,7 @@ pub fn record(level: &str, message: impl Into<String>) {
 
 pub fn record_usage(usage: SessionUsage) {
     let message = format!(
-        "[usage] conversation_id={} turn_id={} provider={} model={} input_tokens={} output_tokens={} cache_read_tokens={} cache_write_tokens={} total_tokens={} cost_usd={} usage_source={}",
+        "[usage] conversation_id={} turn_id={} provider={} model={} input_tokens={} output_tokens={} cache_read_tokens={} cache_write_tokens={} total_tokens={} cost_usd={} usage_source={} remote_calls={} reason={} additional_attachment_route={}",
         usage.conversation_id,
         usage.turn_id,
         usage.provider,
@@ -117,6 +133,12 @@ pub fn record_usage(usage: SessionUsage) {
         optional_u64(usage.total_tokens),
         optional_f64(usage.cost_usd),
         usage.source,
+        usage
+            .remote_calls
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unavailable".to_owned()),
+        usage.reason,
+        usage.additional_attachment_route,
     );
     record_structured("INFO", message, Some(usage), None);
 }

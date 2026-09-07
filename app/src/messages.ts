@@ -127,6 +127,10 @@ export const messages = {
       cacheWriteTokens: "Tokens de caché escritos",
       actualCost: "Costo real informado",
       turnDuration: "Duración del turno",
+      remoteCalls: "Llamadas al proveedor",
+      reason: "Motivo de la llamada",
+      additionalAttachmentRoute:
+        "El proveedor recibió contenido por una ruta adicional de adjuntos.",
       materialCount: "Materiales del proyecto",
       corpusBytes: "Corpus",
       corpusChars: "Corpus (caracteres)",
