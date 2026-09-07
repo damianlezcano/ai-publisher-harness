@@ -1064,6 +1064,41 @@ describe("App", () => {
     expect(resumeCalls).toHaveLength(1);
   });
 
+  it("never auto-resumes while the accepted turn is in flight", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    captureTaskListener();
+    mockBackend({
+      projects: [baseSummary],
+      views: { [baseSummary.id]: { acceptedImport: incompleteImport } },
+      holdOpen: { [baseSummary.id]: hold },
+    });
+    render(<App />);
+    // Establish the accepted turn as actively in-flight BEFORE the durable
+    // reopen-recovery seam can observe the incomplete `not_started` operation,
+    // so the seam must not issue a second run for the same logical turn.
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 1,
+        payload: {
+          projectId: baseSummary.id,
+          turnId: "turn-1",
+          status: "working",
+          message: null,
+          registeredCreationIds: [],
+        },
+      });
+    });
+    await act(async () => {
+      release();
+    });
+    await waitForWorkspace();
+    expect(invokeMock.mock.calls.some((c) => c[0] === "agent_resume_import")).toBe(false);
+  });
+
   it("never auto-resumes an outcome-unknown accepted import", async () => {
     mockBackend({
       projects: [baseSummary],

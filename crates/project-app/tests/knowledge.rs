@@ -483,6 +483,52 @@ fn send_message_with_indexed_and_attached_dedups_duplicate_corpus() {
     );
 }
 
+#[test]
+fn indexed_attachment_is_deduped_even_when_the_current_turn_retrieves_no_evidence() {
+    // Regression for the raw-forwarding contradiction: a supported, READY-indexed
+    // TXT the user attaches must be served through Knowledge (or K6), never
+    // raw-forwarded as a full workspace attachment — even when this exact turn's
+    // query retrieves zero evidence, so the model does not silently receive the
+    // attached file through a second content route.
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = FakeAgentEngine::new();
+    inner.set_message("Listo.".into());
+    let state = AppState::with_components(
+        tmp.path().to_path_buf(),
+        RecordingEngine(inner, calls.clone()),
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    let p = state.create_project("P").unwrap();
+    let mid = add_file(
+        &state,
+        tmp.path(),
+        &p.id,
+        "notas.txt",
+        b"OpenShift despliega aplicaciones de forma automatica",
+    );
+
+    // A query with no lexical overlap with the corpus content: retrieval returns
+    // zero evidence, yet the indexed source name must still suppress raw
+    // forwarding of the exact same attached file.
+    let run = state
+        .run_agent(
+            &p.id,
+            "resumen de fisica cuantica",
+            std::slice::from_ref(&mid),
+        )
+        .unwrap();
+    assert_eq!(run.status, "completed");
+
+    let text = calls.lock().unwrap().pop().unwrap();
+    assert!(
+        !text.contains("materials/1-notas.txt"),
+        "READY-indexed attachment must not be raw-forwarded even with zero retrieved evidence: {text}"
+    );
+}
+
 // -- Acceptance: no remote embedding fallback in lexical-only mode ------------
 
 #[test]
