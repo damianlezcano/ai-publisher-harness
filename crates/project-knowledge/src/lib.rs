@@ -119,6 +119,111 @@ impl From<rusqlite::Error> for KnowledgeError {
 
 pub type Result<T> = std::result::Result<T, KnowledgeError>;
 
+/// Sanitized structural classification of why embedding persistence failed.
+/// The `EmbeddingPersistFailed` (and broader `Sql`/`Io`) failure surfaces are
+/// lossy — they can collapse a SQLite extended error, a transaction begin/
+/// commit failure, a statement prepare failure, a constraint violation, a
+/// vector serialization failure, or an out-of-band IO error into one name.
+/// This preserves the runtime-observable cause without leaking SQL text, a
+/// path, a vector, or a document body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmbeddingPersistClass {
+    SqliteBusy,
+    SqliteLocked,
+    TransactionBeginFailed,
+    TransactionCommitFailed,
+    StatementPrepareFailed,
+    ConstraintFailed,
+    VectorSerializationFailed,
+    VectorDimensionInvalid,
+    IoFailed,
+    DbCorrupt,
+    OtherStorageFailure,
+}
+
+impl EmbeddingPersistClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SqliteBusy => "sqlite_busy",
+            Self::SqliteLocked => "sqlite_locked",
+            Self::TransactionBeginFailed => "transaction_begin_failed",
+            Self::TransactionCommitFailed => "transaction_commit_failed",
+            Self::StatementPrepareFailed => "statement_prepare_failed",
+            Self::ConstraintFailed => "constraint_failed",
+            Self::VectorSerializationFailed => "vector_serialization_failed",
+            Self::VectorDimensionInvalid => "vector_dimension_invalid",
+            Self::IoFailed => "io_failed",
+            Self::DbCorrupt => "db_corrupt",
+            Self::OtherStorageFailure => "other_storage_failure",
+        }
+    }
+}
+
+/// A sanitized, stage-preserving persistence failure: which persistence stage
+/// failed, classified to a stable structural class, plus the SQLite primary
+/// result code when the failure originated as a SQLite result/error. Never
+/// carries SQL text, a path, a vector, or a document body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmbeddingPersistFailure {
+    pub stage: &'static str,
+    pub class: EmbeddingPersistClass,
+    pub sqlite_code: Option<i32>,
+}
+
+/// The SQLite primary result code, or `None` when the failure did not originate
+/// as a SQLite result/error. Extended (sub)codes are intentionally not exposed.
+fn sqlite_primary_code(error: &rusqlite::Error) -> Option<i32> {
+    let rusqlite::Error::SqliteFailure(ffi_error, _) = error else {
+        return None;
+    };
+    // SQLite encodes the primary result code in the low 8 bits of the extended
+    // code. Exposing only the primary code keeps `SQLITE_BUSY` vs `SQLITE_LOCKED`
+    // distinguishable without surfacing any sub-code that could encode detail.
+    Some(ffi_error.extended_code & 0xFF)
+}
+
+/// Classifies a rusqlite error into a structural persistence class. Identity of
+/// the caller's stage is applied by the embedding persistence site.
+fn classify_sqlite_embedding_error(error: &rusqlite::Error) -> EmbeddingPersistClass {
+    use rusqlite::ErrorCode;
+    match error.sqlite_error_code() {
+        Some(ErrorCode::ConstraintViolation) => EmbeddingPersistClass::ConstraintFailed,
+        Some(ErrorCode::DatabaseBusy) => EmbeddingPersistClass::SqliteBusy,
+        Some(ErrorCode::DatabaseLocked) => EmbeddingPersistClass::SqliteLocked,
+        Some(ErrorCode::DatabaseCorrupt) => EmbeddingPersistClass::DbCorrupt,
+        _ => EmbeddingPersistClass::OtherStorageFailure,
+    }
+}
+
+impl KnowledgeError {
+    /// Maps a failure to a sanitized structural class plus the SQLite primary
+    /// result code when one exists. `stage` is supplied by the caller because
+    /// the same `KnowledgeError` variant can arise at different persistence
+    /// stages; it is a static label, never a path or SQL fragment.
+    pub fn embedding_persist_class(&self, stage: &'static str) -> EmbeddingPersistFailure {
+        let (class, sqlite_code) = match self {
+            Self::Sql(error) => (
+                classify_sqlite_embedding_error(error),
+                sqlite_primary_code(error),
+            ),
+            Self::InvalidEmbedding(message) => {
+                if message.contains("384") || message.contains("dimension ") {
+                    (EmbeddingPersistClass::VectorDimensionInvalid, None)
+                } else {
+                    (EmbeddingPersistClass::VectorSerializationFailed, None)
+                }
+            }
+            Self::Io(_) => (EmbeddingPersistClass::IoFailed, None),
+            _ => (EmbeddingPersistClass::OtherStorageFailure, None),
+        };
+        EmbeddingPersistFailure {
+            stage,
+            class,
+            sqlite_code,
+        }
+    }
+}
+
 fn to_sql_error(_error: KnowledgeError) -> rusqlite::Error {
     // A checked enum value in an application-owned table is a schema/data
     // integrity failure. `rusqlite` closures require their own error type;
@@ -1248,6 +1353,13 @@ impl KnowledgeStore {
             .iter()
             .map(|id| id.as_str())
             .collect::<Vec<_>>();
+        // The generation selector must not collide with the positional `?`
+        // material placeholders: a bare `?` auto-numbers to index 1 and would
+        // alias an explicit `?1`. Give the generation an explicit index that
+        // follows every material placeholder (`ids.len() + 1`) and bind the
+        // material ids first, generation last, so each declared parameter is
+        // bound exactly once.
+        let generation_index = ids.len() + 1;
         let placeholders = std::iter::repeat_n("?", ids.len())
             .collect::<Vec<_>>()
             .join(",");
@@ -1257,7 +1369,7 @@ impl KnowledgeStore {
                 JOIN material_sources ms ON ms.document_id=c.document_id
                 WHERE ms.material_id IN ({placeholders}) AND NOT EXISTS (
                     SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id=c.chunk_id
-                    AND e.generation_id=?1 AND e.state='ready' AND e.dimensions=384
+                    AND e.generation_id=?{generation_index} AND e.state='ready' AND e.dimensions=384
                 ) ORDER BY c.chunk_id"
             )
         } else {
@@ -1267,13 +1379,13 @@ impl KnowledgeStore {
             ) ORDER BY c.document_id, c.ordinal"
                 .to_owned()
         };
-        let mut values = vec![rusqlite::types::Value::Text(
+        let mut values = ids
+            .into_iter()
+            .map(|id| rusqlite::types::Value::Text(id.to_owned()))
+            .collect::<Vec<_>>();
+        values.push(rusqlite::types::Value::Text(
             generation.generation_id.clone(),
-        )];
-        values.extend(
-            ids.into_iter()
-                .map(|id| rusqlite::types::Value::Text(id.to_owned())),
-        );
+        ));
         let mut statement = self.connection.prepare(&query)?;
         let pending = statement
             .query_map(rusqlite::params_from_iter(values), |row| {
@@ -1320,18 +1432,23 @@ impl KnowledgeStore {
                 produced.push((chunk_id.clone(), serialize_vector(&vector)?));
             }
         }
-        let tx = self.connection.transaction()?;
+        let tx = self.connection.transaction().map_err(KnowledgeError::Sql)?;
         for (chunk_id, vector) in &produced {
-            tx.execute(
+            let insert_result = tx.execute(
                 "INSERT INTO chunk_embeddings(chunk_id, generation_id, vector, dimensions, normalized, state, embedded_at)
                  VALUES(?1, ?2, ?3, 384, 1, 'ready', ?4)
                  ON CONFLICT(chunk_id, generation_id) DO UPDATE SET vector=excluded.vector, dimensions=384, normalized=1, state='ready', embedded_at=excluded.embedded_at",
                 params![chunk_id, generation.generation_id, vector, unix_seconds()],
-            )
-            .map_err(|_| KnowledgeError::EmbeddingPersistFailed)?;
+            );
+            // Preserve the actual SQLite failure (e.g. SQLITE_BUSY/LOCKED or a
+            // constraint violation) so the sanitized classifier can name the
+            // exact cause; the `Sql(error)` carrier keeps the result code.
+            if let Err(error) = insert_result {
+                drop(tx);
+                return Err(KnowledgeError::Sql(error));
+            }
         }
-        tx.commit()
-            .map_err(|_| KnowledgeError::EmbeddingPersistFailed)?;
+        tx.commit().map_err(KnowledgeError::Sql)?;
         Ok(EmbeddingIndexOutcome {
             embedded: produced.len(),
             reused: total.saturating_sub(pending.len()),
@@ -3415,6 +3532,97 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].chunk_text.contains("OpenShift"));
         assert!(results[0].similarity > results[1].similarity);
+    }
+
+    #[test]
+    fn embedding_persist_waits_for_a_transient_writer_lock_instead_of_sqlite_busy() {
+        // Regression for the `embedding_persist_failed`/SQLITE_BUSY collapse: a
+        // concurrent writer (e.g. the reopen-recovery seam racing the accepted
+        // turn) holding a short WAL write lock must not abort the local index.
+        // `KnowledgeStore::open` sets `busy_timeout=5000ms`, so a commit on a
+        // briefly-locked DB waits and succeeds instead of surfacing an opaque
+        // persistence failure.
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        store
+            .index(&source("ops.txt"), b"OpenShift automatiza despliegues.")
+            .unwrap();
+
+        // Pin the structural contract first: the connection must carry a
+        // non-zero busy_timeout so a transient lock is retried, not fatal.
+        let busy_timeout: i64 = store
+            .connection
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert_eq!(busy_timeout, 5000, "busy_timeout must be pinned at 5000ms");
+
+        // A second, independent connection holds an exclusive write lock while
+        // the store attempts to persist a freshly produced embedding. The
+        // commit must wait (busy_timeout) and succeed once the lock is released.
+        let database_path = store.database_path().to_owned();
+        let blocker = Connection::open(&database_path).unwrap();
+        blocker.pragma_update(None, "journal_mode", "WAL").unwrap();
+        blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
+
+        let handle = {
+            let mut store = store;
+            let mut provider = FakeEmbeddingProvider {
+                generation: generation(),
+                calls: 0,
+            };
+            std::thread::spawn(move || store.index_embeddings(&mut provider, 8))
+        };
+
+        // Give the index thread time to reach the blocked commit, then release
+        // the writer lock so busy_timeout can succeed within the 5 s window.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        blocker.execute_batch("COMMIT").unwrap();
+        drop(blocker);
+
+        let outcome = handle.join().unwrap().unwrap();
+        assert_eq!(
+            outcome.embedded, 1,
+            "a transient writer lock must not produce embedding_persist_failed"
+        );
+    }
+
+    #[test]
+    fn scoped_embedding_batch_persists_with_distinct_parameters() {
+        // Regression for the real `embedding_persist_failed` seen in the fresh
+        // Fedora AppImage: the accepted-turn embedding path selects chunks through
+        // `index_embeddings_for_materials` with a NON-empty material list.  That
+        // scoped `SELECT` mixed a bare `?` material placeholder (auto-numbered to
+        // index 1) with an explicit `?1` generation selector, so the two collided
+        // on index 1 and `query_map` was handed one value more than the statement
+        // declared — surfacing as `KnowledgeError::Sql`, which the app collapse
+        // reported as `embedding_persist_failed`.  This test pins that a scoped
+        // batch (one accepted material) produces a persisted embedding and never
+        // the SQLite binding error.
+        let (temp, pid) = root();
+        let project_root = temp.path().join(PID);
+        let mut store = KnowledgeStore::open(&project_root, &pid).unwrap();
+        store
+            .index(
+                &source("nota.md"),
+                b"# Nota\n\nOpenShift automatiza despliegues.",
+            )
+            .unwrap();
+
+        let material_id = MaterialId::parse(MID).unwrap();
+        let mut provider = FakeEmbeddingProvider {
+            generation: generation(),
+            calls: 0,
+        };
+        let outcome = store
+            .index_embeddings_for_materials(&mut provider, 8, &[material_id])
+            .unwrap();
+        assert!(
+            outcome.embedded >= 1,
+            "a scoped accepted-material batch must persist at least one embedding \
+             (not fail with an SQLite parameter-count error)"
+        );
+        assert_eq!(outcome.reused, 0);
     }
 
     #[test]
