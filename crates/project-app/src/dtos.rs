@@ -71,6 +71,27 @@ pub struct MaterialsImportReport {
     pub items: Vec<MaterialImportResult>,
 }
 
+/// A frontend-owned, pre-acceptance attachment selection. This is deliberately
+/// not a Material: it contains no project-owned copy, Material ID, or Knowledge
+/// record. `source_name` is sanitized and `status` is limited to staging
+/// validation/duplicate information so the composer can remain truthful before
+/// the user commits the turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedAttachmentView {
+    pub source_name: String,
+    /// `ready`, `duplicate_in_selection`, `unsupported`, or `failed`.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedAttachmentsReport {
+    pub items: Vec<StagedAttachmentView>,
+}
+
 /// Result of a clipboard image paste. `duplicate` is true when the same bytes
 /// were already a project material (M8 §4): the existing material is returned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +150,21 @@ pub struct ProjectView {
     pub messages: Vec<MessageView>,
     pub publication: PublicationView,
     pub model: Option<ConversationModelView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_import: Option<AcceptedImportProgressView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptedImportProgressView {
+    pub state: String,
+    pub total: usize,
+    pub copied: usize,
+    pub lexical_completed: usize,
+    pub embedding_completed: usize,
+    pub failed: usize,
+    pub embeddings_created: usize,
+    pub embeddings_reused: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

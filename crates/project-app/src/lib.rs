@@ -13,12 +13,15 @@ pub mod session_log;
 pub mod sidecar;
 pub mod summarize;
 
-pub use app::{APP_VERSION, AppConfig, AppState, SharedBackendRestarter};
+pub use app::{
+    APP_VERSION, AcceptedStagedTurn, AppConfig, AppState, SharedBackendRestarter, StagedImage,
+};
 pub use dtos::{
-    AgentRunView, AppStatusView, CreationView, MaterialAddImageView, MaterialImportResult,
-    MaterialView, MaterialsImportReport, MessageView, PreviewData, ProjectSummary,
-    ProjectSummaryAnswerView, ProjectView, PublicationView, SelectedModelView,
-    SummarizationReportView, SummaryContentView, SummaryItemView, SummaryNodeView, WebPreview,
+    AcceptedImportProgressView, AgentRunView, AppStatusView, CreationView, MaterialAddImageView,
+    MaterialImportResult, MaterialView, MaterialsImportReport, MessageView, PreviewData,
+    ProjectSummary, ProjectSummaryAnswerView, ProjectView, PublicationView, SelectedModelView,
+    StagedAttachmentView, StagedAttachmentsReport, SummarizationReportView, SummaryContentView,
+    SummaryItemView, SummaryNodeView, WebPreview,
 };
 pub use error::{AppError, AppResult, ErrorCode};
 pub use session_log::SessionLogEntry;

@@ -205,6 +205,36 @@ pub struct AgentRunInputs {
     knowledge: Option<AgentKnowledgeContext>,
 }
 
+/// Durable hand-off between the fast acceptance boundary and its derived
+/// Knowledge work.  It intentionally contains opaque ids only: source paths
+/// and document content never escape the acceptance call.
+pub struct AcceptedStagedTurn {
+    inputs: AgentRunInputs,
+    operation_id: String,
+    material_ids: Vec<String>,
+}
+
+/// A clipboard image held by the composer until its user turn is accepted.
+/// This type is deliberately process-local input to the send boundary: it is
+/// never written to a project staging directory or exposed in a view/log.
+#[derive(Clone, Debug)]
+pub struct StagedImage {
+    pub staging_id: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+impl AcceptedStagedTurn {
+    pub fn turn_id(&self) -> Option<&str> {
+        self.inputs.turn_id()
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
 impl AgentRunInputs {
     pub fn turn_id(&self) -> Option<&str> {
         self.turn_id.as_ref().map(MessageId::as_str)
@@ -373,6 +403,11 @@ where
         let creations = project.creations.iter().map(creation_view).collect();
         let messages = project.messages.iter().map(message_view).collect();
         let publication = self.publication_status(id)?;
+        let accepted_import =
+            KnowledgeStore::open(self.base.join("projects").join(pid.as_str()), &pid)
+                .ok()
+                .and_then(|store| store.latest_accepted_import_operation().ok().flatten())
+                .map(accepted_import_progress_view);
         Ok(ProjectView {
             id: project.id.as_str().to_owned(),
             name: project.name.as_str().to_owned(),
@@ -384,6 +419,7 @@ where
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
             }),
+            accepted_import,
         })
     }
 
@@ -466,10 +502,191 @@ where
         let pid = parse_project_id(project_id)?;
         let pre_existing = self.project_material_hashes(&pid)?;
         let mut items = Vec::with_capacity(paths.len());
+        let mut accepted = Vec::new();
         for path in paths {
-            items.push(self.import_one_material(&pid, &path, &pre_existing)?);
+            let item = self.import_one_material(&pid, &path, &pre_existing, false)?;
+            if item.status == "added"
+                && let Some(material) = &item.material
+            {
+                accepted.push(material.id.clone());
+            }
+            items.push(item);
+        }
+        self.index_accepted_material_batch(&pid, &accepted, None);
+        Ok(MaterialsImportReport { items })
+    }
+
+    /// Commits a staged selection as one logical Material batch. Material
+    /// storage happens before any Knowledge work; a later derivation failure
+    /// never removes an accepted source. This is called only from the send
+    /// acceptance path, never from drag/drop or file selection.
+    fn accept_staged_materials(
+        &self,
+        pid: &ProjectId,
+        paths: &[String],
+        images: &[StagedImage],
+        operation_id: Option<&str>,
+    ) -> AppResult<MaterialsImportReport> {
+        let pre_existing = self.project_material_hashes(pid)?;
+        let mut items = Vec::with_capacity(paths.len());
+        let mut accepted = Vec::new();
+        for path in paths {
+            let item = self.import_one_material(pid, path, &pre_existing, false)?;
+            if item.status == "added"
+                && let Some(material) = item.material.clone()
+            {
+                accepted.push(material.id);
+            }
+            items.push(item);
+        }
+        for image in images {
+            let item = self.import_staged_image(pid, image, &pre_existing)?;
+            if item.status == "added"
+                && let Some(material) = item.material.clone()
+            {
+                accepted.push(material.id);
+            }
+            items.push(item);
+        }
+        if let Some(operation_id) = operation_id
+            && let Ok(mut store) =
+                KnowledgeStore::open(self.base.join("projects").join(pid.as_str()), pid)
+        {
+            for id in &accepted {
+                if let Ok(material_id) = MaterialId::parse(id) {
+                    let _ = store.bind_accepted_import_material(operation_id, &material_id);
+                }
+            }
+            let _ = store.update_accepted_import_operation(
+                operation_id,
+                None,
+                project_knowledge::AcceptedImportState::Copying,
+                accepted.len(),
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
         }
         Ok(MaterialsImportReport { items })
+    }
+
+    /// Converts a renderer-owned pasted image into the same accepted Material
+    /// store used by staged paths. This is called only after the operation
+    /// ledger exists; clipboard bytes cannot create an eager Material.
+    fn import_staged_image(
+        &self,
+        pid: &ProjectId,
+        image: &StagedImage,
+        pre_existing: &std::collections::HashSet<String>,
+    ) -> AppResult<MaterialImportResult> {
+        // The id is intentionally opaque and is not persisted or logged. Its
+        // presence prevents a malformed caller from treating an unnamed byte
+        // payload as a project attachment.
+        if image.staging_id.trim().is_empty() {
+            return Err(AppError::invalid("Esa imagen no es válida."));
+        }
+        let validated =
+            validate_clipboard_image(&image.file_name, &image.content_type, &image.bytes)?;
+        let source_name = validated.synthesized_name.clone();
+        let sha = sha256_hex(&image.bytes);
+        if let Some(existing) = self.find_material_by_sha(pid, &sha)? {
+            let (status, reason) = if pre_existing.contains(&sha) {
+                ("duplicate", "Ese archivo ya está en el proyecto.")
+            } else {
+                (
+                    "duplicate_in_batch",
+                    "Ese archivo ya estaba en esta selección.",
+                )
+            };
+            return Ok(MaterialImportResult {
+                source_name,
+                status: status.to_owned(),
+                material_id: Some(existing.id.as_str().to_owned()),
+                reason: Some(reason.to_owned()),
+                material: Some(material_view(&existing)),
+            });
+        }
+        let request = AddMaterial {
+            display_name: "Captura".to_owned(),
+            original_file_name: validated.synthesized_name,
+            content_type: Some(ContentType::parse(validated.content_type).expect("validated type")),
+            source: MaterialContent {
+                bytes: image.bytes.clone(),
+            },
+        };
+        let material = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_material(pid, request)
+            .map_err(AppError::from_material)?;
+        Ok(MaterialImportResult {
+            source_name,
+            status: "added".to_owned(),
+            material_id: Some(material.id.as_str().to_owned()),
+            reason: None,
+            material: Some(material_view(&material)),
+        })
+    }
+
+    /// Validates a prospective composer selection without accepting it. This
+    /// read-only boundary is the only file inspection allowed before Send: it
+    /// creates no Material, copies no source into the project, opens no
+    /// Knowledge store, and never initializes the embedding provider.
+    pub fn stage_attachment_paths(&self, paths: &[String]) -> StagedAttachmentsReport {
+        let mut seen = std::collections::HashSet::new();
+        let items = paths
+            .iter()
+            .map(|path| {
+                let source_name = Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(project_core::safe_file_name)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "archivo".to_owned());
+                match std::fs::symlink_metadata(path) {
+                    Ok(meta) if !meta.file_type().is_file() => StagedAttachmentView {
+                        source_name,
+                        status: "unsupported".to_owned(),
+                        reason: Some("Ese archivo no es válido.".to_owned()),
+                    },
+                    Ok(meta) if meta.len() > MAX_IMPORT_FILE_BYTES => StagedAttachmentView {
+                        source_name,
+                        status: "unsupported".to_owned(),
+                        reason: Some("Ese archivo es demasiado grande.".to_owned()),
+                    },
+                    Err(_) => StagedAttachmentView {
+                        source_name,
+                        status: "failed".to_owned(),
+                        reason: Some("No pudimos preparar ese archivo.".to_owned()),
+                    },
+                    Ok(_) => match read_source_file(Path::new(path)) {
+                        Ok((_, bytes, _)) => {
+                            let hash = sha256_hex(&bytes);
+                            let duplicate = !seen.insert(hash);
+                            StagedAttachmentView {
+                                source_name,
+                                status: if duplicate {
+                                    "duplicate_in_selection".to_owned()
+                                } else {
+                                    "ready".to_owned()
+                                },
+                                reason: duplicate
+                                    .then(|| "Ese archivo ya estaba en esta selección.".to_owned()),
+                            }
+                        }
+                        Err(_) => StagedAttachmentView {
+                            source_name,
+                            status: "failed".to_owned(),
+                            reason: Some("No pudimos preparar ese archivo.".to_owned()),
+                        },
+                    },
+                }
+            })
+            .collect();
+        StagedAttachmentsReport { items }
     }
 
     fn project_material_hashes(
@@ -494,6 +711,7 @@ where
         pid: &ProjectId,
         path: &str,
         pre_existing: &std::collections::HashSet<String>,
+        index_immediately: bool,
     ) -> AppResult<MaterialImportResult> {
         let source_name = Path::new(path)
             .file_name()
@@ -600,7 +818,16 @@ where
                     content_type,
                     source: MaterialContent { bytes },
                 };
-                match self.add_material_and_index(pid, request) {
+                let persisted = if index_immediately {
+                    self.add_material_and_index(pid, request)
+                } else {
+                    self.projects
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .add_material(pid, request)
+                        .map_err(AppError::from_material)
+                };
+                match persisted {
                     Ok(material) => Ok(MaterialImportResult {
                         source_name,
                         status: "added".to_owned(),
@@ -711,6 +938,130 @@ where
                     embedded.unwrap_or(0),
                     reused.unwrap_or(0)
                 ),
+            );
+        }
+    }
+
+    fn index_accepted_material_batch(
+        &self,
+        project_id: &ProjectId,
+        material_ids: &[String],
+        operation_id: Option<&str>,
+    ) {
+        if material_ids.is_empty() {
+            return;
+        }
+        let root = self.base.join("projects").join(project_id.as_str());
+        let mut store = match KnowledgeStore::open(&root, project_id) {
+            Ok(store) => store,
+            Err(_) => {
+                crate::session_log::record(
+                    "WARN",
+                    "[knowledge] batch_index_open_failed".to_owned(),
+                );
+                return;
+            }
+        };
+        let project = match self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(project_id)
+        {
+            Ok(project) => project,
+            Err(_) => return,
+        };
+        if let Some(operation_id) = operation_id {
+            let _ = store.update_accepted_import_operation(
+                operation_id,
+                None,
+                project_knowledge::AcceptedImportState::IndexingLexical,
+                material_ids.len(),
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
+        }
+        let mut indexed = 0usize;
+        let mut failed = 0usize;
+        for id in material_ids {
+            let Some(material) = project
+                .materials
+                .iter()
+                .find(|material| material.id.as_str() == id)
+            else {
+                continue;
+            };
+            let bytes = match self.content.read_material(project_id, material) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            if store.index(&material_source(material), &bytes).is_ok() {
+                indexed += 1;
+            } else {
+                failed += 1;
+            }
+        }
+        let material_ids = material_ids
+            .iter()
+            .filter_map(|id| MaterialId::parse(id).ok())
+            .collect::<Vec<_>>();
+        if let Some(operation_id) = operation_id {
+            let _ = store.update_accepted_import_operation(
+                operation_id,
+                None,
+                project_knowledge::AcceptedImportState::IndexingEmbeddings,
+                material_ids.len(),
+                indexed,
+                0,
+                failed,
+                0,
+                0,
+            );
+        }
+        let (embedded, reused, failure_state) =
+            match self.with_local_embedding_provider(|provider| {
+                store.index_embeddings_for_materials(provider, 8, &material_ids)
+            }) {
+                (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None),
+                (Some(Err(error)), _) => (None, None, Some(embedding_index_failure_state(&error))),
+                (None, state) => (None, None, Some(state)),
+            };
+        crate::session_log::record(
+            if embedded.is_some() { "INFO" } else { "WARN" },
+            format!(
+                "[knowledge] operation=material_batch materials_total={} lexical_ready={} embeddings_created={} embeddings_reused={} embedding_failure_class={}",
+                material_ids.len(),
+                indexed,
+                embedded.unwrap_or(0),
+                reused.unwrap_or(0),
+                failure_state.map(|state| state.as_str()).unwrap_or("none")
+            ),
+        );
+        if let Some(operation_id) = operation_id {
+            let embedding_completed = if embedded.is_some() { indexed } else { 0 };
+            let final_failed = failed + usize::from(embedded.is_none() && indexed > 0);
+            // Indexing completion is not operation completion: the same
+            // accepted turn still has its bounded retrieval/agent step. Keep
+            // the ledger incomplete until that terminal step succeeds so a
+            // restart can never claim a fake completed turn.
+            let state = if final_failed == 0 {
+                project_knowledge::AcceptedImportState::IndexingEmbeddings
+            } else {
+                project_knowledge::AcceptedImportState::PendingRetry
+            };
+            let _ = store.update_accepted_import_operation(
+                operation_id,
+                None,
+                state,
+                material_ids.len(),
+                indexed,
+                embedding_completed,
+                final_failed,
+                embedded.unwrap_or(0),
+                reused.unwrap_or(0),
             );
         }
     }
@@ -1061,9 +1412,18 @@ where
         crate::session_log::record_knowledge(
             crate::session_log::SessionKnowledgeMetrics {
                 conversation_id: project_id.as_str().to_owned(),
+                material_count: corpus.material_count,
+                corpus_bytes: corpus.corpus_bytes,
+                corpus_utf8_chars: corpus.corpus_utf8_chars,
                 corpus_est_tokens: naive_corpus_est_tokens,
+                retrieval_candidate_count: candidates.len(),
+                selected_evidence_count: package.entries.len(),
+                selected_evidence_bytes: evidence_bytes,
+                selected_evidence_utf8_chars: evidence_utf8_chars,
                 evidence_est_tokens,
                 context_reduction_pct: context_reduction_pct_vs_naive_corpus,
+                semantic_provider_state: semantic_state.as_str().to_owned(),
+                request_preparation_ms: started.elapsed().as_millis(),
             },
             format!(
                 "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
@@ -1509,6 +1869,338 @@ where
         Ok(inputs)
     }
 
+    /// Send acceptance boundary for paths held only by the native/frontend
+    /// staging mechanism. Validation occurs before any source is accepted;
+    /// once this returns successfully the resulting single user message owns
+    /// every accepted Material. Knowledge failures are intentionally not part
+    /// of acceptance and are reported by their durable local status/logs.
+    pub fn send_staged_message_persist(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        staged_paths: &[String],
+        staged_images: &[StagedImage],
+    ) -> AppResult<AcceptedStagedTurn> {
+        if project_id.trim().is_empty() || prompt.trim().is_empty() {
+            return Err(AppError::invalid("Escribí qué querés crear."));
+        }
+        let pid = parse_project_id(project_id)?;
+        // Validate the project/model before accepting any staged source so a
+        // rejected turn leaves the frontend selection intact and residue-free.
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        match project.model {
+            Some(model)
+                if !self.model_list()?.iter().any(|available| {
+                    available.provider_id == model.provider_id
+                        && available.model_id == model.model_id
+                }) =>
+            {
+                self.selected_model_ref()?;
+            }
+            Some(_) => {}
+            None => {
+                self.selected_model_ref()?;
+            }
+        }
+        // Validate pasted bytes before acceptance, so invalid clipboard data
+        // leaves the composer selection retryable and creates no ledger,
+        // project Material, Knowledge row, or history message.
+        for image in staged_images {
+            if image.staging_id.trim().is_empty() {
+                return Err(AppError::invalid("Esa imagen no es válida."));
+            }
+            validate_clipboard_image(&image.file_name, &image.content_type, &image.bytes)?;
+        }
+        // The operation is durable before the first project-owned input copy.
+        // Filesystem and SQLite cannot share one transaction, so every later
+        // phase records an explicit state rather than claiming atomicity.
+        let operation_id = accepted_operation_id(&pid, prompt);
+        let root = self.base.join("projects").join(pid.as_str());
+        KnowledgeStore::open(&root, &pid)
+            .and_then(|mut store| {
+                store.create_accepted_import_operation(
+                    &operation_id,
+                    staged_paths.len() + staged_images.len(),
+                )
+            })
+            .map_err(|_| AppError::internal("No pudimos confirmar los materiales."))?;
+        let report =
+            self.accept_staged_materials(&pid, staged_paths, staged_images, Some(&operation_id))?;
+        let attachment_ids = report
+            .items
+            .iter()
+            .filter_map(|item| item.material_id.clone())
+            .collect::<Vec<_>>();
+        // Every selected path remains accounted for by the operation.  A
+        // duplicate can legitimately bind the already durable Material; it is
+        // not silently discarded merely because no new copy was needed.
+        if let Ok(mut store) = KnowledgeStore::open(&root, &pid) {
+            for id in &attachment_ids {
+                if let Ok(material_id) = MaterialId::parse(id) {
+                    let _ = store.bind_accepted_import_material(&operation_id, &material_id);
+                }
+            }
+            let failures = report
+                .items
+                .iter()
+                .filter(|item| item.status == "failed")
+                .count();
+            let terminal_without_materials = attachment_ids.is_empty();
+            let _ = store.update_accepted_import_operation(
+                &operation_id,
+                None,
+                if terminal_without_materials {
+                    project_knowledge::AcceptedImportState::PendingRetry
+                } else {
+                    project_knowledge::AcceptedImportState::Copying
+                },
+                attachment_ids.len(),
+                0,
+                0,
+                failures,
+                0,
+                0,
+            );
+        }
+        // Persist the user turn immediately after its accepted sources are
+        // durable.  Derived Knowledge work is deliberately deferred to the
+        // caller's accepted-turn pipeline, allowing the UI to refresh and
+        // render durable progress without a fake percentage.
+        let mut inputs =
+            self.resolve_agent_inputs_without_knowledge(project_id, prompt, &attachment_ids)?;
+        let material_ids = attachment_ids
+            .iter()
+            .map(|id| parse_material_id(id))
+            .collect::<AppResult<Vec<_>>>()?;
+        let user_message = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_user_message(&pid, prompt, &material_ids)
+            .map_err(AppError::from_core)?;
+        inputs.turn_id = Some(user_message.id);
+        if let Ok(mut store) = KnowledgeStore::open(&root, &pid)
+            && let Ok(Some(progress)) = store.accepted_import_operation(&operation_id)
+        {
+            let _ = store.update_accepted_import_operation(
+                &operation_id,
+                inputs.turn_id(),
+                progress.state,
+                progress.copied,
+                progress.lexical_completed,
+                progress.embedding_completed,
+                progress.failed,
+                progress.embeddings_created,
+                progress.embeddings_reused,
+            );
+        }
+        Ok(AcceptedStagedTurn {
+            inputs,
+            operation_id,
+            material_ids: attachment_ids,
+        })
+    }
+
+    /// Completes the derived work for an already durable accepted turn.  This
+    /// is called by the task thread, never by pre-send staging; recovery may
+    /// safely leave the ledger in `pending_retry` if the process stops here.
+    pub fn run_accepted_staged_turn(
+        &self,
+        mut accepted: AcceptedStagedTurn,
+    ) -> AppResult<AgentRunView> {
+        self.index_accepted_material_batch(
+            &accepted.inputs.project_id,
+            &accepted.material_ids,
+            Some(&accepted.operation_id),
+        );
+        accepted.inputs.knowledge = match self
+            .prepare_knowledge_context(&accepted.inputs.project_id, &accepted.inputs.prompt)
+        {
+            Ok(knowledge) => knowledge,
+            Err(error) => {
+                self.finish_accepted_import_operation(
+                    &accepted.inputs.project_id,
+                    &accepted.operation_id,
+                    false,
+                );
+                return Err(error);
+            }
+        };
+        let project_id = accepted.inputs.project_id.clone();
+        // The durable ledger now says that the remote terminal outcome is
+        // unknown. A process loss after this point must never auto-resend a
+        // possibly completed provider request.
+        self.update_accepted_import_agent_state(
+            &project_id,
+            &accepted.operation_id,
+            project_knowledge::AcceptedImportAgentState::StartedOutcomeUnknown,
+        );
+        match self.send_message_run(accepted.inputs) {
+            Ok(run) => {
+                let agent_state = if run.status == "completed" {
+                    project_knowledge::AcceptedImportAgentState::Completed
+                } else {
+                    project_knowledge::AcceptedImportAgentState::FailedRetryable
+                };
+                // This write precedes the operation-completion flag. If the
+                // process stops in between, recovery can safely finalize a
+                // proven completed turn without a duplicate remote call.
+                self.update_accepted_import_agent_state(
+                    &project_id,
+                    &accepted.operation_id,
+                    agent_state,
+                );
+                self.finish_accepted_import_operation(
+                    &project_id,
+                    &accepted.operation_id,
+                    run.status == "completed",
+                );
+                Ok(run)
+            }
+            Err(error) => {
+                self.update_accepted_import_agent_state(
+                    &project_id,
+                    &accepted.operation_id,
+                    project_knowledge::AcceptedImportAgentState::FailedRetryable,
+                );
+                self.finish_accepted_import_operation(&project_id, &accepted.operation_id, false);
+                Err(error)
+            }
+        }
+    }
+
+    /// Explicitly resumes only a durably accepted operation whose remote agent
+    /// boundary has not started. All identity comes from the ledger and the
+    /// existing user message; no composer proposal, source path, Material, or
+    /// user turn is recreated. `PendingRetry` is intentionally refused here:
+    /// it means the remote outcome might be unknown and requires a deliberate
+    /// user retry rather than an automatic duplicate request.
+    pub fn resume_accepted_import_operation(
+        &self,
+        project_id: &str,
+        operation_id: &str,
+    ) -> AppResult<AgentRunView> {
+        let pid = parse_project_id(project_id)?;
+        let root = self.base.join("projects").join(pid.as_str());
+        let store = KnowledgeStore::open(&root, &pid)
+            .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?;
+        let operation = store
+            .accepted_import_operation(operation_id)
+            .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró esa operación."))?;
+        let turn_id = operation
+            .turn_id
+            .as_deref()
+            .ok_or_else(|| AppError::internal("La operación aceptada no tiene turno."))?;
+        if operation.state == project_knowledge::AcceptedImportState::Completed {
+            return Ok(AgentRunView {
+                status: "completed".to_owned(),
+                turn_id: Some(turn_id.to_owned()),
+                registered_creation_ids: Vec::new(),
+                message: None,
+            });
+        }
+        if operation.agent_state == project_knowledge::AcceptedImportAgentState::Completed {
+            self.finish_accepted_import_operation(&pid, operation_id, true);
+            return Ok(AgentRunView {
+                status: "completed".to_owned(),
+                turn_id: Some(turn_id.to_owned()),
+                registered_creation_ids: Vec::new(),
+                message: None,
+            });
+        }
+        if operation.agent_state != project_knowledge::AcceptedImportAgentState::NotStarted
+            || operation.state == project_knowledge::AcceptedImportState::PendingRetry
+        {
+            return Err(AppError::invalid(
+                "Esta creación necesita una confirmación para reintentarla; el resultado remoto no se reenviará automáticamente.",
+            ));
+        }
+        let material_ids = store
+            .accepted_import_material_ids(operation_id)
+            .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?
+            .into_iter()
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        let message = project
+            .messages
+            .iter()
+            .find(|message| message.id.as_str() == turn_id && message.role == MessageRole::User)
+            .ok_or_else(|| AppError::internal("No pudimos recuperar el turno aceptado."))?;
+        let mut inputs =
+            self.resolve_agent_inputs_without_knowledge(project_id, &message.text, &material_ids)?;
+        inputs.turn_id = Some(
+            MessageId::parse(turn_id)
+                .map_err(|_| AppError::internal("No pudimos recuperar el turno aceptado."))?,
+        );
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "accepted_import resumed conversation_id={} operation_id={} turn_id={} materials={}",
+                project_id,
+                operation_id,
+                turn_id,
+                material_ids.len()
+            ),
+        );
+        self.run_accepted_staged_turn(AcceptedStagedTurn {
+            inputs,
+            operation_id: operation_id.to_owned(),
+            material_ids,
+        })
+    }
+
+    fn finish_accepted_import_operation(
+        &self,
+        project_id: &ProjectId,
+        operation_id: &str,
+        completed: bool,
+    ) {
+        let root = self.base.join("projects").join(project_id.as_str());
+        if let Ok(mut store) = KnowledgeStore::open(&root, project_id)
+            && let Ok(Some(progress)) = store.accepted_import_operation(operation_id)
+        {
+            let _ = store.update_accepted_import_operation(
+                operation_id,
+                progress.turn_id.as_deref(),
+                if completed {
+                    project_knowledge::AcceptedImportState::Completed
+                } else {
+                    project_knowledge::AcceptedImportState::PendingRetry
+                },
+                progress.copied,
+                progress.lexical_completed,
+                progress.embedding_completed,
+                progress.failed + usize::from(!completed),
+                progress.embeddings_created,
+                progress.embeddings_reused,
+            );
+        }
+    }
+
+    fn update_accepted_import_agent_state(
+        &self,
+        project_id: &ProjectId,
+        operation_id: &str,
+        agent_state: project_knowledge::AcceptedImportAgentState,
+    ) {
+        let root = self.base.join("projects").join(project_id.as_str());
+        if let Ok(mut store) = KnowledgeStore::open(&root, project_id) {
+            let _ = store.update_accepted_import_agent_state(operation_id, agent_state);
+        }
+    }
+
     /// Runs the agent using the prepared inputs and appends an assistant
     /// message reflecting the outcome (`ok`, `failed`, or `cancelled`).
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
@@ -1535,6 +2227,7 @@ where
                     turn_id.as_deref(),
                     model_ref.as_ref(),
                     &result.task.usage,
+                    started.elapsed().as_millis(),
                 );
                 let creation_ids: Vec<CreationId> = result
                     .registered
@@ -1732,6 +2425,22 @@ where
         prompt: &str,
         attachment_ids: &[String],
     ) -> AppResult<AgentRunInputs> {
+        let mut inputs =
+            self.resolve_agent_inputs_without_knowledge(project_id, prompt, attachment_ids)?;
+        inputs.knowledge = self.prepare_knowledge_context(&inputs.project_id, prompt)?;
+        Ok(inputs)
+    }
+
+    /// Validates a turn and resolves attachments without touching the local
+    /// Knowledge store/provider.  Accepted imports use this at the durable
+    /// commitment boundary; their indexing/retrieval is performed later by
+    /// the explicit accepted-turn pipeline.
+    fn resolve_agent_inputs_without_knowledge(
+        &self,
+        project_id: &str,
+        prompt: &str,
+        attachment_ids: &[String],
+    ) -> AppResult<AgentRunInputs> {
         if project_id.trim().is_empty() {
             return Err(AppError::invalid("Ese proyecto no es válido."));
         }
@@ -1775,7 +2484,6 @@ where
             }
             None => self.selected_model_ref()?,
         };
-        let knowledge = self.prepare_knowledge_context(&project_id, prompt)?;
         let attachments = self.resolve_attachments(project_id.as_str(), attachment_ids)?;
         Ok(AgentRunInputs {
             project_id,
@@ -1783,7 +2491,7 @@ where
             prompt: prompt.to_owned(),
             model,
             attachments,
-            knowledge,
+            knowledge: None,
         })
     }
 
@@ -2724,6 +3432,19 @@ fn parse_material_id(id: &str) -> AppResult<MaterialId> {
     MaterialId::parse(id).map_err(|_| AppError::invalid("Ese material no es válido."))
 }
 
+fn accepted_operation_id(project_id: &ProjectId, prompt: &str) -> String {
+    // A local opaque correlation ID. It intentionally contains no path or
+    // source content; UUID-grade randomness is unnecessary because the
+    // nanosecond clock is paired with a prompt digest and this database is
+    // scoped to exactly one project.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let digest = sha256_hex(prompt.as_bytes());
+    format!("{}-{nanos}-{}", project_id.as_str(), &digest[..16])
+}
+
 fn summary_node_view(node: &project_knowledge::SummaryNode) -> SummaryNodeView {
     SummaryNodeView {
         summary_id: node.summary_id.clone(),
@@ -2809,6 +3530,29 @@ fn material_view(m: &Material) -> MaterialView {
         kind: material_kind(&m.original_file_name).to_owned(),
         byte_size: m.byte_size,
         created_at: m.created_at.as_str().to_owned(),
+    }
+}
+
+fn accepted_import_progress_view(
+    operation: project_knowledge::AcceptedImportOperation,
+) -> AcceptedImportProgressView {
+    AcceptedImportProgressView {
+        state: match operation.state {
+            project_knowledge::AcceptedImportState::Accepted => "accepted",
+            project_knowledge::AcceptedImportState::Copying => "copying",
+            project_knowledge::AcceptedImportState::IndexingLexical => "indexing_lexical",
+            project_knowledge::AcceptedImportState::IndexingEmbeddings => "indexing_embeddings",
+            project_knowledge::AcceptedImportState::PendingRetry => "pending_retry",
+            project_knowledge::AcceptedImportState::Completed => "completed",
+        }
+        .to_owned(),
+        total: operation.total,
+        copied: operation.copied,
+        lexical_completed: operation.lexical_completed,
+        embedding_completed: operation.embedding_completed,
+        failed: operation.failed,
+        embeddings_created: operation.embeddings_created,
+        embeddings_reused: operation.embeddings_reused,
     }
 }
 
@@ -3079,6 +3823,7 @@ fn record_turn_usage(
     turn_id: Option<&str>,
     model: Option<&ModelRef>,
     usage: &RemoteUsage,
+    turn_duration_ms: u128,
 ) {
     let (provider, model) = model
         .map(|model| (model.provider_id.clone(), model.model_id.clone()))
@@ -3094,6 +3839,7 @@ fn record_turn_usage(
         cache_write_tokens: usage.cache_write_tokens,
         total_tokens: usage.total_tokens,
         cost_usd: usage.cost_usd,
+        turn_duration_ms: Some(turn_duration_ms),
         source: match usage.source {
             UsageSource::ProviderActual => "provider_actual",
             UsageSource::Estimated => "estimated",

@@ -52,6 +52,9 @@ pub struct SessionUsage {
     pub cache_write_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// Elapsed wall-clock time for the completed turn. This is local
+    /// structural timing, not provider billing telemetry.
+    pub turn_duration_ms: Option<u128>,
     pub source: String,
 }
 
@@ -61,9 +64,18 @@ pub struct SessionUsage {
 #[serde(rename_all = "camelCase")]
 pub struct SessionKnowledgeMetrics {
     pub conversation_id: String,
+    pub material_count: usize,
+    pub corpus_bytes: u64,
+    pub corpus_utf8_chars: usize,
     pub corpus_est_tokens: usize,
+    pub retrieval_candidate_count: usize,
+    pub selected_evidence_count: usize,
+    pub selected_evidence_bytes: usize,
+    pub selected_evidence_utf8_chars: usize,
     pub evidence_est_tokens: usize,
     pub context_reduction_pct: usize,
+    pub semantic_provider_state: String,
+    pub request_preparation_ms: u128,
 }
 
 fn buffer() -> &'static Mutex<VecDeque<SessionLogEntry>> {
@@ -227,6 +239,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["shown", "error"]
         );
+        clear();
+    }
+
+    #[test]
+    fn knowledge_metrics_are_structural_and_do_not_need_content_fields() {
+        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        clear();
+        configure_from_args(["--log-level".to_owned(), "info".to_owned()]);
+        record_knowledge(
+            SessionKnowledgeMetrics {
+                conversation_id: "conversation-a".to_owned(),
+                material_count: 2,
+                corpus_bytes: 2048,
+                corpus_utf8_chars: 2000,
+                corpus_est_tokens: 683,
+                retrieval_candidate_count: 9,
+                selected_evidence_count: 3,
+                selected_evidence_bytes: 600,
+                selected_evidence_utf8_chars: 580,
+                evidence_est_tokens: 200,
+                context_reduction_pct: 70,
+                semantic_provider_state: "available".to_owned(),
+                request_preparation_ms: 12,
+            },
+            "[knowledge] structural counts only".to_owned(),
+        );
+        let value = serde_json::to_value(list().pop().expect("knowledge entry")).unwrap();
+        assert_eq!(value["knowledge"]["corpusBytes"], 2048);
+        assert_eq!(value["knowledge"]["selectedEvidenceCount"], 3);
+        assert!(value["knowledge"].get("prompt").is_none());
+        assert!(value["knowledge"].get("content").is_none());
+        assert!(value["knowledge"].get("path").is_none());
         clear();
     }
 }
