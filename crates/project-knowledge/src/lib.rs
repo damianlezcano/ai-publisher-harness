@@ -552,9 +552,14 @@ impl KnowledgeStore {
             [],
             |row| row.get::<_, i64>(0),
         )? as usize;
+        // Corpus sizing must count each canonical document's bytes once and
+        // each chunk's text once. A single documents-chunks JOIN would multiply
+        // `SUM(byte_size)` by the chunk multiplicity, so the two aggregates are
+        // taken from separate tables.
         let (corpus_bytes, corpus_utf8_chars): (i64, i64) = self.connection.query_row(
-            "SELECT COALESCE(SUM(d.byte_size), 0), COALESCE(SUM(LENGTH(c.text)), 0)
-             FROM documents d LEFT JOIN chunks c ON c.document_id = d.document_id",
+            "SELECT
+               (SELECT COALESCE(SUM(byte_size), 0) FROM documents),
+               (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM chunks)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -2983,6 +2988,42 @@ mod tests {
         );
         // Sanitized: the debug form never leaks document text.
         assert!(!format!("{stats:?}").contains("reunion"));
+    }
+
+    #[test]
+    fn corpus_bytes_counts_each_document_once_not_per_chunk() {
+        let (temp, pid) = root();
+        let mut store = KnowledgeStore::open(temp.path().join(PID), &pid).unwrap();
+        // A long document that chunking splits into several chunks.
+        let body: String = (0..400)
+            .map(|i| {
+                format!("Parrafo {i}: se revisaron los acuerdos del proyecto de infraestructura.\n")
+            })
+            .collect();
+        let mut txt = source("largo.txt");
+        txt.material_id = MaterialId::parse("0198e4a6-79b2-7b51-9e68-c2eb7af3db20").unwrap();
+        txt.relative_path = format!("inputs/{}/largo.txt", txt.material_id);
+        store.index(&txt, body.as_bytes()).unwrap();
+
+        let stats = store.corpus_stats().unwrap();
+        let docs = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        let chunks = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert!(chunks > 1, "fixture must split into several chunks");
+        // corpus_bytes must equal the single document's byte count, NOT the
+        // byte count multiplied by the chunk multiplicity (join-inflation bug).
+        assert_eq!(stats.corpus_bytes, body.len() as u64);
+        assert_eq!(stats.material_count, 1);
+        assert_eq!(docs, 1);
     }
 
     fn synthetic_lexical(
