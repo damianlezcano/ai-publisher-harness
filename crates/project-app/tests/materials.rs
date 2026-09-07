@@ -291,6 +291,58 @@ fn resumed_local_interruption_states_reuse_the_accepted_turn_and_material() {
 }
 
 #[test]
+fn accepted_staged_send_links_turn_before_prepared_counter_becomes_durable() {
+    use project_knowledge::KnowledgeStore;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let app = app(tmp.path());
+    let project = app.create_project("P").unwrap();
+
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..3 {
+        let path = corpus.join(format!("archivo-{i}.txt"));
+        std::fs::write(&path, format!("Contenido de ejemplo {i}.\n")).unwrap();
+        paths.push(path.to_str().unwrap().to_owned());
+    }
+
+    // Pre-send: no operation, no Material, no message.
+    let before = app.open_project(&project.id).unwrap();
+    assert!(before.materials.is_empty());
+    assert!(before.messages.is_empty());
+    assert!(before.accepted_import.is_none());
+
+    let accepted = app
+        .send_staged_message_persist(&project.id, "Resumí cada archivo", &paths, &[])
+        .unwrap();
+
+    // The lifecycle invariant: once the durable ledger exposes `prepared > 0`
+    // (copied > 0), the owning user turn must already be durable and linked.
+    let pid = project_core::ProjectId::parse(&project.id).unwrap();
+    let root = tmp.path().join("projects").join(&project.id);
+    let store = KnowledgeStore::open(&root, &pid).unwrap();
+    let operation = store
+        .accepted_import_operation(accepted.operation_id())
+        .unwrap()
+        .expect("operation exists");
+    assert_eq!(operation.copied, 3, "all accepted sources are prepared");
+    assert!(operation.copied > 0);
+    let turn_id = operation
+        .turn_id
+        .clone()
+        .expect("prepared > 0 must imply a linked turn");
+    assert_eq!(turn_id, accepted.turn_id().unwrap());
+
+    // Exactly one user turn, no duplicated Material, no duplicated message.
+    let after = app.open_project(&project.id).unwrap();
+    assert_eq!(after.materials.len(), 3);
+    assert_eq!(after.messages.len(), 1);
+    assert_eq!(after.messages[0].id, turn_id);
+    assert_eq!(after.messages[0].material_ids.len(), 3);
+}
+
+#[test]
 fn fifty_one_file_recovery_reuses_the_durable_turn_without_duplication() {
     use project_knowledge::{AcceptedImportState, KnowledgeStore};
 
