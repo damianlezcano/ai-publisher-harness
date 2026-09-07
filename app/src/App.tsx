@@ -28,6 +28,7 @@ export default function App() {
   const inFlightRef = useRef(new Map<string, string>());
   const resumeTriggeredRef = useRef(new Set<string>());
   const [resumeFailure, setResumeFailure] = useState<string | null>(null);
+  const [resumeNoTurn, setResumeNoTurn] = useState<string | null>(null);
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -134,6 +135,14 @@ export default function App() {
         } else if (event.status === "completed") {
           setAgentPhase("completed");
           setAgentMessage(null);
+        } else if (event.code === "recovery_no_turn") {
+          // The resume was refused because the send was interrupted before the
+          // turn was confirmed. This is terminal (no retry) and is surfaced by
+          // the processing notice, not the generic failed message.
+          setAgentPhase("idle");
+          setAgentMessage(null);
+          setResumeNoTurn(event.projectId);
+          setResumeFailure(null);
         } else {
           setAgentPhase("failed");
           setAgentMessage(event.message ?? messages.agent.taskFailed);
@@ -185,26 +194,21 @@ export default function App() {
     const key = `${conversation.id}:${acceptedImport.operationId}`;
     if (resumeTriggeredRef.current.has(key)) return;
     resumeTriggeredRef.current.add(key);
-    console.info(
-      `[recovery-ui] incomplete operation detected operation_id=${acceptedImport.operationId} prepared=${acceptedImport.copied} indexed=${acceptedImport.lexicalCompleted} ready=${acceptedImport.embeddingCompleted} agent_state=${acceptedImport.agentState}`,
-    );
-    console.info(
-      `[recovery-ui] invoking agent_resume_import operation_id=${acceptedImport.operationId}`,
-    );
+    const detected = `[recovery-ui] incomplete operation detected operation_id=${acceptedImport.operationId} prepared=${acceptedImport.copied} indexed=${acceptedImport.lexicalCompleted} ready=${acceptedImport.embeddingCompleted} agent_state=${acceptedImport.agentState}`;
+    const invoking = `[recovery-ui] invoking agent_resume_import operation_id=${acceptedImport.operationId}`;
+    console.info(detected);
+    console.info(invoking);
+    void api.sessionLogRecord(detected).catch(() => {});
+    void api.sessionLogRecord(invoking).catch(() => {});
     void api
       .agentResumeImport(conversation.id, acceptedImport.operationId)
-      .then(() => {
-        console.info(
-          `[recovery-ui] agent_resume_import accepted operation_id=${acceptedImport.operationId}`,
-        );
-        setResumeFailure(null);
-      })
+      .then(() => setResumeFailure(null))
       .catch((error) => {
         resumeTriggeredRef.current.delete(key);
         const failureClass = isAppError(error) ? error.code : "unknown";
-        console.error(
-          `[recovery-ui] agent_resume_import failed operation_id=${acceptedImport.operationId} failure_class=${failureClass}`,
-        );
+        const failed = `[recovery-ui] agent_resume_import failed operation_id=${acceptedImport.operationId} failure_class=${failureClass}`;
+        console.error(failed);
+        void api.sessionLogRecord(failed).catch(() => {});
         setResumeFailure(acceptedImport.operationId);
       });
   }, [conversation]);
@@ -361,6 +365,7 @@ export default function App() {
               onOpenProvider={() => setSettingsOpen(true)}
               onProviderError={handleProviderError}
               resumeFailure={resumeFailure}
+              resumeNoTurn={resumeNoTurn}
               onResumeRetry={handleResumeRetry}
             />
           </div>

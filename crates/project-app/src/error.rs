@@ -37,6 +37,7 @@ pub enum ErrorCode {
     ModelUnavailable,
     NoCompatibleModel,
     NetworkError,
+    RecoveryNoTurn,
     Internal,
 }
 
@@ -66,6 +67,7 @@ impl ErrorCode {
             ErrorCode::ModelUnavailable => "model_unavailable",
             ErrorCode::NoCompatibleModel => "no_compatible_model",
             ErrorCode::NetworkError => "network_error",
+            ErrorCode::RecoveryNoTurn => "recovery_no_turn",
             ErrorCode::Internal => "internal",
         }
     }

@@ -1053,3 +1053,56 @@ fn pending_retry_not_started_is_locally_resumable_but_remote_unknown_is_not() {
     assert_eq!(view.messages[0].id, turn_id);
     assert_eq!(view.accepted_import.unwrap().state, "completed");
 }
+
+#[test]
+fn pre_turn_interruption_resume_is_typed_no_turn_denial_not_a_generic_error() {
+    use project_knowledge::{AcceptedImportState, KnowledgeStore};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let first = app(tmp.path());
+    let project = first.create_project("P").unwrap();
+
+    // Reproduce the exact pre-turn kill window: the durable ledger row exists
+    // (materials copied, state Copying) but the process stopped before the user
+    // turn was persisted, so `turn_id` is NULL and the prompt is unrecoverable.
+    let pid = project_core::ProjectId::parse(&project.id).unwrap();
+    let root = tmp.path().join("projects").join(&project.id);
+    let operation_id = "pre-turn-op".to_owned();
+    let mut store = KnowledgeStore::open(&root, &pid).unwrap();
+    store
+        .create_accepted_import_operation(&operation_id, 52)
+        .unwrap();
+    store
+        .update_accepted_import_operation(
+            &operation_id,
+            None,
+            AcceptedImportState::Copying,
+            52,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+    drop(store);
+    drop(first);
+
+    let reopened = app_with_agent_message(tmp.path(), "Listo.");
+    let err = reopened
+        .resume_accepted_import_operation(&project.id, &operation_id)
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::RecoveryNoTurn);
+
+    // The operation is never silently completed or fabricated into a turn; it
+    // stays surfaced as incomplete so the frontend can show the truthful no-turn
+    // state (and the person can re-send).
+    let view = reopened.open_project(&project.id).unwrap();
+    let progress = view
+        .accepted_import
+        .expect("operation still surfaced")
+        .clone();
+    assert_eq!(progress.operation_id, operation_id);
+    assert_eq!(progress.state, "copying");
+    assert_eq!(progress.agent_state, "not_started");
+}

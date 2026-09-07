@@ -428,6 +428,7 @@ export const messages = {
     },
     pendingRetry: "El procesamiento quedó pendiente. Podés reintentarlo.",
     resumeFailed: "No pudimos reanudar el procesamiento local.",
+    noTurn: "El envío se interrumpió antes de confirmarse; volvé a enviarlo.",
     outcomeUnknown:
       "El resultado anterior quedó pendiente y no se puede continuar automáticamente.",
     cannotContinue: "No pudimos continuar el procesamiento local.",

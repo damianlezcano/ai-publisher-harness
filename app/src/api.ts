@@ -136,6 +136,7 @@ export const api = {
   modelGetSelected: () => invoke<SelectedModelView>("model_get_selected"),
   sessionLogs: () => invoke<SessionLogEntry[]>("session_logs"),
   sessionLogsClear: () => invoke<void>("session_logs_clear"),
+  sessionLogRecord: (message: string) => invoke<void>("session_log_record", { message }),
 };
 
 export function isAppError(value: unknown): value is AppError {

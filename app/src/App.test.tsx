@@ -1222,4 +1222,61 @@ describe("App", () => {
       { projectId: baseSummary.id, operationId: "op-52" },
     );
   });
+
+  it("surfaces the truthful no-turn state without a retry action when the turn was never committed", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: { [baseSummary.id]: { acceptedImport: incompleteImport } },
+    });
+    captureTaskListener();
+    render(<App />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_resume_import", {
+        projectId: baseSummary.id,
+        operationId: "op-52",
+      }),
+    );
+    await act(async () => {
+      taskHandler?.({
+        event: "agent://task",
+        id: 1,
+        payload: {
+          projectId: baseSummary.id,
+          turnId: "",
+          status: "failed",
+          code: "recovery_no_turn",
+          message: "El envío se interrumpió antes de confirmarse; volvé a enviarlo.",
+          registeredCreationIds: [],
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getByText(messages.processing.noTurn)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: messages.common.retry })).not.toBeInTheDocument();
+    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_resume_import")).toHaveLength(
+      1,
+    );
+  });
+
+  it("bridges the sanitized recovery-ui trace into the session log", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      views: { [baseSummary.id]: { acceptedImport: incompleteImport } },
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("agent_resume_import", {
+        projectId: baseSummary.id,
+        operationId: "op-52",
+      }),
+    );
+    const messages_ = invokeMock.mock.calls
+      .filter((call) => call[0] === "session_log_record")
+      .map((call) => (call[1] as { message: string }).message);
+    expect(messages_.some((m) => m.startsWith("[recovery-ui] incomplete operation detected"))).toBe(
+      true,
+    );
+    expect(messages_.some((m) => m.startsWith("[recovery-ui] invoking agent_resume_import"))).toBe(
+      true,
+    );
+  });
 });

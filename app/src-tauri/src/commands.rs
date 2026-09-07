@@ -30,6 +30,11 @@ pub struct AgentTaskEvent {
     /// `working`, `completed`, `failed`, or `cancelled`.
     pub status: String,
     pub message: Option<String>,
+    /// Typed failure code on a `failed` event (e.g. `recovery_no_turn`), so the
+    /// frontend can distinguish a terminal no-turn denial from a retryable
+    /// resume failure without string-matching the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub registered_creation_ids: Vec<String>,
 }
 
@@ -368,6 +373,7 @@ pub async fn agent_send(
             turn_id: turn_id.clone(),
             status: "working".to_owned(),
             message: None,
+            code: None,
             registered_creation_ids: Vec::new(),
         },
     );
@@ -384,6 +390,7 @@ pub async fn agent_send(
                 turn_id: run.turn_id.unwrap_or_default(),
                 status: run.status,
                 message: run.message,
+                code: None,
                 registered_creation_ids: run.registered_creation_ids,
             },
             Err(err) => AgentTaskEvent {
@@ -391,6 +398,7 @@ pub async fn agent_send(
                 turn_id,
                 status: "failed".to_owned(),
                 message: Some(err.message),
+                code: Some(err.code.as_str().to_owned()),
                 registered_creation_ids: Vec::new(),
             },
         };
@@ -436,6 +444,7 @@ pub async fn agent_send_staged(
             turn_id: turn_id.clone(),
             status: "working".to_owned(),
             message: None,
+            code: None,
             registered_creation_ids: Vec::new(),
         },
     );
@@ -450,6 +459,7 @@ pub async fn agent_send_staged(
                 turn_id: run.turn_id.unwrap_or_default(),
                 status: run.status,
                 message: run.message,
+                code: None,
                 registered_creation_ids: run.registered_creation_ids,
             },
             Err(err) => AgentTaskEvent {
@@ -457,6 +467,7 @@ pub async fn agent_send_staged(
                 turn_id,
                 status: "failed".to_owned(),
                 message: Some(err.message),
+                code: Some(err.code.as_str().to_owned()),
                 registered_creation_ids: Vec::new(),
             },
         };
@@ -496,11 +507,14 @@ pub async fn agent_resume_import(
         format!("[knowledge][recovery] command_received operation_id={operation_id}"),
     );
     // Validate the identity against the durable ledger before emitting any
-    // event, so a bogus operation id cannot manufacture a "working" turn.
+    // event, so a bogus operation id cannot manufacture a "working" turn. A
+    // legitimate pre-turn operation (turn id not yet persisted) yields an empty
+    // id here; the resume thread below resolves the real turn or a typed denial.
     let turn_id = blocking(shared.clone(), move |app_state| {
         app_state.accepted_import_operation_turn_id(&resume_project, &resume_operation)
     })
-    .await?;
+    .await?
+    .unwrap_or_default();
     let _ = app.emit(
         "agent://task",
         AgentTaskEvent {
@@ -508,6 +522,7 @@ pub async fn agent_resume_import(
             turn_id: turn_id.clone(),
             status: "working".to_owned(),
             message: None,
+            code: None,
             registered_creation_ids: Vec::new(),
         },
     );
@@ -519,6 +534,7 @@ pub async fn agent_resume_import(
                 turn_id: run.turn_id.unwrap_or(turn_id),
                 status: run.status,
                 message: run.message,
+                code: None,
                 registered_creation_ids: run.registered_creation_ids,
             },
             Err(err) => AgentTaskEvent {
@@ -526,6 +542,7 @@ pub async fn agent_resume_import(
                 turn_id,
                 status: "failed".to_owned(),
                 message: Some(err.message),
+                code: Some(err.code.as_str().to_owned()),
                 registered_creation_ids: Vec::new(),
             },
         };
@@ -768,4 +785,18 @@ pub async fn session_logs_clear(state: State<'_, SharedState>) -> Result<(), App
         Ok(())
     })
     .await
+}
+
+/// Narrow bridge so the operator's single `--debug` terminal shows the full
+/// reopen recovery chain, including the frontend `[recovery-ui]` links that live
+/// in the webview console and would otherwise be invisible. Only structural
+/// `[recovery-ui]` lines are accepted — never prompts, document content, names,
+/// paths, or secrets — so this is not a general frontend logging surface.
+#[tauri::command]
+pub async fn session_log_record(message: String) -> Result<(), AppError> {
+    if !message.starts_with("[recovery-ui] ") {
+        return Err(AppError::invalid("No se puede registrar ese mensaje."));
+    }
+    project_app::session_log::record("INFO", message);
+    Ok(())
 }

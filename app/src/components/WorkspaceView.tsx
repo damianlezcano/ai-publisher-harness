@@ -32,6 +32,7 @@ interface WorkspaceViewProps {
   onOpenProvider: () => void;
   onProviderError: () => void;
   resumeFailure?: string | null;
+  resumeNoTurn?: string | null;
   onResumeRetry?: (operationId: string) => void;
 }
 
@@ -62,6 +63,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     onOpenProvider,
     onProviderError,
     resumeFailure,
+    resumeNoTurn,
     onResumeRetry,
   } = props;
 
@@ -256,6 +258,9 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     ) {
       return { text: messages.processing.cannotContinue, retry: false };
     }
+    if (resumeNoTurn === project.id) {
+      return { text: messages.processing.noTurn, retry: false };
+    }
     if (resumeFailure === acceptedImport.operationId) {
       return { text: messages.processing.resumeFailed, retry: true };
     }
@@ -263,7 +268,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       return { text: messages.processing.pendingRetry, retry: true };
     }
     return null;
-  }, [acceptedImport, resumeFailure]);
+  }, [acceptedImport, resumeFailure, resumeNoTurn, project.id]);
 
   return (
     <div className={workspaceClass}>

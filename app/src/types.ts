@@ -101,6 +101,7 @@ export interface AgentTaskEvent {
   turnId?: string;
   status: "working" | "completed" | "failed" | "cancelled";
   message: string | null;
+  code?: string | null;
   registeredCreationIds: string[];
 }
 

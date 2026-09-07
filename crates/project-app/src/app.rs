@@ -2106,12 +2106,14 @@ where
     /// Returns the persisted user-turn id that owns a durable accepted-import
     /// operation, or `NotFound` when the operation does not exist. Used by the
     /// reopen recovery trigger to validate an operation identity before emitting
-    /// a `working` event. This never reconstructs or resumes any work.
+    /// a `working` event. A `None` turn id is a legitimate pre-turn interruption
+    /// (the send was killed before the user turn persisted) and is surfaced as a
+    /// typed denial by the resume path, never as a bogus "working" turn.
     pub fn accepted_import_operation_turn_id(
         &self,
         project_id: &str,
         operation_id: &str,
-    ) -> AppResult<String> {
+    ) -> AppResult<Option<String>> {
         let pid = parse_project_id(project_id)?;
         let root = self.base.join("projects").join(pid.as_str());
         let store = KnowledgeStore::open(&root, &pid)
@@ -2120,9 +2122,7 @@ where
             .accepted_import_operation(operation_id)
             .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?
             .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró esa operación."))?;
-        operation
-            .turn_id
-            .ok_or_else(|| AppError::internal("La operación aceptada no tiene turno."))
+        Ok(operation.turn_id)
     }
 
     /// Explicitly resumes only a durably accepted operation whose remote agent
@@ -2161,10 +2161,6 @@ where
                 record_recovery_error(operation_id, "durable_state_read_failed");
                 AppError::new(ErrorCode::NotFound, "No se encontró esa operación.")
             })?;
-        let turn_id = operation.turn_id.as_deref().ok_or_else(|| {
-            record_recovery_error(operation_id, "durable_state_read_failed");
-            AppError::internal("La operación aceptada no tiene turno.")
-        })?;
         crate::session_log::record(
             "INFO",
             format!(
@@ -2176,6 +2172,26 @@ where
                 accepted_import_agent_state_str(operation.agent_state),
             ),
         );
+        // A pre-turn interruption (the send was killed between material copy and
+        // user-turn persistence) has no message to reuse and no recoverable
+        // prompt. Refuse it as a typed, non-retryable denial rather than a
+        // generic internal error, so the frontend can tell the person to re-send.
+        let turn_id = match operation.turn_id.as_deref() {
+            Some(turn_id) => turn_id,
+            None => {
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "[knowledge][recovery] resume_decision=denied reason=no_turn operation_id={operation_id}"
+                    ),
+                );
+                record_recovery_error(operation_id, "no_turn");
+                return Err(AppError::new(
+                    ErrorCode::RecoveryNoTurn,
+                    "El envío se interrumpió antes de confirmarse; volvé a enviarlo.",
+                ));
+            }
+        };
         if operation.state == project_knowledge::AcceptedImportState::Completed {
             crate::session_log::record(
                 "INFO",
@@ -3625,6 +3641,7 @@ fn recovery_failure_class(error: &AppError) -> &'static str {
         ErrorCode::AiUnavailable | ErrorCode::AiTaskFailed => "inference_failed",
         ErrorCode::StorageUnavailable | ErrorCode::NotFound => "durable_state_read_failed",
         ErrorCode::InvalidInput => "remote_outcome_unknown",
+        ErrorCode::RecoveryNoTurn => "no_turn",
         _ => "other_typed_local_failure",
     }
 }
