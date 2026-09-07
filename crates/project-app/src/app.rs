@@ -1024,14 +1024,18 @@ where
                 0,
             );
         }
-        let (embedded, reused, failure_state) =
-            match self.with_local_embedding_provider(|provider| {
+        let (embedded, reused, failure_state, persist_failure) = match self
+            .with_local_embedding_provider(|provider| {
                 store.index_embeddings_for_materials(provider, 8, &material_ids)
             }) {
-                (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None),
-                (Some(Err(error)), _) => (None, None, Some(embedding_index_failure_state(&error))),
-                (None, state) => (None, None, Some(state)),
-            };
+            (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None, None),
+            (Some(Err(error)), _) => {
+                let state = embedding_index_failure_state(&error);
+                let detail = error.embedding_persist_class("persist");
+                (None, None, Some(state), Some(detail))
+            }
+            (None, state) => (None, None, Some(state), None),
+        };
         crate::session_log::record(
             if embedded.is_some() { "INFO" } else { "WARN" },
             format!(
@@ -1043,6 +1047,23 @@ where
                 failure_state.map(|state| state.as_str()).unwrap_or("none")
             ),
         );
+        if let Some(failure) = persist_failure {
+            // Sanitized stage/class + SQLite primary code only: never SQL text,
+            // a path, a vector, or a document body.
+            let sqlite_code = failure
+                .sqlite_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "none".to_owned());
+            crate::session_log::record(
+                "WARN",
+                format!(
+                    "[knowledge][embedding] stage={} failure_class={} sqlite_code={}",
+                    failure.stage,
+                    failure.class.as_str(),
+                    sqlite_code
+                ),
+            );
+        }
         if recovering && let Some(operation_id) = operation_id {
             crate::session_log::record(
                 if embedded.is_some() { "INFO" } else { "WARN" },
@@ -1429,14 +1450,14 @@ where
                 corpus_bytes: corpus.corpus_bytes,
                 corpus_utf8_chars: corpus.corpus_utf8_chars,
                 corpus_est_tokens: naive_corpus_est_tokens,
-                retrieval_candidate_count: candidates.len(),
-                selected_evidence_count: package.entries.len(),
-                selected_evidence_bytes: evidence_bytes,
-                selected_evidence_utf8_chars: evidence_utf8_chars,
-                evidence_est_tokens,
-                context_reduction_pct: context_reduction_pct_vs_naive_corpus,
+                retrieval_candidate_count: Some(candidates.len()),
+                selected_evidence_count: Some(package.entries.len()),
+                selected_evidence_bytes: Some(evidence_bytes),
+                selected_evidence_utf8_chars: Some(evidence_utf8_chars),
+                evidence_est_tokens: Some(evidence_est_tokens),
+                context_reduction_pct: Some(context_reduction_pct_vs_naive_corpus),
                 semantic_provider_state: semantic_state.as_str().to_owned(),
-                request_preparation_ms: started.elapsed().as_millis(),
+                request_preparation_ms: Some(started.elapsed().as_millis()),
             },
             format!(
                 "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
@@ -1824,6 +1845,22 @@ where
             &answer.report,
             started.elapsed().as_millis(),
         );
+        // Knowledge architecture metrics survive semantic/evidence variation:
+        // the corpus/index facts are emitted for the summary turn too, so the
+        // Conversation Details "Knowledge" section is truthful rather than
+        // uniformly "No disponible".
+        let corpus = self
+            .open_knowledge_store(project_id.as_str())
+            .ok()
+            .flatten()
+            .and_then(|store| store.corpus_stats().ok());
+        if let Some(corpus) = corpus {
+            record_summary_knowledge_metrics(
+                project_id.as_str(),
+                answer.report.source_count,
+                &corpus,
+            );
+        }
         crate::session_log::record(
             "INFO",
             format!(
@@ -4053,6 +4090,43 @@ fn sha256_hex(data: &[u8]) -> String {
         hex.push_str(&format!("{b:02x}"));
     }
     hex
+}
+
+/// Emits the local Knowledge architecture metrics (corpus/index facts) that are
+/// known regardless of semantic-provider success. This is deliberately separate
+/// from provider telemetry. A K6 summary turn has no K4 candidate/evidence set,
+/// so those per-turn fields stay `None` (rendered "No disponible") and never
+/// become an invented zero; the corpus/index counts are always known.
+fn record_summary_knowledge_metrics(
+    project_id: &str,
+    source_count: usize,
+    corpus: &project_knowledge::KnowledgeCorpusStats,
+) {
+    crate::session_log::record_knowledge(
+        crate::session_log::SessionKnowledgeMetrics {
+            conversation_id: project_id.to_owned(),
+            material_count: corpus.material_count,
+            corpus_bytes: corpus.corpus_bytes,
+            corpus_utf8_chars: corpus.corpus_utf8_chars,
+            corpus_est_tokens: corpus.naive_corpus_est_tokens,
+            retrieval_candidate_count: None,
+            selected_evidence_count: None,
+            selected_evidence_bytes: None,
+            selected_evidence_utf8_chars: None,
+            evidence_est_tokens: None,
+            context_reduction_pct: None,
+            semantic_provider_state: "available".to_owned(),
+            request_preparation_ms: None,
+        },
+        format!(
+            "[knowledge] summary_corpus materials={} corpus_bytes={} corpus_chars={} corpus_est_tokens={} sources={}",
+            corpus.material_count,
+            corpus.corpus_bytes,
+            corpus.corpus_utf8_chars,
+            corpus.naive_corpus_est_tokens,
+            source_count
+        ),
+    );
 }
 
 fn record_turn_usage(

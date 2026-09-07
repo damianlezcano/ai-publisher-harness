@@ -76,6 +76,12 @@ pub struct SessionUsage {
 
 /// Local architectural estimates. These are deliberately separate from remote
 /// provider telemetry and contain no material names or content.
+///
+/// Corpus/index counts (`material_count`, `corpus_bytes`, `corpus_utf8_chars`,
+/// `corpus_est_tokens`) are always known once the local store opens. Per-turn
+/// retrieval/evidence/preparation facts only exist for a K3/K4 chat turn; a K6
+/// summary turn has no K4 candidate/evidence set, so those fields are `None`
+/// (rendered "No disponible") rather than an invented zero.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKnowledgeMetrics {
@@ -84,14 +90,14 @@ pub struct SessionKnowledgeMetrics {
     pub corpus_bytes: u64,
     pub corpus_utf8_chars: usize,
     pub corpus_est_tokens: usize,
-    pub retrieval_candidate_count: usize,
-    pub selected_evidence_count: usize,
-    pub selected_evidence_bytes: usize,
-    pub selected_evidence_utf8_chars: usize,
-    pub evidence_est_tokens: usize,
-    pub context_reduction_pct: usize,
+    pub retrieval_candidate_count: Option<usize>,
+    pub selected_evidence_count: Option<usize>,
+    pub selected_evidence_bytes: Option<usize>,
+    pub selected_evidence_utf8_chars: Option<usize>,
+    pub evidence_est_tokens: Option<usize>,
+    pub context_reduction_pct: Option<usize>,
     pub semantic_provider_state: String,
-    pub request_preparation_ms: u128,
+    pub request_preparation_ms: Option<u128>,
 }
 
 fn buffer() -> &'static Mutex<VecDeque<SessionLogEntry>> {
@@ -276,14 +282,14 @@ mod tests {
                 corpus_bytes: 2048,
                 corpus_utf8_chars: 2000,
                 corpus_est_tokens: 683,
-                retrieval_candidate_count: 9,
-                selected_evidence_count: 3,
-                selected_evidence_bytes: 600,
-                selected_evidence_utf8_chars: 580,
-                evidence_est_tokens: 200,
-                context_reduction_pct: 70,
+                retrieval_candidate_count: Some(9),
+                selected_evidence_count: Some(3),
+                selected_evidence_bytes: Some(600),
+                selected_evidence_utf8_chars: Some(580),
+                evidence_est_tokens: Some(200),
+                context_reduction_pct: Some(70),
                 semantic_provider_state: "available".to_owned(),
-                request_preparation_ms: 12,
+                request_preparation_ms: Some(12),
             },
             "[knowledge] structural counts only".to_owned(),
         );
@@ -293,6 +299,42 @@ mod tests {
         assert!(value["knowledge"].get("prompt").is_none());
         assert!(value["knowledge"].get("content").is_none());
         assert!(value["knowledge"].get("path").is_none());
+        clear();
+    }
+
+    #[test]
+    fn summary_knowledge_metrics_keep_unknown_fields_null_never_zero() {
+        // A K6 summary turn has no K4 retrieval/evidence set. Those per-turn
+        // fields must serialize as `null` (rendered "No disponible"), never an
+        // invented zero, while corpus/index facts remain concrete.
+        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        clear();
+        configure_from_args(["--log-level".to_owned(), "info".to_owned()]);
+        record_knowledge(
+            SessionKnowledgeMetrics {
+                conversation_id: "conversation-b".to_owned(),
+                material_count: 1,
+                corpus_bytes: 400,
+                corpus_utf8_chars: 380,
+                corpus_est_tokens: 134,
+                retrieval_candidate_count: None,
+                selected_evidence_count: None,
+                selected_evidence_bytes: None,
+                selected_evidence_utf8_chars: None,
+                evidence_est_tokens: None,
+                context_reduction_pct: None,
+                semantic_provider_state: "available".to_owned(),
+                request_preparation_ms: None,
+            },
+            "[knowledge] summary_corpus only".to_owned(),
+        );
+        let value = serde_json::to_value(list().pop().expect("knowledge entry")).unwrap();
+        assert_eq!(value["knowledge"]["materialCount"], 1);
+        assert_eq!(value["knowledge"]["corpusBytes"], 400);
+        assert!(value["knowledge"]["retrievalCandidateCount"].is_null());
+        assert!(value["knowledge"]["selectedEvidenceCount"].is_null());
+        assert!(value["knowledge"]["contextReductionPct"].is_null());
+        assert!(value["knowledge"]["requestPreparationMs"].is_null());
         clear();
     }
 }
