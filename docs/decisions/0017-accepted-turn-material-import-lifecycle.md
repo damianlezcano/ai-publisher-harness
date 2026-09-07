@@ -32,6 +32,20 @@ ledger is discoverable and remains `pending_retry`; it is never silently marked
 ready or automatically advanced. Recovery is an explicit retry of that accepted
 operation, not a global worker.
 
+Reopen recovery has one explicit seam: after project reconstruction, the
+application reads the durable operation read model (`acceptedImport`) and, when
+it describes an incomplete operation whose `agent_state` is `not_started`,
+invokes the existing `resume_accepted_import_operation` command exactly once per
+operation. This is a bounded, deterministic LOCAL recovery trigger — never a
+generic background worker/daemon — and it never depends on ephemeral composer
+or drag/drop state. Local work is idempotent: durable Material copies are reused
+if present, lexical indexing is `INSERT OR IGNORE`-based, ready embeddings are
+reused by generation, and progress counters are re-derived rather than advanced
+blindly. The remote boundary is gated on `agent_state`: only `not_started` may
+continue to the provider request; `started_outcome_unknown` (and any other
+state) is never auto-resent, because a prior outbound request may already have
+succeeded before process termination.
+
 Embedding selection has an accepted-batch boundary. It considers chunks reached
 by the newly accepted Material IDs once, reuses ready vectors for the active
 generation, and does not repeat a whole-corpus selection per file. One verified
