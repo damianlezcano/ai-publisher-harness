@@ -153,7 +153,7 @@ function mockBackend(options: MockOptions = {}) {
           notice: null,
           requiresChoice,
         });
-      case "agent_send":
+      case "agent_send_staged":
         return agentSendError ? Promise.reject(agentSendError) : Promise.resolve(undefined);
       case "publish": {
         const { projectId } = (args as { projectId: string }) ?? {};
@@ -611,7 +611,7 @@ describe("App", () => {
     );
   });
 
-  it("re-enables the composer after a rejected agent_send and does not restore working on re-entry", async () => {
+  it("re-enables the composer after a rejected accepted turn and does not restore working on re-entry", async () => {
     mockBackend({
       projects: [baseSummary, otherSummary],
       agentSendError: { code: "credential_revoked", message: "raw" },
@@ -639,13 +639,13 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Cancelar" })).not.toBeInTheDocument();
 
     const sendsBeforeRetry = invokeMock.mock.calls.filter(
-      (call) => call[0] === "agent_send",
+      (call) => call[0] === "agent_send_staged",
     ).length;
     await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Reintentar ahora");
     expect(screen.getByRole("button", { name: "Enviar" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
     await waitFor(() =>
-      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send").length).toBe(
+      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send_staged").length).toBe(
         sendsBeforeRetry + 1,
       ),
     );

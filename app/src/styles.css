@@ -605,7 +605,65 @@ select {
 }
 
 .conversation-details-dialog {
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+.import-progress {
+  display: grid;
+  gap: 2px;
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--font-size-meta);
+}
+
+.import-progress strong {
+  color: var(--text);
+}
+
+.conversation-metrics {
+  min-width: 0;
+}
+
+.conversation-metrics-subsection {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.conversation-metrics-subsection + .conversation-metrics-subsection {
+  margin-top: var(--space-3);
+}
+
+.conversation-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.conversation-metric {
+  min-width: 0;
+}
+
+.conversation-metric dt {
+  color: var(--muted);
+  font-size: var(--font-size-meta);
+}
+
+.conversation-metric dd {
+  margin: 2px 0 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .conversation-metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* -- M11+ polish: settings tabs ------------------------------------------------- */

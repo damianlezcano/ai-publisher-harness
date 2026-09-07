@@ -117,6 +117,9 @@ Abrir and Compartir on the same registered artifact.
 Clicking the conversation title opens Conversation Details: rename, the
 conversation model, uploaded Materials, and generated Creations. Folder
 actions use only validated project-owned locations and do not expose paths.
+Conversation-specific structural usage appears here under "Uso y optimización":
+actual provider telemetry is distinct from local Knowledge estimates and never
+includes prompt, response, material, chunk, vector, key, or path content.
 
 ### Settings
 Separate surface with a close **X**, returning to the exact same conversation (no dashboard

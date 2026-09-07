@@ -37,9 +37,14 @@ export interface MaterialsImportReport {
   items: MaterialImportResult[];
 }
 
-export interface MaterialAddImageView {
-  material: MaterialView;
-  duplicate: boolean;
+export interface StagedAttachmentView {
+  sourceName: string;
+  status: "ready" | "duplicate_in_selection" | "unsupported" | "failed";
+  reason?: string;
+}
+
+export interface StagedAttachmentsReport {
+  items: StagedAttachmentView[];
 }
 
 export interface PreviewData {
@@ -70,6 +75,18 @@ export interface ProjectView {
   publication: PublicationView;
   messages: MessageView[];
   model?: ConversationModelView | null;
+  acceptedImport?: AcceptedImportProgressView | null;
+}
+
+export interface AcceptedImportProgressView {
+  state: string;
+  total: number;
+  copied: number;
+  lexicalCompleted: number;
+  embeddingCompleted: number;
+  failed: number;
+  embeddingsCreated: number;
+  embeddingsReused: number;
 }
 
 export interface ConversationModelView {
@@ -195,14 +212,24 @@ export interface SessionUsage {
   cacheWriteTokens: number | null;
   totalTokens: number | null;
   costUsd: number | null;
+  turnDurationMs: number | null;
   source: "provider_actual" | "estimated" | "unavailable" | string;
 }
 
 export interface SessionKnowledgeMetrics {
   conversationId: string;
+  materialCount: number;
+  corpusBytes: number;
+  corpusUtf8Chars: number;
   corpusEstTokens: number;
+  retrievalCandidateCount: number;
+  selectedEvidenceCount: number;
+  selectedEvidenceBytes: number;
+  selectedEvidenceUtf8Chars: number;
   evidenceEstTokens: number;
   contextReductionPct: number;
+  semanticProviderState: string;
+  requestPreparationMs: number;
 }
 
 export interface SummarizationReportView {

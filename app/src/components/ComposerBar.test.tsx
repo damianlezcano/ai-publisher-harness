@@ -5,13 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ComposerBar from "./ComposerBar";
 import { messages } from "../messages";
-import type {
-  MaterialAddImageView,
-  MaterialView,
-  ModelSummary,
-  ProviderSummary,
-  SelectedModelView,
-} from "../types";
+import type { MaterialView, ModelSummary, ProviderSummary, SelectedModelView } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -99,9 +93,9 @@ function setupApiMock(responses: {
   models?: ModelSummary[];
   providers?: ProviderSummary[];
   selected?: SelectedModelView;
-  addImage?: MaterialAddImageView;
+  addImage?: unknown;
   selectResult?: void;
-  addFromPathError?: unknown;
+  stageError?: unknown;
 }) {
   invokeMock.mockImplementation((cmd: string) => {
     if (cmd === "model_list") return Promise.resolve(responses.models ?? []);
@@ -110,9 +104,9 @@ function setupApiMock(responses: {
     if (cmd === "material_add_image")
       return Promise.resolve(responses.addImage ?? { material: materials[0], duplicate: false });
     if (cmd === "model_select") return Promise.resolve(responses.selectResult ?? undefined);
-    if (cmd === "material_add_from_path") {
-      if (responses.addFromPathError) return Promise.reject(responses.addFromPathError);
-      return Promise.resolve(materials[0]);
+    if (cmd === "attachments_stage_paths") {
+      if (responses.stageError) return Promise.reject(responses.stageError);
+      return Promise.resolve({ items: [{ sourceName: "diagrama.png", status: "ready" }] });
     }
     return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
   });
@@ -202,18 +196,18 @@ describe("ComposerBar", () => {
     expect(screen.getByRole("button", { name: "Adjuntar" })).toBeDisabled();
   });
 
-  it("Adjuntar opens the native file dialog and the added file becomes a removable draft chip", async () => {
+  it("Adjuntar stages locally and becomes a removable draft chip without material import", async () => {
     setupApiMock({ selected: selectedFreeModel });
     openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<ComposerBar {...base} />);
     expect(screen.queryByRole("button", { name: "diagrama.png" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Adjuntar" }));
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("material_add_from_path", {
-        projectId,
-        path: "/tmp/diagrama.png",
+      expect(invokeMock).toHaveBeenCalledWith("attachments_stage_paths", {
+        paths: ["/tmp/diagrama.png"],
       }),
     );
+    expect(invokeMock.mock.calls.some((call) => call[0] === "material_add_from_path")).toBe(false);
     expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Quitar diagrama.png" }));
     expect(screen.queryByRole("button", { name: "Quitar diagrama.png" })).not.toBeInTheDocument();
@@ -247,26 +241,44 @@ describe("ComposerBar", () => {
     expect(onSend).toHaveBeenCalledWith("hola", ["m1"]);
   });
 
-  it("paste of an image calls api.materialAddImage + onMaterialsChanged and adds the returned material id", async () => {
-    setupApiMock({
-      selected: selectedFreeModel,
-      addImage: { material: materials[1], duplicate: false },
-    });
+  it("stages a pasted image locally without durable material or Knowledge work, and removes it cleanly", async () => {
+    setupApiMock({ selected: selectedFreeModel });
     render(<ComposerBar {...base} />);
     const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
     pasteImage(textarea);
+    await waitFor(() => expect(screen.getByText("foto.png")).toBeInTheDocument());
+    expect(invokeMock.mock.calls.some((call) => call[0] === "material_add_image")).toBe(false);
+    expect(invokeMock.mock.calls.some((call) => call[0] === "agent_send_staged")).toBe(false);
+    expect(base.onMaterialsChanged).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Quitar foto.png" }));
+    expect(screen.queryByText("foto.png")).not.toBeInTheDocument();
+    await userEvent.type(textarea, "Creá una actividad");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    expect(base.onSend).toHaveBeenCalledWith("Creá una actividad", []);
+  });
+
+  it("passes pasted-image bytes to the accepted send boundary only after Enviar", async () => {
+    setupApiMock({ selected: selectedFreeModel });
+    render(<ComposerBar {...base} />);
+    const textarea = screen.getByLabelText("Pedido a la IA") as HTMLTextAreaElement;
+    pasteImage(textarea);
+    await waitFor(() => expect(screen.getByText("foto.png")).toBeInTheDocument());
+    await userEvent.type(textarea, "Usá la captura");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith(
-        "material_add_image",
-        expect.objectContaining({
-          projectId,
-          fileName: "foto.png",
-          contentType: "image/png",
-        }),
+      expect(base.onSend).toHaveBeenCalledWith(
+        "Usá la captura",
+        [expect.stringMatching(/^clipboard-/)],
+        [
+          expect.objectContaining({
+            stagingId: expect.stringMatching(/^clipboard-/),
+            fileName: "foto.png",
+            contentType: "image/png",
+          }),
+        ],
       ),
     );
-    await waitFor(() => expect(screen.getByText("foto.png")).toBeInTheDocument());
-    expect(base.onMaterialsChanged).toHaveBeenCalled();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "material_add_image")).toBe(false);
   });
 
   it("does not render a model selector; attachment, prompt and send only", async () => {
@@ -340,7 +352,7 @@ describe("ComposerBar", () => {
     openDialogMock.mockResolvedValueOnce("/tmp/bad.exe");
     setupApiMock({
       selected: selectedFreeModel,
-      addFromPathError: {
+      stageError: {
         code: "material_unsupported",
         message: "No admitimos ese tipo de archivo.",
       },

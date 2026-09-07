@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { ModelSummary, PreviewData, ProjectView, ProviderSummary } from "../types";
+import type {
+  ModelSummary,
+  PreviewData,
+  ProjectView,
+  ProviderSummary,
+  SessionLogEntry,
+} from "../types";
 import Dialog from "./ui/Dialog";
 import PreviewModal from "./PreviewModal";
+import ConversationMetrics from "./ConversationMetrics";
 import { humanDate, humanSize, kindLabel, modelOptionLabel } from "../labels";
 import { messages } from "../messages";
 
@@ -17,6 +24,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const [name, setName] = useState(project.name);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [logs, setLogs] = useState<SessionLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{
     title: string;
@@ -26,10 +34,11 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   } | null>(null);
 
   useEffect(() => {
-    void Promise.all([api.modelList(), api.providerList()])
-      .then(([modelList, providerList]) => {
+    void Promise.all([api.modelList(), api.providerList(), api.sessionLogs().catch(() => [])])
+      .then(([modelList, providerList, sessionLogs]) => {
         setModels(modelList);
         setProviders(providerList);
+        setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
       })
       .catch((err) => setError(errorMessage(err)));
   }, [project.id, project.name]);
@@ -137,6 +146,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
           </button>
         </div>
       </section>
+      <ConversationMetrics conversationId={project.id} logs={logs} />
       <section className="provider-section">
         <h3>{messages.conversationDetails.modelHeading}</h3>
         <label htmlFor="conversation-model">{messages.conversationDetails.modelLabel}</label>

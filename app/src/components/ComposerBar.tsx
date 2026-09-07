@@ -1,20 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
-import type { AgentPhase, MaterialView } from "../types";
+import { api, type StagedImagePayload } from "../api";
+import type { AgentPhase, MaterialView, StagedAttachmentView } from "../types";
 import { messages } from "../messages";
 import ErrorNotice from "./ui/ErrorNotice";
 
 export interface ComposerBarProps {
-  projectId: string;
   materials: MaterialView[];
   agentPhase: AgentPhase;
   aiUsable: boolean;
-  onSend: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
+  onSend: (
+    prompt: string,
+    attachmentIds: string[],
+    stagedImages?: StagedImagePayload[],
+  ) => void | Promise<void>;
   onCancel: () => void | Promise<void>;
   onOpenProvider?: () => void;
-  onMaterialsChanged?: () => void | Promise<void>;
   shareAction?: React.ReactNode;
   attachmentIds?: string[];
+  attachmentNames?: Map<string, StagedAttachmentView>;
   onAttachmentIdsChange?: (ids: string[]) => void;
 }
 
@@ -32,19 +35,24 @@ function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null
 }
 
 export default function ComposerBar({
-  projectId,
   materials,
   agentPhase,
   aiUsable,
   onSend,
   onCancel,
-  onMaterialsChanged,
   shareAction,
   attachmentIds: attachmentIdsProp,
+  attachmentNames,
   onAttachmentIdsChange,
 }: ComposerBarProps) {
   const [prompt, setPrompt] = useState("");
   const [internalAttachmentIds, setInternalAttachmentIds] = useState<string[]>([]);
+  const [internalAttachmentNames, setInternalAttachmentNames] = useState<
+    Map<string, StagedAttachmentView>
+  >(new Map());
+  // Clipboard bytes remain in this renderer-owned map until Send. The opaque
+  // key is only a composer selection handle, never a project Material ID.
+  const [stagedImages, setStagedImages] = useState<Map<string, StagedImagePayload>>(new Map());
   const [pasteBusy, setPasteBusy] = useState(false);
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
 
@@ -82,6 +90,18 @@ export default function ComposerBar({
 
   function removeAttachment(materialId: string) {
     setAttachmentIds((prev) => prev.filter((id) => id !== materialId));
+    setStagedImages((previous) => {
+      if (!previous.has(materialId)) return previous;
+      const next = new Map(previous);
+      next.delete(materialId);
+      return next;
+    });
+    setInternalAttachmentNames((previous) => {
+      if (!previous.has(materialId)) return previous;
+      const next = new Map(previous);
+      next.delete(materialId);
+      return next;
+    });
   }
 
   async function pickFile() {
@@ -90,9 +110,17 @@ export default function ComposerBar({
     try {
       const path = await api.pickFile();
       if (!path) return;
-      const material = await api.materialAddFromPath(projectId, path);
-      await onMaterialsChanged?.();
-      setAttachmentIds((prev) => (prev.includes(material.id) ? prev : [...prev, material.id]));
+      const staged = await api.attachmentsStagePaths([path]);
+      if (staged.items[0]?.status === "ready") {
+        setInternalAttachmentNames((previous) => {
+          const next = new Map(previous);
+          next.set(path, staged.items[0]!);
+          return next;
+        });
+        setAttachmentIds((prev) => (prev.includes(path) ? prev : [...prev, path]));
+      } else {
+        setPickError({ code: "attachment_invalid", message: staged.items[0]?.reason ?? "" });
+      }
     } catch (err) {
       setPickError(err);
     }
@@ -110,16 +138,22 @@ export default function ComposerBar({
     try {
       const buffer = await file.arrayBuffer();
       const fileName = file.name || `captura-${Date.now()}.png`;
-      const result = await api.materialAddImage(
-        projectId,
+      const stagingId = `clipboard-${crypto.randomUUID()}`;
+      const staged: StagedImagePayload = {
+        stagingId,
         fileName,
-        file.type || imageItem.type,
-        new Uint8Array(buffer),
-      );
-      await onMaterialsChanged?.();
-      setAttachmentIds((prev) =>
-        prev.includes(result.material.id) ? prev : [...prev, result.material.id],
-      );
+        contentType: file.type || imageItem.type,
+        data: new Uint8Array(buffer),
+      };
+      setStagedImages((previous) => new Map(previous).set(stagingId, staged));
+      setInternalAttachmentNames((previous) => {
+        const next = new Map(previous);
+        next.set(stagingId, { sourceName: fileName, status: "ready" });
+        return next;
+      });
+      setAttachmentIds((prev) => [...prev, stagingId]);
+    } catch (err) {
+      setPickError(err);
     } finally {
       setPasteBusy(false);
     }
@@ -129,14 +163,24 @@ export default function ComposerBar({
     const text = prompt.trim();
     if (text === "" || composerDisabled) return;
     const ids = attachmentIds;
+    const images = ids.flatMap((id) => {
+      const image = stagedImages.get(id);
+      return image ? [image] : [];
+    });
     setPrompt("");
     try {
-      await onSend(text, ids);
+      if (images.length > 0) {
+        await onSend(text, ids, images);
+      } else {
+        await onSend(text, ids);
+      }
       // `agent_send` resolves only after the user turn is durably accepted.
       // Keep the pending selection on a pre-acceptance failure so the person can
       // retry. Once accepted, Materials are already durable project state; these
       // ids must no longer describe attachments for the next turn.
       setAttachmentIds([]);
+      setStagedImages(new Map());
+      setInternalAttachmentNames(new Map());
       setAttachmentsExpanded(false);
     } catch {
       // WorkspaceView owns the user-facing failure and retry state. The pending
@@ -175,10 +219,17 @@ export default function ComposerBar({
         <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
           {visibleIds.map((id) => {
             const material = materialById.get(id);
-            const name = material?.displayName ?? messages.assistant.attachmentFallback;
+            const staged = attachmentNames?.get(id) ?? internalAttachmentNames.get(id);
+            const name =
+              material?.displayName ?? staged?.sourceName ?? messages.assistant.attachmentFallback;
             return (
               <li key={id} className="chip">
-                <span>{name}</span>
+                <span>
+                  {name}
+                  {staged?.status === "duplicate_in_selection"
+                    ? " · repetido en esta selección"
+                    : ""}
+                </span>
                 <button
                   type="button"
                   className="chip-remove"

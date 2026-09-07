@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use project_app::{
-    AppError, AppState, AppStatusView, CreationView, MaterialAddImageView, MaterialView,
+    AppError, AppState, AppStatusView, CreationView, MaterialView,
     MaterialsImportReport, PreviewData, ProjectSummary, ProjectView, PublicationView,
     SelectedModelView, SessionLogEntry,
 };
@@ -103,20 +103,6 @@ pub async fn material_add_from_path(
 }
 
 #[tauri::command]
-pub async fn material_add_image(
-    state: State<'_, SharedState>,
-    project_id: String,
-    file_name: String,
-    content_type: String,
-    data: Vec<u8>,
-) -> Result<MaterialAddImageView, AppError> {
-    blocking(state.inner().clone(), move |app| {
-        app.add_material_image(&project_id, &file_name, &content_type, data)
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn materials_add_from_paths(
     state: State<'_, SharedState>,
     project_id: String,
@@ -126,6 +112,16 @@ pub async fn materials_add_from_paths(
         app.import_materials(&project_id, paths)
     })
     .await
+}
+
+/// Pre-send attachment staging. This is intentionally a read-only validation
+/// command; Material acceptance remains exclusively on the send path.
+#[tauri::command]
+pub async fn attachments_stage_paths(
+    state: State<'_, SharedState>,
+    paths: Vec<String>,
+) -> Result<project_app::StagedAttachmentsReport, AppError> {
+    blocking(state.inner().clone(), move |app| Ok(app.stage_attachment_paths(&paths))).await
 }
 
 #[tauri::command]
@@ -401,6 +397,81 @@ pub async fn agent_send(
         let _ = app.emit("agent://task", event);
     });
     Ok(())
+}
+
+/// Commits frontend/native staged file paths as part of one user turn. Paths
+/// are accepted only here; selecting or dropping them invokes the separate
+/// read-only staging command above.
+#[tauri::command]
+pub async fn agent_send_staged(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    project_id: String,
+    prompt: String,
+    staged_paths: Vec<String>,
+    staged_images: Option<Vec<StagedImagePayload>>,
+) -> Result<(), AppError> {
+    let shared = state.inner().clone();
+    let persist_id = project_id.clone();
+    let persist_prompt = prompt.clone();
+    let images = staged_images
+        .unwrap_or_default()
+        .into_iter()
+        .map(|image| project_app::StagedImage {
+            staging_id: image.staging_id,
+            file_name: image.file_name,
+            content_type: image.content_type,
+            bytes: image.data,
+        })
+        .collect::<Vec<_>>();
+    let inputs = blocking(shared.clone(), move |app| {
+        app.send_staged_message_persist(&persist_id, &persist_prompt, &staged_paths, &images)
+    })
+    .await?;
+    let turn_id = inputs.turn_id().unwrap_or_default().to_owned();
+    let _ = app.emit(
+        "agent://task",
+        AgentTaskEvent {
+            project_id: project_id.clone(),
+            turn_id: turn_id.clone(),
+            status: "working".to_owned(),
+            message: None,
+            registered_creation_ids: Vec::new(),
+        },
+    );
+    std::thread::spawn(move || {
+        // An accepted staged turn always completes its bounded local import
+        // pipeline before retrieval/LLM work.  This is intentionally not a
+        // generic background scheduler.
+        let run = shared.run_accepted_staged_turn(inputs);
+        let event = match run {
+            Ok(run) => AgentTaskEvent {
+                project_id,
+                turn_id: run.turn_id.unwrap_or_default(),
+                status: run.status,
+                message: run.message,
+                registered_creation_ids: run.registered_creation_ids,
+            },
+            Err(err) => AgentTaskEvent {
+                project_id,
+                turn_id,
+                status: "failed".to_owned(),
+                message: Some(err.message),
+                registered_creation_ids: Vec::new(),
+            },
+        };
+        let _ = app.emit("agent://task", event);
+    });
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedImagePayload {
+    staging_id: String,
+    file_name: String,
+    content_type: String,
+    data: Vec<u8>,
 }
 
 #[tauri::command]

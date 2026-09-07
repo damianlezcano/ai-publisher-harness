@@ -9,9 +9,9 @@ import { messages } from "../messages";
 import type {
   CreationView,
   MaterialView,
-  MaterialsImportReport,
   MessageView,
   ProjectView,
+  StagedAttachmentsReport,
 } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -131,18 +131,11 @@ function setupApi(
     agentSendResult?: unknown;
     agentSendError?: unknown;
     agentSendPromise?: Promise<unknown>;
-    importReport?: MaterialsImportReport;
-    addFromPathMaterial?: MaterialView;
+    stagedReport?: StagedAttachmentsReport;
   } = {},
 ) {
-  const {
-    agentSendResult = undefined,
-    agentSendError,
-    agentSendPromise,
-    importReport,
-    addFromPathMaterial = materials[0],
-  } = options;
-  invokeMock.mockImplementation((cmd: string) => {
+  const { agentSendResult = undefined, agentSendError, agentSendPromise, stagedReport } = options;
+  invokeMock.mockImplementation((cmd: string, args?: unknown) => {
     switch (cmd) {
       case "model_list":
         return Promise.resolve([
@@ -170,14 +163,19 @@ function setupApi(
           notice: null,
           requiresChoice: false,
         });
-      case "agent_send":
+      case "agent_send_staged":
         if (agentSendError) return Promise.reject(agentSendError);
         if (agentSendPromise) return agentSendPromise;
         return Promise.resolve(agentSendResult);
-      case "materials_add_from_paths":
-        return Promise.resolve(importReport ?? { items: [] });
-      case "material_add_from_path":
-        return Promise.resolve(addFromPathMaterial);
+      case "attachments_stage_paths":
+        return Promise.resolve(
+          stagedReport ?? {
+            items: ((args as { paths?: string[] } | undefined)?.paths ?? []).map((path) => ({
+              sourceName: path.split("/").at(-1) ?? "archivo",
+              status: "ready" as const,
+            })),
+          },
+        );
       default:
         return Promise.resolve(undefined);
     }
@@ -244,7 +242,7 @@ describe("WorkspaceView", () => {
     expect(screen.getByText(creations[0].displayName)).toBeInTheDocument();
   });
 
-  it("sends a prompt with attachment ids and refreshes the conversation", async () => {
+  it("stages a file locally, then sends its path through the accepted-turn boundary", async () => {
     setupApi();
     openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
@@ -258,10 +256,10 @@ describe("WorkspaceView", () => {
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      expect(invokeMock).toHaveBeenCalledWith("agent_send_staged", {
         projectId,
         prompt: "Creá una actividad",
-        attachmentIds: ["m1"],
+        stagedPaths: ["/tmp/diagrama.png"],
       }),
     );
     expect(baseProps.onRefresh).toHaveBeenCalled();
@@ -280,10 +278,10 @@ describe("WorkspaceView", () => {
     // User text is data, not syntax: the exact quoted string (quotes included)
     // must be handed to the backend, never stripped or re-quoted.
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      expect(invokeMock).toHaveBeenCalledWith("agent_send_staged", {
         projectId,
         prompt: '"hola"',
-        attachmentIds: [],
+        stagedPaths: [],
       }),
     );
   });
@@ -299,16 +297,16 @@ describe("WorkspaceView", () => {
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      expect(invokeMock).toHaveBeenCalledWith("agent_send_staged", {
         projectId,
         prompt: "$(touch /tmp/educai-should-not-exist)",
-        attachmentIds: [],
+        stagedPaths: [],
       }),
     );
   });
 
   it("uses an attached image as turn input without opening any preview", async () => {
-    setupApi({ addFromPathMaterial: materials[0] });
+    setupApi();
     openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
 
@@ -324,10 +322,10 @@ describe("WorkspaceView", () => {
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      expect(invokeMock).toHaveBeenCalledWith("agent_send_staged", {
         projectId,
         prompt: "agregá esta imagen en el encabezado",
-        attachmentIds: ["m1"],
+        stagedPaths: ["/tmp/diagrama.png"],
       }),
     );
     // The turn input flow must never trigger the manual preview/open actions.
@@ -342,7 +340,7 @@ describe("WorkspaceView", () => {
   });
 
   it("clears the draft after send and never re-suggests the previous attachment", async () => {
-    setupApi({ addFromPathMaterial: materials[0] });
+    setupApi();
     openDialogMock.mockResolvedValueOnce("/tmp/diagrama.png");
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
 
@@ -356,7 +354,10 @@ describe("WorkspaceView", () => {
     await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Creá una actividad");
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", expect.objectContaining({ projectId })),
+      expect(invokeMock).toHaveBeenCalledWith(
+        "agent_send_staged",
+        expect.objectContaining({ projectId }),
+      ),
     );
 
     // After send the composer draft is clean: no chip from the previous turn and
@@ -377,12 +378,14 @@ describe("WorkspaceView", () => {
     await userEvent.type(screen.getByLabelText("Pedido a la IA"), "primero");
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
     await waitFor(() =>
-      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send")).toHaveLength(1),
+      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send_staged")).toHaveLength(
+        1,
+      ),
     );
 
     await userEvent.type(screen.getByLabelText("Pedido a la IA"), "segundo");
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
-    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send")).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send_staged")).toHaveLength(1);
 
     await act(async () => {
       release();
@@ -426,14 +429,10 @@ describe("WorkspaceView", () => {
     expect(baseProps.onRefresh).toHaveBeenCalled();
   });
 
-  it("lists unattached materials in the timeline and excludes attached materials from a second copy", () => {
+  it("never renders durable but unattached materials as conversation history", () => {
     const project = makeProject();
     render(<WorkspaceView project={project} {...baseProps} />);
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(materials[1].displayName).closest(".message-user")).toBeTruthy();
-    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[1].displayName}` })).toBeNull();
     expect(
       screen.queryAllByRole("button", { name: `Abrir ${materials[0].displayName}` }).length,
     ).toBe(1);
@@ -461,28 +460,13 @@ describe("WorkspaceView", () => {
     );
   });
 
-  it("attaches dropped files to the pending message and sends their ids to the agent", async () => {
-    const droppedMaterial: MaterialView = {
-      id: "m9",
-      displayName: "rosco-data.txt",
-      originalFileName: "rosco-data.txt",
-      kind: "text",
-      byteSize: 128,
-      createdAt: "2026-08-28T15:05:00Z",
-    };
-    const importReport: MaterialsImportReport = {
-      items: [
-        {
-          sourceName: "rosco-data.txt",
-          status: "added",
-          materialId: "m9",
-          material: droppedMaterial,
-        },
-      ],
+  it("stages dropped files only in the composer until Send accepts the turn", async () => {
+    const stagedReport: StagedAttachmentsReport = {
+      items: [{ sourceName: "rosco-data.txt", status: "ready" }],
     };
     const { dropHandler } = mockDragDrop();
-    setupApi({ importReport });
-    const { rerender } = render(<WorkspaceView project={makeProject()} {...baseProps} />);
+    setupApi({ stagedReport });
+    render(<WorkspaceView project={makeProject()} {...baseProps} />);
 
     await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
 
@@ -491,58 +475,40 @@ describe("WorkspaceView", () => {
     });
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("materials_add_from_paths", {
-        projectId,
+      expect(invokeMock).toHaveBeenCalledWith("attachments_stage_paths", {
         paths: ["/fake/rosco-data.txt"],
       }),
     );
-    expect(baseProps.onRefresh).toHaveBeenCalled();
-
-    rerender(<WorkspaceView project={makeProject([droppedMaterial])} {...baseProps} />);
-
-    expect(
-      screen.getByRole("button", { name: `Quitar ${droppedMaterial.displayName}` }),
-    ).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some((call) => call[0] === "materials_add_from_paths")).toBe(
+      false,
+    );
+    expect(baseProps.onRefresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Quitar rosco-data.txt" })).toBeInTheDocument();
+    expect(screen.queryByText("rosco-data.txt")?.closest(".chat-log")).toBeNull();
 
     const textarea = screen.getByLabelText("Pedido a la IA");
     await userEvent.type(textarea, "Usá estos datos para el rosco.");
     await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      expect(invokeMock).toHaveBeenCalledWith("agent_send_staged", {
         projectId,
         prompt: "Usá estos datos para el rosco.",
-        attachmentIds: ["m9"],
+        stagedPaths: ["/fake/rosco-data.txt"],
       }),
     );
-
-    // The attached dropped material must not also appear as a standalone resource item.
-    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
-    expect(
-      screen.getByText(droppedMaterial.displayName).closest(".message-user"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(droppedMaterial.displayName).closest(".creation-card")).toBeNull();
   });
 
   for (const count of [1, 5, 8, 9, 16, 51, 100]) {
     it(`keeps the composer reachable and collapses ${count} dropped-file results by default`, async () => {
-      const batch: MaterialsImportReport = {
+      const batch: StagedAttachmentsReport = {
         items: Array.from({ length: count }, (_, index) => ({
           sourceName: `nota-${index + 1}.md`,
-          status: "added" as const,
-          materialId: `batch-${index + 1}`,
-          material: {
-            id: `batch-${index + 1}`,
-            displayName: `nota-${index + 1}.md`,
-            originalFileName: `nota-${index + 1}.md`,
-            kind: "text" as const,
-            byteSize: 128,
-            createdAt: "2026-09-06T12:00:00Z",
-          },
+          status: "ready" as const,
         })),
       };
       const { dropHandler } = mockDragDrop();
-      setupApi({ importReport: batch });
+      setupApi({ stagedReport: batch });
       render(<WorkspaceView project={makeProject()} {...baseProps} />);
 
       await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
@@ -554,92 +520,63 @@ describe("WorkspaceView", () => {
 
       await waitFor(() =>
         expect(
-          screen.getByText(count === 1 ? "1 agregado" : `${count} agregados`),
+          screen.getByText(
+            count <= 5 ? "nota-1.md" : `${count} archivos seleccionados · Ver todos`,
+          ),
         ).toBeInTheDocument(),
       );
       const composer = screen.getByLabelText("Pedido a la IA").closest(".workspace-composer");
       expect(composer).not.toBeNull();
       expect(within(composer as HTMLElement).getByRole("button", { name: "Enviar" })).toBeVisible();
 
-      if (count > 1) {
-        expect(screen.getByRole("button", { name: "Ver detalle" })).toHaveAttribute(
-          "aria-expanded",
-          "false",
-        );
-        expect(screen.queryByText(`Se agregó nota-${count}.md.`)).not.toBeInTheDocument();
+      if (count > 5) {
+        expect(screen.queryByText(`nota-${count}.md`)).not.toBeInTheDocument();
       }
     });
   }
 
-  it("keeps truthful duplicate states available only after expanding import detail", async () => {
-    const importReport: MaterialsImportReport = {
+  it("keeps duplicate selection state local and visible after expanding", async () => {
+    const stagedReport: StagedAttachmentsReport = {
       items: [
-        { sourceName: "nueva.md", status: "added", materialId: "new" },
-        { sourceName: "previa.md", status: "duplicate", materialId: "old" },
-        { sourceName: "repetida.md", status: "duplicate_in_batch", materialId: "new" },
+        { sourceName: "nueva.md", status: "ready" },
+        { sourceName: "previa.md", status: "duplicate_in_selection" },
       ],
     };
     const { dropHandler } = mockDragDrop();
-    setupApi({ importReport });
+    setupApi({ stagedReport });
     render(<WorkspaceView project={makeProject()} {...baseProps} />);
     await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
     act(() => {
       dropHandler({ payload: { type: "drop", paths: ["/fake/nueva.md", "/fake/previa.md"] } });
     });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Ver detalle" })).toBeVisible());
-    expect(screen.queryByText("previa.md ya estaba en el proyecto.")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Ver detalle" }));
-    expect(screen.getByText("previa.md ya estaba en el proyecto.")).toBeInTheDocument();
-    expect(screen.getByText("repetida.md ya estaba en esta selección.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("previa.md · repetido en esta selección")).toBeVisible(),
+    );
+    expect(invokeMock.mock.calls.some((call) => call[0] === "materials_add_from_paths")).toBe(
+      false,
+    );
   });
 
-  it("does not attach dropped materials while the agent is working", async () => {
-    const droppedMaterial: MaterialView = {
-      id: "m9",
-      displayName: "rosco-data.txt",
-      originalFileName: "rosco-data.txt",
-      kind: "text",
-      byteSize: 128,
-      createdAt: "2026-08-28T15:05:00Z",
-    };
-    const importReport: MaterialsImportReport = {
-      items: [
-        {
-          sourceName: "rosco-data.txt",
-          status: "added",
-          materialId: "m9",
-          material: droppedMaterial,
-        },
-      ],
+  it("never persists dropped files while a turn is working", async () => {
+    const stagedReport: StagedAttachmentsReport = {
+      items: [{ sourceName: "rosco-data.txt", status: "ready" }],
     };
     const { dropHandler } = mockDragDrop();
-    setupApi({ importReport });
-    const { rerender } = render(
-      <WorkspaceView project={makeProject()} {...baseProps} agentPhase="working" />,
-    );
+    setupApi({ stagedReport });
+    render(<WorkspaceView project={makeProject()} {...baseProps} agentPhase="working" />);
 
     act(() => {
       dropHandler({ payload: { type: "drop", paths: ["/fake/rosco-data.txt"] } });
     });
 
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("materials_add_from_paths", {
-        projectId,
+      expect(invokeMock).toHaveBeenCalledWith("attachments_stage_paths", {
         paths: ["/fake/rosco-data.txt"],
       }),
     );
-
-    rerender(
-      <WorkspaceView
-        project={makeProject([droppedMaterial])}
-        {...baseProps}
-        agentPhase="working"
-      />,
+    expect(invokeMock.mock.calls.some((call) => call[0] === "materials_add_from_paths")).toBe(
+      false,
     );
-
-    expect(
-      screen.queryByRole("button", { name: `Quitar ${droppedMaterial.displayName}` }),
-    ).not.toBeInTheDocument();
   });
 
   it("shows the creating status while the agent is working", () => {
@@ -672,7 +609,7 @@ describe("WorkspaceView", () => {
 
     await waitFor(() => expect(screen.getByText(messages.assistant.starting)).toBeInTheDocument());
     expect(screen.queryByText(messages.error.aiUnavailable.title)).not.toBeInTheDocument();
-    expect(screen.queryByText("Hola")).toBeInTheDocument();
+    expect(screen.queryByText("Hola")).toBeNull();
   });
 
   it("shows a terminal ai_unavailable error when the backend has failed", () => {

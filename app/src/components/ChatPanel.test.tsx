@@ -72,18 +72,11 @@ describe("ChatPanel timeline", () => {
     expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
   });
 
-  it("renders unattached materials as user-side attachments, not as assistant output", () => {
+  it("does not render unattached durable materials as conversation history", () => {
     render(<ChatPanel {...base} />);
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(materials[0].displayName).closest(".message-user")).toBeTruthy();
-    expect(screen.getByText(materials[0].displayName).closest(".creation-card")).toBeNull();
-    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
-    expect(screen.queryByText(messages.assistant.emptyHint)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[0].displayName}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[1].displayName}` })).toBeNull();
+    expect(screen.getByText(messages.assistant.emptyHint)).toBeInTheDocument();
   });
 
   it("renders a user message with its text and role label", () => {
@@ -399,23 +392,13 @@ describe("ChatPanel timeline", () => {
     expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
   });
 
-  it("renders a pending user attachment inside the bubble and not as a standalone resource", () => {
-    render(
-      <ChatPanel
-        {...base}
-        materials={[materials[0]]}
-        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
-        messages={[]}
-      />,
-    );
-    expect(screen.getByText("Pendiente")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
+  it("does not render proposed attachments as history", () => {
+    render(<ChatPanel {...base} materials={[materials[0]]} messages={[]} />);
+    expect(screen.queryByText("Pendiente")).toBeNull();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[0].displayName}` })).toBeNull();
   });
 
-  it("still renders genuinely unattached materials as user-side attachments", () => {
+  it("keeps unattached durable materials out of both conversation sides", () => {
     render(
       <ChatPanel
         {...base}
@@ -432,33 +415,18 @@ describe("ChatPanel timeline", () => {
         ]}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[1].displayName}` }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(messages.timeline.resourceLabel)).not.toBeInTheDocument();
-    expect(screen.getByText(materials[0].displayName).closest(".creation-card")).toBeNull();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[0].displayName}` })).toBeNull();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[1].displayName}` })).toBeNull();
   });
 
-  it("renders a pending user message until it matches a persisted message", () => {
-    const { rerender } = render(
-      <ChatPanel
-        {...base}
-        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
-        messages={[]}
-      />,
-    );
-    expect(screen.getByText("Pendiente")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: `Abrir ${materials[0].displayName}` }),
-    ).toBeInTheDocument();
+  it("renders attachment cards only after a persisted user turn", () => {
+    const { rerender } = render(<ChatPanel {...base} messages={[]} />);
+    expect(screen.queryByText("Pendiente")).toBeNull();
+    expect(screen.queryByRole("button", { name: `Abrir ${materials[0].displayName}` })).toBeNull();
 
     rerender(
       <ChatPanel
         {...base}
-        pendingUser={{ text: "Pendiente", materialIds: ["m1"] }}
         messages={[
           {
             id: "msg-5",
@@ -473,7 +441,7 @@ describe("ChatPanel timeline", () => {
       />,
     );
     expect(screen.getByText("Pendiente")).toBeInTheDocument();
-    // The pending duplicate is suppressed; only the persisted message chip is rendered.
+    // The persisted turn is the only source of a right-side attachment card.
     const chips = screen.getAllByRole("button", { name: `Abrir ${materials[0].displayName}` });
     expect(chips.length).toBe(1);
   });

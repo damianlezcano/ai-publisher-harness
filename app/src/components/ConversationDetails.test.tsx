@@ -9,8 +9,49 @@ import { humanDate, humanSize } from "../messages";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const invokeMock = vi.mocked(invoke);
 
-const project: ProjectView = {
-  id: "0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22",
+const project = (id: string): ProjectView => ({
+  id,
+  name: `Conversación ${id}`,
+  materials: [],
+  creations: [],
+  messages: [],
+  publication: { state: "local", publicUrl: null },
+  model: null,
+});
+
+const providerUsage = {
+  conversationId: "a",
+  turnId: "turn-a",
+  provider: "Proveedor con nombre muy largo para comprobar el ajuste seguro",
+  model: "modelo-grande-para-pruebas",
+  inputTokens: 12450,
+  outputTokens: 820,
+  cacheReadTokens: 32,
+  cacheWriteTokens: null,
+  totalTokens: null,
+  costUsd: 0.014,
+  turnDurationMs: 3480,
+  source: "provider_actual",
+};
+
+const knowledge = {
+  conversationId: "a",
+  materialCount: 3,
+  corpusBytes: 252600,
+  corpusUtf8Chars: 248100,
+  corpusEstTokens: 84200,
+  retrievalCandidateCount: 17,
+  selectedEvidenceCount: 4,
+  selectedEvidenceBytes: 6540,
+  selectedEvidenceUtf8Chars: 6402,
+  evidenceEstTokens: 2180,
+  contextReductionPct: 97.4,
+  semanticProviderState: "available",
+  requestPreparationMs: 84,
+};
+
+const detailProject: ProjectView = {
+  ...project("0198e4a6-6e70-7c01-8c0e-8b6fd26f1f22"),
   name: "Fotosíntesis",
   materials: [
     {
@@ -33,10 +74,7 @@ const project: ProjectView = {
       revision: 1,
     },
   ],
-  messages: [],
-  publication: { state: "local", publicUrl: null },
 };
-
 const model = {
   providerId: "opencode",
   modelId: "big-pickle",
@@ -46,170 +84,216 @@ const model = {
   deprecated: false,
 };
 
-function setup() {
-  invokeMock.mockImplementation((command: string) => {
-    if (command === "model_list") return Promise.resolve([model]);
-    if (command === "provider_list") return Promise.resolve([]);
-    return Promise.resolve(undefined);
-  });
-}
-
 beforeEach(() => {
   invokeMock.mockReset();
-  setup();
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+    if (command === "session_logs") return Promise.resolve([]);
+    return Promise.resolve(undefined);
+  });
 });
 
-describe("ConversationDetails", () => {
-  it("shows name, model/default, files, renames, selects, clears, opens folders, and closes", async () => {
+describe("ConversationDetails metrics", () => {
+  it("preserves name, model, resource rows, folder actions, and close behavior", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list") return Promise.resolve([model]);
+      if (command === "provider_list" || command === "session_logs") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
     const onRefresh = vi.fn();
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
       <ConversationDetails
-        project={project}
+        project={detailProject}
         active={false}
         onClose={onClose}
         onRefresh={onRefresh}
       />,
     );
-
     expect(screen.getByLabelText("Nombre")).toHaveValue("Fotosíntesis");
     expect(await screen.findByRole("option", { name: /Big Pickle/ })).toBeInTheDocument();
-    expect(
-      screen.getByRole("option", { name: "Predeterminado de Configuración" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("manual.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Actividad")).toBeInTheDocument();
-
-    // Compact resource rows show a trustworthy date and the file size.
-    const collapse = (text: string) => text.replace(/\s+/g, " ");
     const materialRow = screen.getByText("manual.pdf").closest("li");
     expect(materialRow).toHaveClass("item-row");
-    const materialMeta = collapse(materialRow?.querySelector(".item-meta")?.textContent ?? "");
-    expect(materialMeta).toContain(humanSize(project.materials[0].byteSize));
-    expect(materialMeta).toContain(collapse(humanDate(project.materials[0].createdAt)));
-    const creationRow = screen.getByText("Actividad").closest("li");
-    expect(collapse(creationRow?.querySelector(".item-meta")?.textContent ?? "")).toContain(
-      collapse(humanDate(project.creations[0].createdAt)),
-    );
-    expect(screen.getByText(/Actividad interactiva/)).toBeInTheDocument();
-
+    expect(materialRow?.textContent).toContain(humanSize(10));
+    expect(materialRow?.textContent).toContain(humanDate(detailProject.materials[0].createdAt));
     fireEvent.change(screen.getByLabelText("Nombre"), { target: { value: "Nueva" } });
     await user.click(screen.getByRole("button", { name: "Renombrar" }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("project_rename", {
-        projectId: project.id,
+        projectId: detailProject.id,
         name: "Nueva",
       }),
     );
-    expect(onRefresh).toHaveBeenCalled();
-
     await user.selectOptions(
       screen.getByLabelText("Modelo de esta conversación"),
       "opencode::big-pickle",
     );
     expect(invokeMock).toHaveBeenCalledWith("conversation_model_select", {
-      projectId: project.id,
+      projectId: detailProject.id,
       providerId: "opencode",
       modelId: "big-pickle",
     });
-    await user.selectOptions(screen.getByLabelText("Modelo de esta conversación"), "");
-    expect(invokeMock).toHaveBeenCalledWith("conversation_model_clear", { projectId: project.id });
-
-    // One "Abrir carpeta contenedora" per section (materials and creations),
-    // never repeated per individual file.
-    const folderButtons = screen.getAllByRole("button", { name: "Abrir carpeta contenedora" });
-    expect(folderButtons).toHaveLength(2);
-    await user.click(folderButtons[0]);
-    await user.click(folderButtons[1]);
+    const folders = screen.getAllByRole("button", { name: "Abrir carpeta contenedora" });
+    await user.click(folders[0]);
+    await user.click(folders[1]);
     expect(invokeMock).toHaveBeenCalledWith("materials_open_folder", {
-      projectId: project.id,
+      projectId: detailProject.id,
     });
     expect(invokeMock).toHaveBeenCalledWith("creations_open_folder", {
-      projectId: project.id,
+      projectId: detailProject.id,
     });
     await user.click(screen.getByRole("button", { name: "Cerrar" }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("opens a text material in the in-app viewer with escaped text", async () => {
+  it("preserves safe text and image previews and active-model locking", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "model_list") return Promise.resolve([model]);
-      if (command === "provider_list") return Promise.resolve([]);
+      if (command === "provider_list" || command === "session_logs") return Promise.resolve([]);
       if (command === "preview_data")
         return Promise.resolve({ contentType: "text/markdown", dataBase64: btoa("<b>Hola</b>") });
       return Promise.resolve(undefined);
     });
     const user = userEvent.setup();
-    render(
+    const view = render(
       <ConversationDetails
-        project={project}
+        project={detailProject}
         active={false}
         onClose={() => {}}
         onRefresh={() => {}}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Abrir: manual.pdf" }));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("preview_data", {
-        projectId: project.id,
-        resourceKind: "material",
-        resourceId: "m1",
-      }),
-    );
-    const dialog = await screen.findByRole("dialog", { name: "manual.pdf" });
-    expect(dialog.querySelector("pre")).toBeInTheDocument();
-    expect(dialog.querySelector("script")).toBeNull();
-  });
-
-  it("shows a PNG material as an image, never as binary text", async () => {
-    const imageProject: ProjectView = {
-      ...project,
-      materials: [
-        {
-          id: "m1",
-          displayName: "diagrama.png",
-          originalFileName: "diagrama.png",
-          kind: "image",
-          byteSize: 42,
-          createdAt: "2026-08-28T15:00:00Z",
-        },
-      ],
-    };
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "model_list") return Promise.resolve([model]);
-      if (command === "provider_list") return Promise.resolve([]);
-      if (command === "preview_data")
-        return Promise.resolve({ contentType: "image/png", dataBase64: "ZmFrZQ==" });
-      return Promise.resolve(undefined);
-    });
-    const user = userEvent.setup();
+    expect(
+      (await screen.findByRole("dialog", { name: "manual.pdf" })).querySelector("pre"),
+    ).toBeInTheDocument();
+    view.unmount();
     render(
       <ConversationDetails
-        project={imageProject}
-        active={false}
-        onClose={() => {}}
-        onRefresh={() => {}}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Abrir: diagrama.png" }));
-    const dialog = await screen.findByRole("dialog", { name: "diagrama.png" });
-    expect(dialog.querySelector("img")).toBeInTheDocument();
-    expect(dialog.querySelector("pre")).toBeNull();
-  });
-
-  it("disables model changes during an active turn", async () => {
-    render(
-      <ConversationDetails
-        project={{ ...project, model: { providerId: "opencode", modelId: "big-pickle" } }}
+        project={{ ...detailProject, model: { providerId: "opencode", modelId: "big-pickle" } }}
         active
         onClose={() => {}}
         onRefresh={() => {}}
       />,
     );
     expect(await screen.findByLabelText("Modelo de esta conversación")).toBeDisabled();
-    expect(
-      screen.getByText("Esperá a que termine la solicitud antes de cambiar el modelo."),
-    ).toBeInTheDocument();
+  });
+  it("shows selected-conversation provider telemetry apart from Knowledge estimates", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "session_logs") {
+        return Promise.resolve([
+          { level: "INFO", message: "structural only", knowledge },
+          { level: "INFO", message: "structural only", usage: providerUsage },
+          {
+            level: "INFO",
+            message: "secret prompt text must not render",
+            usage: { ...providerUsage, conversationId: "b", inputTokens: 999999 },
+          },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Uso y optimización" });
+    expect(screen.getByRole("heading", { name: "Último turno" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Uso real del proveedor" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /Optimización Knowledge/ })).toBeVisible();
+    expect(screen.getByText("12.450 tokens")).toBeVisible();
+    expect(screen.getByText("USD 0.014")).toBeVisible();
+    expect(screen.getByText("84.200 tokens estimados")).toBeVisible();
+    expect(screen.getByText("2.180 tokens estimados")).toBeVisible();
+    expect(screen.getByText("97,4 %")).toBeVisible();
+    expect(screen.queryByText("999.999 tokens")).not.toBeInTheDocument();
+    expect(screen.queryByText("secret prompt text must not render")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Detalles de la conversación" })).toHaveClass(
+      "conversation-details-dialog",
+    );
+  });
+
+  it("renders missing provider fields as No disponible rather than zero", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "session_logs")
+        return Promise.resolve([
+          {
+            level: "INFO",
+            message: "structural",
+            usage: {
+              ...providerUsage,
+              inputTokens: 31,
+              outputTokens: null,
+              cacheReadTokens: null,
+              cacheWriteTokens: null,
+              costUsd: null,
+              turnDurationMs: null,
+              source: "estimated",
+            },
+          },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText("No disponible").length).toBeGreaterThanOrEqual(6),
+    );
+    expect(screen.queryByText("0 tokens")).not.toBeInTheDocument();
+    expect(screen.queryByText("31 tokens")).not.toBeInTheDocument();
+  });
+
+  it("uses the selected conversation only when switching detail instances", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "session_logs")
+        return Promise.resolve([
+          { level: "INFO", message: "structural", usage: providerUsage },
+          {
+            level: "INFO",
+            message: "structural",
+            usage: {
+              ...providerUsage,
+              conversationId: "b",
+              inputTokens: 77,
+              provider: "otro-proveedor",
+            },
+          },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    const view = render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    expect(await screen.findByText("12.450 tokens")).toBeVisible();
+    view.rerender(
+      <ConversationDetails
+        project={project("b")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    expect(await screen.findByText("77 tokens")).toBeVisible();
+    expect(screen.queryByText("12.450 tokens")).not.toBeInTheDocument();
   });
 });

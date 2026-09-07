@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { api, isAppError } from "../api";
+import { api, isAppError, type StagedImagePayload } from "../api";
 import { guidanceFromError } from "../guidance";
 import type { GuidanceActionKind } from "../guidance";
-import type { AgentPhase, BackendReadiness, MaterialImportResult, ProjectView } from "../types";
+import type {
+  AgentPhase,
+  BackendReadiness,
+  MaterialImportResult,
+  ProjectView,
+  StagedAttachmentView,
+} from "../types";
 import ChatPanel from "./ChatPanel";
 import ComposerBar from "./ComposerBar";
 import ShareControl from "./PublishPanel";
@@ -55,13 +61,12 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     onProviderError,
   } = props;
 
-  const [pendingUser, setPendingUser] = useState<{ text: string; materialIds: string[] } | null>(
-    null,
-  );
   const [sendError, setSendError] = useState<unknown | null>(null);
-  const [lastAttempt, setLastAttempt] = useState<{ text: string; materialIds: string[] } | null>(
-    null,
-  );
+  const [lastAttempt, setLastAttempt] = useState<{
+    text: string;
+    materialIds: string[];
+    stagedImages: StagedImagePayload[];
+  } | null>(null);
   const [materialError, setMaterialError] = useState<unknown | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [importDetails, setImportDetails] = useState<MaterialImportResult[] | null>(null);
@@ -69,7 +74,16 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [stagedAttachments, setStagedAttachments] = useState<Map<string, StagedAttachmentView>>(
+    new Map(),
+  );
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    if (agentPhase !== "working") return;
+    const timer = window.setInterval(() => void onRefresh(), 500);
+    return () => window.clearInterval(timer);
+  }, [agentPhase, onRefresh]);
 
   const importRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
@@ -93,35 +107,31 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       setImportDetails(null);
       setImportDetailsOpen(false);
       try {
-        const report = await api.materialsAddFromPaths(project.id, paths);
-        const added = report.items.filter((item) => item.status === "added").length;
-        const duplicate = report.items.filter(
-          (item) => item.status === "duplicate" || item.status === "duplicate_in_batch",
-        ).length;
+        const report = await api.attachmentsStagePaths(paths);
+        const acceptedPaths = paths.filter((_, index) => {
+          const status = report.items[index]?.status;
+          return status === "ready" || status === "duplicate_in_selection";
+        });
+        setAttachmentIds((previous) => [...new Set([...previous, ...acceptedPaths])]);
+        setStagedAttachments((previous) => {
+          const next = new Map(previous);
+          paths.forEach((path, index) => {
+            const item = report.items[index];
+            if (item) next.set(path, item);
+          });
+          return next;
+        });
         const failed = report.items.filter(
           (item) => item.status === "unsupported" || item.status === "failed",
         ).length;
-        setImportNotice(messages.material.importSummary(added, duplicate, failed));
-        if (report.items.length > 1) {
-          setImportDetails(report.items);
-        }
-        await onRefresh();
-        if (agentPhase !== "working") {
-          const addedIds = report.items
-            .filter((item) => item.status === "added")
-            .map((item) => item.materialId ?? item.material?.id)
-            .filter((id): id is string => id != null);
-          if (addedIds.length > 0) {
-            setAttachmentIds((prev) => [...new Set([...prev, ...addedIds])]);
-          }
-        }
+        if (failed > 0) setMaterialError({ code: "attachment_invalid", message: "" });
       } catch (err) {
         setMaterialError(err);
       } finally {
         setImporting(false);
       }
     };
-  }, [project.id, onRefresh, agentPhase]);
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -155,16 +165,26 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     }
   }, [agentPhase]);
 
-  async function send(text: string, attachmentIds: string[]) {
+  async function send(
+    text: string,
+    attachmentIds: string[],
+    stagedImages: StagedImagePayload[] = [],
+  ) {
     if (sendingRef.current || agentPhase === "working") return;
     sendingRef.current = true;
     onSendStart?.();
     setSendError(null);
-    setLastAttempt({ text, materialIds: attachmentIds });
-    setPendingUser({ text, materialIds: attachmentIds });
+    setLastAttempt({ text, materialIds: attachmentIds, stagedImages });
     try {
-      await api.agentSend(project.id, text, attachmentIds);
+      const stagedImageIds = new Set(stagedImages.map((image) => image.stagingId));
+      await api.agentSendStaged(
+        project.id,
+        text,
+        attachmentIds.filter((id) => !stagedImageIds.has(id)),
+        stagedImages,
+      );
       await onRefresh();
+      setStagedAttachments(new Map());
     } catch (err) {
       sendingRef.current = false;
       onSendEnd?.(project.id);
@@ -176,18 +196,20 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
         // avoids a false terminal error; if gating changes, restore the text to the
         // composer or auto-retry once the backend becomes ready.
       } else {
-        setPendingUser(null);
         setSendError(err);
         if (guidanceFromError(err).actions.includes("connect-ai")) {
           onProviderError();
         }
       }
+      // ComposerBar owns the staged selection. Reject so it only clears that
+      // local state once the accepted turn has actually been committed.
+      throw err;
     }
   }
 
   async function retrySend() {
     if (!lastAttempt) return;
-    await send(lastAttempt.text, lastAttempt.materialIds);
+    await send(lastAttempt.text, lastAttempt.materialIds, lastAttempt.stagedImages);
   }
 
   function handleSendErrorAction(kind: GuidanceActionKind) {
@@ -237,7 +259,6 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
           creations={project.creations}
           agentPhase={agentPhase}
           agentMessage={agentMessage}
-          pendingUser={pendingUser}
           onRefresh={onRefresh}
           share={{
             onShare: (creationId: string) => {
@@ -249,6 +270,25 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
             busy: share.busy === "publishing",
           }}
         />
+        {project.acceptedImport && (
+          <section className="import-progress" role="status" aria-live="polite">
+            <strong>Procesando {project.acceptedImport.total} archivos</strong>
+            <span>
+              Archivos preparados: {project.acceptedImport.copied} / {project.acceptedImport.total}
+            </span>
+            <span>
+              Indexación: {project.acceptedImport.lexicalCompleted} / {project.acceptedImport.total}
+            </span>
+            <span>
+              Embeddings: {project.acceptedImport.embeddingsCreated} creados ·{" "}
+              {project.acceptedImport.embeddingsReused} reutilizados
+            </span>
+            <span>Listos: {project.acceptedImport.embeddingCompleted}</span>
+            {project.acceptedImport.failed > 0 && (
+              <span>Errores: {project.acceptedImport.failed}</span>
+            )}
+          </section>
+        )}
         {importing && (
           <p className="notice import-result-status" role="status">
             <span className="spinner" aria-hidden="true" />
@@ -305,16 +345,22 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
 
       <div className="workspace-composer">
         <ComposerBar
-          projectId={project.id}
           materials={project.materials}
           agentPhase={agentPhase}
           aiUsable={aiUsable}
           onSend={send}
           onCancel={cancel}
           onOpenProvider={onOpenProvider}
-          onMaterialsChanged={() => void onRefresh()}
           attachmentIds={attachmentIds}
-          onAttachmentIdsChange={setAttachmentIds}
+          attachmentNames={stagedAttachments}
+          onAttachmentIdsChange={(ids) => {
+            setAttachmentIds(ids);
+            setStagedAttachments((previous) => {
+              const next = new Map(previous);
+              for (const path of previous.keys()) if (!ids.includes(path)) next.delete(path);
+              return next;
+            });
+          }}
           shareAction={
             <ShareControl
               projectId={project.id}

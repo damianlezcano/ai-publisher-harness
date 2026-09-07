@@ -7,9 +7,9 @@ import type {
   ConnectionTest,
   ConnectionView,
   CreationView,
-  MaterialAddImageView,
   MaterialView,
   MaterialsImportReport,
+  StagedAttachmentsReport,
   ModelSummary,
   OAuthAttempt,
   OAuthStatus,
@@ -24,6 +24,13 @@ import type {
   SessionLogEntry,
 } from "./types";
 
+export interface StagedImagePayload {
+  stagingId: string;
+  fileName: string;
+  contentType: string;
+  data: Uint8Array;
+}
+
 export const api = {
   projectList: () => invoke<ProjectSummary[]>("project_list"),
   projectCreate: (name: string) => invoke<ProjectSummary>("project_create", { name }),
@@ -33,15 +40,10 @@ export const api = {
   projectDelete: (projectId: string) => invoke<void>("project_delete", { projectId }),
   materialAddFromPath: (projectId: string, path: string) =>
     invoke<MaterialView>("material_add_from_path", { projectId, path }),
-  materialAddImage: (projectId: string, fileName: string, contentType: string, data: Uint8Array) =>
-    invoke<MaterialAddImageView>("material_add_image", {
-      projectId,
-      fileName,
-      contentType,
-      data: Array.from(data),
-    }),
   materialsAddFromPaths: (projectId: string, paths: string[]) =>
     invoke<MaterialsImportReport>("materials_add_from_paths", { projectId, paths }),
+  attachmentsStagePaths: (paths: string[]) =>
+    invoke<StagedAttachmentsReport>("attachments_stage_paths", { paths }),
   materialRemove: (projectId: string, materialId: string) =>
     invoke<void>("material_remove", { projectId, materialId }),
   materialOpen: (projectId: string, materialId: string) =>
@@ -70,6 +72,23 @@ export const api = {
     invoke<ProjectSummaryAnswerView>("summarize_project", { projectId }),
   agentSend: (projectId: string, prompt: string, attachmentIds: string[] = []) =>
     invoke<void>("agent_send", { projectId, prompt, attachmentIds }),
+  agentSendStaged: (
+    projectId: string,
+    prompt: string,
+    stagedPaths: string[],
+    stagedImages: StagedImagePayload[] = [],
+  ) => {
+    const args: {
+      projectId: string;
+      prompt: string;
+      stagedPaths: string[];
+      stagedImages?: Array<Omit<StagedImagePayload, "data"> & { data: number[] }>;
+    } = { projectId, prompt, stagedPaths };
+    if (stagedImages.length > 0) {
+      args.stagedImages = stagedImages.map((image) => ({ ...image, data: Array.from(image.data) }));
+    }
+    return invoke<void>("agent_send_staged", args);
+  },
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),
   publish: (projectId: string, creationId?: string | null) =>
     invoke<PublicationView>("publish", { projectId, creationId: creationId ?? null }),

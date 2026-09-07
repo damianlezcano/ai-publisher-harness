@@ -137,7 +137,7 @@ describe("ProviderPanel", () => {
     expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
   });
 
-  it("shows actual provider usage separately from Knowledge estimates", async () => {
+  it("keeps conversation usage and Knowledge metrics out of Configuración", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "provider_list") return Promise.resolve([]);
       if (cmd === "session_logs") {
@@ -176,13 +176,11 @@ describe("ProviderPanel", () => {
     render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
     await screen.findByRole("dialog", { name: "Configuración" });
     await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
-    expect(screen.getByRole("heading", { name: "Último turno" })).toBeVisible();
-    expect(screen.getByText("1.834 tokens")).toBeVisible();
-    expect(screen.getByText("USD 0.0018")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Knowledge" })).toBeVisible();
-    expect(screen.getByText("195.237 tokens")).toBeVisible();
-    expect(screen.getByText(/no un ahorro de facturación exacto/)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Último turno" })).not.toBeInTheDocument();
+    expect(screen.queryByText("1.834 tokens")).not.toBeInTheDocument();
+    expect(screen.queryByText("USD 0.0018")).not.toBeInTheDocument();
     expect(screen.queryByText("provider-id")).not.toBeInTheDocument();
+    expect(screen.getByText("Sin eventos todavía.")).toBeVisible();
   });
 
   it("keeps Configuración open and focused when switching tabs, and supports arrow keys", async () => {

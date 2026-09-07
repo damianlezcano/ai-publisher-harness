@@ -3,7 +3,7 @@
 .vscode/
 target/
 sidecars/
-components/
+/components/
 node_modules/
 dist/
 build/
