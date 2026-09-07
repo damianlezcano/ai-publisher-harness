@@ -69,12 +69,56 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentTask {
     pub id: String,
     pub status: TaskStatus,
     pub artifacts: Vec<Artifact>,
     pub message: Option<String>,
+    /// Provider telemetry observed from the completed OpenCode session. This
+    /// is never inferred from prompt text or Knowledge estimates.
+    pub usage: RemoteUsage,
+}
+
+/// Provider-independent accounting from the remote execution that already ran.
+/// Missing fields mean the backend did not report that value; they are never
+/// converted to zero.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub source: UsageSource,
+}
+
+impl Default for RemoteUsage {
+    fn default() -> Self {
+        Self {
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            total_tokens: None,
+            cost_usd: None,
+            source: UsageSource::Unavailable,
+        }
+    }
+}
+
+impl RemoteUsage {
+    pub fn available(&self) -> bool {
+        self.source != UsageSource::Unavailable
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageSource {
+    ProviderActual,
+    Estimated,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

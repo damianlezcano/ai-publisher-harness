@@ -6,7 +6,7 @@ use crate::AgentError;
 use crate::AgentResult;
 use crate::model::{
     AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact,
-    TaskStatus,
+    RemoteUsage, TaskStatus,
 };
 use crate::port::AgentEngine;
 
@@ -36,6 +36,7 @@ struct FakeAgentState {
     next_task_id: u64,
     files_at_open_session: Vec<String>,
     last_prompt_text: Option<String>,
+    usage: RemoteUsage,
 }
 
 impl Default for FakeAgentEngine {
@@ -58,6 +59,7 @@ impl FakeAgentEngine {
                 next_task_id: 1,
                 files_at_open_session: Vec::new(),
                 last_prompt_text: None,
+                usage: RemoteUsage::default(),
             })),
         }
     }
@@ -100,6 +102,10 @@ impl FakeAgentEngine {
 
     pub fn set_message(&self, message: String) {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).message = Some(message);
+    }
+
+    pub fn set_usage(&self, usage: RemoteUsage) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).usage = usage;
     }
 
     /// Workspace-relative file paths observed when `open_session` ran.
@@ -171,6 +177,7 @@ impl AgentEngine for FakeAgentEngine {
             status: TaskStatus::Completed,
             artifacts: state.artifacts.clone(),
             message: state.message.clone(),
+            usage: state.usage.clone(),
         };
         state.next_task_id += 1;
         Ok(task)

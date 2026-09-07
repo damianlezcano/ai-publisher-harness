@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use project_agent::model::{
     AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask,
 };
-use project_agent::{Artifact, ArtifactKind, FakeAgentEngine};
+use project_agent::{Artifact, ArtifactKind, FakeAgentEngine, RemoteUsage, UsageSource};
 use project_app::{AppState, ErrorCode};
 use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
 use project_tunnel::FakeTunnel;
@@ -110,6 +110,37 @@ fn project_lifecycle() {
     assert_eq!(renamed.name, "Sistema solar");
     app.delete_project(&p.id).expect("delete");
     assert!(app.list_projects().expect("list").is_empty());
+}
+
+#[test]
+fn completed_turn_logs_sanitized_actual_usage_without_prompt_content() {
+    project_app::session_log::clear();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let project = app.create_project("A").expect("project");
+    engine.set_message("Listo".into());
+    engine.set_usage(RemoteUsage {
+        input_tokens: Some(1834),
+        output_tokens: Some(426),
+        cache_read_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        total_tokens: Some(2260),
+        cost_usd: Some(0.0018),
+        source: UsageSource::ProviderActual,
+    });
+
+    app.send_message(&project.id, "PROMPT-PRIVATE-DO-NOT-LOG", &[])
+        .expect("send");
+    let usage = project_app::session_log::list()
+        .into_iter()
+        .find_map(|entry| entry.usage)
+        .expect("usage record");
+    assert_eq!(usage.conversation_id, project.id);
+    assert_eq!(usage.input_tokens, Some(1834));
+    assert_eq!(usage.total_tokens, Some(2260));
+    assert_eq!(usage.source, "provider_actual");
+    let rendered = format!("{usage:?}");
+    assert!(!rendered.contains("PROMPT-PRIVATE-DO-NOT-LOG"));
 }
 
 #[test]

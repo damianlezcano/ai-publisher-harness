@@ -101,6 +101,7 @@ impl CaptureSummarizer {
             text: serde_json::to_string(&content).unwrap(),
             model_id: Some("capture-model".to_owned()),
             provider_id: Some("capture-provider".to_owned()),
+            usage: project_knowledge::SummaryUsage::default(),
         }
     }
 }

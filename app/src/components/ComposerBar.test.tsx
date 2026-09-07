@@ -317,6 +317,25 @@ describe("ComposerBar", () => {
     expect(onAttachmentIdsChange).toHaveBeenCalledWith([]);
   });
 
+  it("keeps pending attachments when the turn is rejected before acceptance", async () => {
+    const onAttachmentIdsChange = vi.fn();
+    const rejected = vi.fn().mockRejectedValue({ code: "ai_unavailable" });
+    setupApiMock({ selected: selectedFreeModel });
+    render(
+      <ComposerBar
+        {...base}
+        onSend={rejected}
+        attachmentIds={["m1"]}
+        onAttachmentIdsChange={onAttachmentIdsChange}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "Reintentá");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(rejected).toHaveBeenCalledWith("Reintentá", ["m1"]));
+    expect(onAttachmentIdsChange).not.toHaveBeenCalledWith([]);
+    expect(screen.getByRole("button", { name: "Quitar diagrama.png" })).toBeInTheDocument();
+  });
+
   it("shows a plain-language error when adding a picked file is rejected", async () => {
     openDialogMock.mockResolvedValueOnce("/tmp/bad.exe");
     setupApiMock({
@@ -354,11 +373,11 @@ describe("ComposerBar", () => {
         onAttachmentIdsChange={() => {}}
       />,
     );
-    // Collapsed: the send button stays reachable, and only the first N chips
-    // plus a "51 archivos seleccionados · Ver todos" toggle are rendered.
+    // Collapsed: the send button stays reachable and a 51-file selection never
+    // becomes an inline wall of pending chips.
     expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
     expect(screen.getByText(/51 archivos seleccionados · Ver todos/)).toBeInTheDocument();
-    expect(screen.queryByText("nota-50.md")).not.toBeInTheDocument();
+    expect(screen.queryByText("nota-0.md")).not.toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", { name: /51 archivos seleccionados · Ver todos/ }),
@@ -366,5 +385,32 @@ describe("ComposerBar", () => {
     expect(screen.getByText("nota-50.md")).toBeInTheDocument();
     // Expanding flips the toggle to "Ver menos".
     expect(screen.getByRole("button", { name: "Ver menos" })).toBeInTheDocument();
+  });
+
+  it.each([1, 5, 6, 16, 51, 100])("keeps a %i-file pending selection bounded", (count) => {
+    setupApiMock({ selected: selectedFreeModel });
+    const ids = Array.from({ length: count }, (_, i) => `m${i}`);
+    render(
+      <ComposerBar
+        {...base}
+        materials={ids.map((id) => ({
+          id,
+          displayName: `${id}.txt`,
+          originalFileName: `${id}.txt`,
+          kind: "text",
+          byteSize: 1,
+          createdAt: "2026-08-28T15:00:00Z",
+        }))}
+        attachmentIds={ids}
+        onAttachmentIdsChange={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
+    if (count <= 5) {
+      expect(screen.getByText("m0.txt")).toBeInTheDocument();
+    } else {
+      expect(screen.getByText(`${count} archivos seleccionados · Ver todos`)).toBeInTheDocument();
+      expect(screen.queryByText("m0.txt")).not.toBeInTheDocument();
+    }
   });
 });

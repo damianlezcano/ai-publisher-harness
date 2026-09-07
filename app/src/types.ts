@@ -180,6 +180,29 @@ export interface SelectedModelView {
 export interface SessionLogEntry {
   level: "ERROR" | "WARN" | "INFO" | "DEBUG" | string;
   message: string;
+  usage?: SessionUsage | null;
+  knowledge?: SessionKnowledgeMetrics | null;
+}
+
+export interface SessionUsage {
+  conversationId: string;
+  turnId: string;
+  provider: string;
+  model: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+  source: "provider_actual" | "estimated" | "unavailable" | string;
+}
+
+export interface SessionKnowledgeMetrics {
+  conversationId: string;
+  corpusEstTokens: number;
+  evidenceEstTokens: number;
+  contextReductionPct: number;
 }
 
 export interface SummarizationReportView {
@@ -190,6 +213,12 @@ export interface SummarizationReportView {
   regenerated: number;
   sourceCount: number;
   hierarchyDepth: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  costUsd?: number | null;
+  providerUsageActual?: boolean;
 }
 
 export interface ProjectSummaryAnswerView {

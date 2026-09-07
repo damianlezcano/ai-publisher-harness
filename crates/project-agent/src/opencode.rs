@@ -13,7 +13,7 @@ use crate::AgentResult;
 use crate::error::AgentError;
 use crate::model::{
     AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact,
-    TaskStatus, artifact_kind_from_path,
+    RemoteUsage, TaskStatus, UsageSource, artifact_kind_from_path,
 };
 use crate::port::AgentEngine;
 
@@ -201,6 +201,118 @@ impl OpenCodeAgentEngine {
             .map_err(|err| AgentError::Http(format!("malformed diff JSON: {err}")))?;
         Ok(artifacts_from_diff(&value))
     }
+
+    /// Reads already-produced session metadata from the local OpenCode server.
+    /// This is not another model invocation. OpenCode reports cumulative values
+    /// for a reused session, so callers take a before/after delta per turn.
+    fn fetch_session_usage(&self, session_id: &str) -> AgentResult<UsageSnapshot> {
+        let path = format!("/session/{session_id}");
+        let (status, body) = self.backend.get(&path).map_err(map_backend_error)?;
+        if !(200..300).contains(&status) {
+            return Err(AgentError::Http(format!("session usage status {status}")));
+        }
+        let value: Value = serde_json::from_str(&body)
+            .map_err(|err| AgentError::Http(format!("malformed session usage JSON: {err}")))?;
+        Ok(UsageSnapshot::from_session(&value))
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct UsageSnapshot {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+}
+
+impl UsageSnapshot {
+    fn from_session(value: &Value) -> Self {
+        let tokens = value.get("tokens");
+        Self {
+            input_tokens: json_u64(tokens.and_then(|v| v.get("input"))),
+            output_tokens: json_u64(tokens.and_then(|v| v.get("output"))),
+            cache_read_tokens: json_u64(
+                tokens
+                    .and_then(|v| v.get("cache"))
+                    .and_then(|v| v.get("read")),
+            ),
+            cache_write_tokens: json_u64(
+                tokens
+                    .and_then(|v| v.get("cache"))
+                    .and_then(|v| v.get("write")),
+            ),
+            total_tokens: json_u64(tokens.and_then(|v| v.get("total"))),
+            cost_usd: json_f64(value.get("cost")),
+        }
+    }
+
+    fn delta_after(&self, before: Option<&Self>) -> RemoteUsage {
+        let delta = |after: Option<u64>, before: Option<u64>| match (after, before) {
+            (Some(after), Some(before)) if after >= before => Some(after - before),
+            (Some(after), None) => Some(after),
+            _ => None,
+        };
+        let delta_cost = |after: Option<f64>, before: Option<f64>| match (after, before) {
+            (Some(after), Some(before)) if after >= before => Some(after - before),
+            (Some(after), None) => Some(after),
+            _ => None,
+        };
+        let input_tokens = delta(self.input_tokens, before.and_then(|v| v.input_tokens));
+        let output_tokens = delta(self.output_tokens, before.and_then(|v| v.output_tokens));
+        let cache_read_tokens = delta(
+            self.cache_read_tokens,
+            before.and_then(|v| v.cache_read_tokens),
+        );
+        let cache_write_tokens = delta(
+            self.cache_write_tokens,
+            before.and_then(|v| v.cache_write_tokens),
+        );
+        let reported_total = delta(self.total_tokens, before.and_then(|v| v.total_tokens));
+        let total_tokens = reported_total.or_else(|| {
+            match (
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+            ) {
+                (Some(input), Some(output), Some(cache_read), Some(cache_write)) => input
+                    .checked_add(output)
+                    .and_then(|total| total.checked_add(cache_read))
+                    .and_then(|total| total.checked_add(cache_write)),
+                _ => None,
+            }
+        });
+        let cost_usd = delta_cost(self.cost_usd, before.and_then(|v| v.cost_usd));
+        let available = input_tokens.is_some()
+            || output_tokens.is_some()
+            || cache_read_tokens.is_some()
+            || cache_write_tokens.is_some()
+            || total_tokens.is_some()
+            || cost_usd.is_some();
+        RemoteUsage {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            total_tokens,
+            cost_usd,
+            source: if available {
+                UsageSource::ProviderActual
+            } else {
+                UsageSource::Unavailable
+            },
+        }
+    }
+}
+
+fn json_u64(value: Option<&Value>) -> Option<u64> {
+    value.and_then(Value::as_u64)
+}
+
+fn json_f64(value: Option<&Value>) -> Option<f64> {
+    value.and_then(Value::as_f64)
 }
 
 impl AgentEngine for OpenCodeAgentEngine {
@@ -280,6 +392,7 @@ impl AgentEngine for OpenCodeAgentEngine {
             }
             let before_messages = self.fetch_message_list(&session.id)?;
             let before_assistant_count = assistant_message_count(&before_messages);
+            let usage_before = self.fetch_session_usage(&session.id).ok();
             let before_message_ids: std::collections::HashSet<String> = before_messages
                 .iter()
                 .filter_map(message_id)
@@ -331,6 +444,10 @@ impl AgentEngine for OpenCodeAgentEngine {
                         status: TaskStatus::Completed,
                         artifacts,
                         message,
+                        usage: self
+                            .fetch_session_usage(&session.id)
+                            .map(|after| after.delta_after(usage_before.as_ref()))
+                            .unwrap_or_default(),
                     })
                 }
                 Err(err @ AgentError::TaskFailed(_)) => {

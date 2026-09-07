@@ -125,6 +125,11 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
             .and_then(Value::as_str)
             .ok_or(SummaryFailure::ExecutionFailed)?
             .to_owned();
+        // OpenCode session metadata is local bookkeeping for this exact
+        // execution, not an additional provider/model request. The session may
+        // be reused by neither K6 nor any chat turn, but use a delta anyway to
+        // preserve the accounting contract.
+        let usage_before = session_usage(&self.backend, &session_id);
 
         let body = json!({ "parts": [{ "type": "text", "text": prompt }] });
         let prompt_path = format!("/session/{session_id}/prompt_async");
@@ -153,6 +158,9 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
                     text,
                     model_id: None,
                     provider_id: None,
+                    usage: session_usage(&self.backend, &session_id)
+                        .map(|after| usage_delta(usage_before.as_ref(), &after))
+                        .unwrap_or_default(),
                 });
             }
             if Instant::now() >= deadline {
@@ -160,6 +168,86 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
             }
             thread::sleep(STATUS_POLL_INTERVAL);
         }
+    }
+}
+
+fn session_usage(
+    backend: &OpenCodeBackend,
+    session_id: &str,
+) -> Option<project_knowledge::SummaryUsage> {
+    let (status, body) = backend.get(&format!("/session/{session_id}")).ok()?;
+    if !(200..300).contains(&status) {
+        return None;
+    }
+    let value: Value = serde_json::from_str(&body).ok()?;
+    let tokens = value.get("tokens");
+    let input_tokens = tokens.and_then(|v| v.get("input")).and_then(Value::as_u64);
+    let output_tokens = tokens.and_then(|v| v.get("output")).and_then(Value::as_u64);
+    let cache_read_tokens = tokens
+        .and_then(|v| v.get("cache"))
+        .and_then(|v| v.get("read"))
+        .and_then(Value::as_u64);
+    let cache_write_tokens = tokens
+        .and_then(|v| v.get("cache"))
+        .and_then(|v| v.get("write"))
+        .and_then(Value::as_u64);
+    let cost_usd = value.get("cost").and_then(Value::as_f64);
+    let provider_actual = input_tokens.is_some()
+        || output_tokens.is_some()
+        || cache_read_tokens.is_some()
+        || cache_write_tokens.is_some()
+        || cost_usd.is_some();
+    Some(project_knowledge::SummaryUsage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        cost_usd,
+        provider_actual,
+    })
+}
+
+fn usage_delta(
+    before: Option<&project_knowledge::SummaryUsage>,
+    after: &project_knowledge::SummaryUsage,
+) -> project_knowledge::SummaryUsage {
+    let delta = |after: Option<u64>, before: Option<u64>| match (after, before) {
+        (Some(after), Some(before)) if after >= before => Some(after - before),
+        (Some(after), None) => Some(after),
+        _ => None,
+    };
+    let cost = match (after.cost_usd, before.and_then(|value| value.cost_usd)) {
+        (Some(after), Some(before)) if after >= before => Some(after - before),
+        (Some(after), None) => Some(after),
+        _ => None,
+    };
+    let input_tokens = delta(
+        after.input_tokens,
+        before.and_then(|value| value.input_tokens),
+    );
+    let output_tokens = delta(
+        after.output_tokens,
+        before.and_then(|value| value.output_tokens),
+    );
+    let cache_read_tokens = delta(
+        after.cache_read_tokens,
+        before.and_then(|value| value.cache_read_tokens),
+    );
+    let cache_write_tokens = delta(
+        after.cache_write_tokens,
+        before.and_then(|value| value.cache_write_tokens),
+    );
+    project_knowledge::SummaryUsage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        cost_usd: cost,
+        provider_actual: input_tokens.is_some()
+            || output_tokens.is_some()
+            || cache_read_tokens.is_some()
+            || cache_write_tokens.is_some()
+            || cost.is_some(),
     }
 }
 
@@ -253,5 +341,32 @@ mod tests {
             "resumime qué dijo Carla en la última reunión"
         ));
         assert!(!detect_summarize_intent(""));
+    }
+
+    #[test]
+    fn usage_delta_keeps_provider_telemetry_separate_from_estimated_units() {
+        let before = project_knowledge::SummaryUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cache_read_tokens: Some(5),
+            cache_write_tokens: Some(1),
+            cost_usd: Some(0.01),
+            provider_actual: true,
+        };
+        let after = project_knowledge::SummaryUsage {
+            input_tokens: Some(1834),
+            output_tokens: Some(446),
+            cache_read_tokens: Some(5),
+            cache_write_tokens: Some(7),
+            cost_usd: Some(0.018),
+            provider_actual: true,
+        };
+        let delta = usage_delta(Some(&before), &after);
+        assert_eq!(delta.input_tokens, Some(1734));
+        assert_eq!(delta.output_tokens, Some(426));
+        assert_eq!(delta.cache_read_tokens, Some(0));
+        assert_eq!(delta.cache_write_tokens, Some(6));
+        assert!(delta.provider_actual);
+        assert!((delta.cost_usd.expect("cost") - 0.008).abs() < f64::EPSILON);
     }
 }

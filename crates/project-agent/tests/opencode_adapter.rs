@@ -8,7 +8,7 @@ use fake_opencode_server::FakeServer;
 use project_agent::model::{
     AgentProject, AgentPrompt, AgentStatus, ArtifactKind, ModelRef, TaskStatus,
 };
-use project_agent::{AgentEngine, AgentError, OpenCodeAgentEngine};
+use project_agent::{AgentEngine, AgentError, OpenCodeAgentEngine, UsageSource};
 use serde_json::json;
 
 fn engine_for(server: &FakeServer) -> OpenCodeAgentEngine {
@@ -40,6 +40,43 @@ fn prompt() -> AgentPrompt {
 
 fn web_doc_diff() -> &'static str {
     r#"[{"path":"workspace/index.html","byte_size":12,"sha256":"abc"},{"path":"workspace/guide.docx","byte_size":24},{"path":"inputs/secret.txt","byte_size":1}]"#
+}
+
+#[test]
+fn completed_turn_surfaces_actual_session_usage_delta() {
+    let server = FakeServer::start();
+    server.set_session_details_sequence(&[
+        r#"{"id":"ses-1","cost":0.01,"tokens":{"input":100,"output":20,"cache":{"read":5,"write":2}}}"#,
+        r#"{"id":"ses-1","cost":0.018,"tokens":{"input":1834,"output":446,"cache":{"read":5,"write":7}}}"#,
+    ]);
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("completed task");
+
+    assert_eq!(task.usage.source, UsageSource::ProviderActual);
+    assert_eq!(task.usage.input_tokens, Some(1734));
+    assert_eq!(task.usage.output_tokens, Some(426));
+    assert_eq!(task.usage.cache_read_tokens, Some(0));
+    assert_eq!(task.usage.cache_write_tokens, Some(5));
+    assert_eq!(task.usage.total_tokens, Some(2165));
+    assert!(
+        (task.usage.cost_usd.expect("reported cost") - 0.008).abs() < f64::EPSILON,
+        "cost delta must preserve provider-reported arithmetic"
+    );
+}
+
+#[test]
+fn missing_session_usage_stays_unavailable_not_zero() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    let task = engine.send(&session, &prompt()).expect("completed task");
+    assert_eq!(task.usage.source, UsageSource::Unavailable);
+    assert_eq!(task.usage.input_tokens, None);
+    assert_eq!(task.usage.total_tokens, None);
+    assert_eq!(task.usage.cost_usd, None);
 }
 
 #[test]

@@ -24,7 +24,7 @@ pub use ort_provider::{
 pub use summary::{
     BatchOptions, RemoteSummarizer, SUMMARY_CONTRACT_VERSION, SummaryAccounting, SummaryContent,
     SummaryEvidenceRef, SummaryFailure, SummaryItem, SummaryLevel, SummaryNode, SummaryOutput,
-    SummaryPlan, SummaryRequest, SummaryState, build_document_summary_request,
+    SummaryPlan, SummaryRequest, SummaryState, SummaryUsage, build_document_summary_request,
     build_synthesis_request, deserialize_content, fingerprint_output, fingerprint_summary_inputs,
     plan_project_summaries, select_document_evidence, serialize_content, validate_summary_output,
 };

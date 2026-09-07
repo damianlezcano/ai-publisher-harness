@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, RefObject } from "react";
 import { api, errorMessage } from "../../api";
-import type { ProviderSummary, SessionLogEntry } from "../../types";
+import type {
+  ProviderSummary,
+  SessionKnowledgeMetrics,
+  SessionLogEntry,
+  SessionUsage,
+} from "../../types";
 import ProviderCard from "./ProviderCard";
 import Dialog from "../ui/Dialog";
 import { messages } from "../../messages";
@@ -9,6 +14,88 @@ import { messages } from "../../messages";
 type SettingsTab = "general" | "logs";
 
 const TAB_ORDER: SettingsTab[] = ["general", "logs"];
+
+function latest<T>(
+  logs: SessionLogEntry[],
+  select: (entry: SessionLogEntry) => T | null | undefined,
+): T | null {
+  for (let index = logs.length - 1; index >= 0; index--) {
+    const value = select(logs[index]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function tokenCount(value: number | null): string {
+  return value == null
+    ? "No informado por el proveedor"
+    : `${value.toLocaleString("es-AR")} tokens`;
+}
+
+function cost(value: number | null): string {
+  return value == null
+    ? "No informado por el proveedor"
+    : `USD ${value.toLocaleString("en-US", { maximumFractionDigits: 6 })}`;
+}
+
+function UsageSummary({ usage }: { usage: SessionUsage | null }) {
+  return (
+    <section className="session-usage-summary" aria-label="Último turno">
+      <h4>Último turno</h4>
+      <dl>
+        <div>
+          <dt>Entrada LLM</dt>
+          <dd>{usage ? tokenCount(usage.inputTokens) : "No informado por el proveedor"}</dd>
+        </div>
+        <div>
+          <dt>Salida LLM</dt>
+          <dd>{usage ? tokenCount(usage.outputTokens) : "No informado por el proveedor"}</dd>
+        </div>
+        <div>
+          <dt>Cache</dt>
+          <dd>
+            {usage
+              ? `${tokenCount(usage.cacheReadTokens)} lectura · ${tokenCount(usage.cacheWriteTokens)} escritura`
+              : "No informado por el proveedor"}
+          </dd>
+        </div>
+        <div>
+          <dt>Total</dt>
+          <dd>{usage ? tokenCount(usage.totalTokens) : "No informado por el proveedor"}</dd>
+        </div>
+        <div>
+          <dt>Costo informado</dt>
+          <dd>{usage ? cost(usage.costUsd) : "No informado por el proveedor"}</dd>
+        </div>
+      </dl>
+      {usage?.source === "estimated" && <p className="muted">Uso remoto estimado.</p>}
+    </section>
+  );
+}
+
+function KnowledgeSummary({ knowledge }: { knowledge: SessionKnowledgeMetrics | null }) {
+  if (!knowledge) return null;
+  return (
+    <section className="session-usage-summary" aria-label="Knowledge">
+      <h4>Knowledge</h4>
+      <dl>
+        <div>
+          <dt>Corpus original estimado</dt>
+          <dd>{knowledge.corpusEstTokens.toLocaleString("es-AR")} tokens</dd>
+        </div>
+        <div>
+          <dt>Evidencia enviada estimada</dt>
+          <dd>{knowledge.evidenceEstTokens.toLocaleString("es-AR")} tokens</dd>
+        </div>
+        <div>
+          <dt>Reducción estimada de contexto</dt>
+          <dd>{knowledge.contextReductionPct.toLocaleString("es-AR")} %</dd>
+        </div>
+      </dl>
+      <p className="muted">Es una estimación de contexto, no un ahorro de facturación exacto.</p>
+    </section>
+  );
+}
 
 interface ProviderPanelProps {
   onClose: () => void;
@@ -61,6 +148,8 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
   const filteredOthers = others.filter((p) =>
     p.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
+  const latestUsage = latest(logs, (entry) => entry.usage);
+  const latestKnowledge = latest(logs, (entry) => entry.knowledge);
 
   const changed = () => {
     onChanged();
@@ -225,6 +314,8 @@ export default function ProviderPanel({ onClose, onChanged }: ProviderPanelProps
         <section className="provider-section" aria-label={messages.sessionLogs.heading}>
           <h3>{messages.sessionLogs.heading}</h3>
           <p className="muted">{messages.sessionLogs.description}</p>
+          <UsageSummary usage={latestUsage} />
+          <KnowledgeSummary knowledge={latestKnowledge} />
           <div className="row-actions">
             <button type="button" className="secondary" onClick={() => void clearLogs()}>
               {messages.sessionLogs.clear}

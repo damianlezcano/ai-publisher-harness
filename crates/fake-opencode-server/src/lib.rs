@@ -26,6 +26,8 @@ pub struct Script {
     pub health_delay: Duration,
     pub session_status: u16,
     pub session_body: String,
+    pub session_details_sequence: Vec<String>,
+    pub session_details_index: usize,
     pub last_directory: Option<String>,
     pub last_permission: Option<Value>,
     pub last_session_id: String,
@@ -283,6 +285,8 @@ impl Default for Script {
             health_delay: Duration::ZERO,
             session_status: 200,
             session_body: r#"{"id":"ses-1"}"#.into(),
+            session_details_sequence: Vec::new(),
+            session_details_index: 0,
             last_directory: None,
             last_permission: None,
             last_session_id: "ses-1".into(),
@@ -373,6 +377,14 @@ impl FakeServer {
     pub fn set_session_id(&self, id: &str) {
         self.script().session_body = format!(r#"{{"id":"{id}"}}"#);
         self.script().last_session_id = id.to_owned();
+    }
+
+    /// Configure successive `GET /session/{id}` metadata responses. This
+    /// models OpenCode's cumulative per-session usage without calling a model.
+    pub fn set_session_details_sequence(&self, bodies: &[&str]) {
+        let mut script = self.script();
+        script.session_details_sequence = bodies.iter().map(|body| (*body).to_owned()).collect();
+        script.session_details_index = 0;
     }
 
     pub fn fail_session(&self) {
@@ -920,9 +932,18 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         && !id.contains('/')
     {
         state.last_session_id = id.to_owned();
-        let body = format!(
-            r#"{{"id":"{id}","slug":"fake","projectID":"proj-fake","directory":"/tmp/fake","path":"","cost":0,"tokens":{{"input":0,"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}},"title":"Fake session","version":"1.18.25","time":{{"created":0,"updated":0}}}}"#
-        );
+        let body = if state.session_details_sequence.is_empty() {
+            format!(r#"{{"id":"{id}"}}"#)
+        } else {
+            let index = state
+                .session_details_index
+                .min(state.session_details_sequence.len() - 1);
+            let body = state.session_details_sequence[index].clone();
+            if state.session_details_index + 1 < state.session_details_sequence.len() {
+                state.session_details_index += 1;
+            }
+            body
+        };
         drop(state);
         write_response(&mut stream, 200, body.as_bytes());
         return;

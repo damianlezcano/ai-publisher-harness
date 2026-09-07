@@ -14,7 +14,7 @@ use project_agent::model::{ModelRef, TaskStatus};
 use project_agent::{
     AgentAttachment, AgentEngine, AgentEvidenceProvenance, AgentKnowledgeContext,
     AgentKnowledgeEntry, AgentPrompt, AgentRequest, AgentRunResult, AgentService, AgentStatus,
-    FilesystemCreationRegistrar, OpenCodeAgentEngine,
+    FilesystemCreationRegistrar, OpenCodeAgentEngine, RemoteUsage, UsageSource,
 };
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
@@ -1053,8 +1053,13 @@ where
             let saved = naive_corpus_est_tokens.saturating_sub(evidence_est_tokens);
             saved * 100 / naive_corpus_est_tokens
         };
-        crate::session_log::record(
-            "INFO",
+        crate::session_log::record_knowledge(
+            crate::session_log::SessionKnowledgeMetrics {
+                conversation_id: project_id.as_str().to_owned(),
+                corpus_est_tokens: naive_corpus_est_tokens,
+                evidence_est_tokens,
+                context_reduction_pct: context_reduction_pct_vs_naive_corpus,
+            },
             format!(
                 "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
                 if metrics.semantic_availability
@@ -1367,12 +1372,37 @@ where
             crate::session_log::record(
                 "INFO",
                 format!(
-                    "summary turn terminal conversation_id={} turn_id={} status=completed documents=0 summary_nodes_reused={} summary_cache_hits={} remote_summary_calls={} estimated_input_units={} duration_ms={}",
+                    "summary turn terminal conversation_id={} turn_id={} status=completed documents=0 summary_nodes_reused={} summary_cache_hits={} remote_summary_calls={} input_tokens={} output_tokens={} cache_read_tokens={} cache_write_tokens={} cost_usd={} estimated_input_units={} duration_ms={}",
                     project_id,
                     turn_id.as_deref().unwrap_or("none"),
                     answer.report.reused,
                     answer.report.cache_hits,
                     answer.report.remote_calls,
+                    answer
+                        .report
+                        .input_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unavailable".to_owned()),
+                    answer
+                        .report
+                        .output_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unavailable".to_owned()),
+                    answer
+                        .report
+                        .cache_read_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unavailable".to_owned()),
+                    answer
+                        .report
+                        .cache_write_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unavailable".to_owned()),
+                    answer
+                        .report
+                        .cost_usd
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unavailable".to_owned()),
                     answer.report.estimated_input_units,
                     started.elapsed().as_millis()
                 ),
@@ -1392,7 +1422,7 @@ where
         crate::session_log::record(
             "INFO",
             format!(
-                "summary turn terminal conversation_id={} turn_id={} status=completed documents={} summary_nodes_reused={} summary_cache_hits={} summary_nodes_generated={} remote_summary_calls={} hierarchy_depth={} estimated_input_units={} naive_corpus_est_tokens={} estimated_reduction_pct_vs_naive_full_corpus={} duration_ms={}",
+                "summary turn terminal conversation_id={} turn_id={} status=completed documents={} summary_nodes_reused={} summary_cache_hits={} summary_nodes_generated={} remote_summary_calls={} input_tokens={} output_tokens={} cache_read_tokens={} cache_write_tokens={} cost_usd={} hierarchy_depth={} estimated_input_units={} naive_corpus_est_tokens={} estimated_reduction_pct_vs_naive_full_corpus={} duration_ms={}",
                 project_id,
                 turn_id.as_deref().unwrap_or("none"),
                 answer.report.source_count,
@@ -1400,6 +1430,31 @@ where
                 answer.report.cache_hits,
                 answer.report.regenerated,
                 answer.report.remote_calls,
+                answer
+                    .report
+                    .input_tokens
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                answer
+                    .report
+                    .output_tokens
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                answer
+                    .report
+                    .cache_read_tokens
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                answer
+                    .report
+                    .cache_write_tokens
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                answer
+                    .report
+                    .cost_usd
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
                 answer.report.hierarchy_depth,
                 answer.report.estimated_input_units,
                 answer.naive_corpus_est_tokens,
@@ -1454,8 +1509,8 @@ where
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
-        let model = inputs
-            .model
+        let model_ref = inputs.model.clone();
+        let model = model_ref
             .as_ref()
             .map(|model| format!("{}/{}", model.provider_id, model.model_id))
             .unwrap_or_else(|| "default".to_owned());
@@ -1470,6 +1525,12 @@ where
         );
         match self.run_agent_with_inputs(inputs) {
             Ok(result) => {
+                record_turn_usage(
+                    project_id.as_str(),
+                    turn_id.as_deref(),
+                    model_ref.as_ref(),
+                    &result.task.usage,
+                );
                 let creation_ids: Vec<CreationId> = result
                     .registered
                     .iter()
@@ -2240,6 +2301,12 @@ where
                 regenerated: 0,
                 source_count: 0,
                 hierarchy_depth: 0,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cost_usd: None,
+                provider_usage_actual: false,
             });
         }
         let mut store = KnowledgeStore::open(&root, &pid)
@@ -2256,6 +2323,12 @@ where
                 regenerated: 0,
                 source_count: 0,
                 hierarchy_depth: 0,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cost_usd: None,
+                provider_usage_actual: false,
             });
         }
         let existing = store
@@ -2299,6 +2372,12 @@ where
             regenerated: accounting.regenerated,
             source_count: accounting.source_count,
             hierarchy_depth: accounting.hierarchy_depth,
+            input_tokens: accounting.input_tokens,
+            output_tokens: accounting.output_tokens,
+            cache_read_tokens: accounting.cache_read_tokens,
+            cache_write_tokens: accounting.cache_write_tokens,
+            cost_usd: accounting.cost_usd,
+            provider_usage_actual: accounting.provider_usage_actual,
         })
     }
 
@@ -2337,6 +2416,12 @@ where
                 regenerated: 0,
                 source_count: 0,
                 hierarchy_depth: 0,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cost_usd: None,
+                provider_usage_actual: false,
             });
         };
         let existing = store
@@ -2375,6 +2460,12 @@ where
             regenerated: accounting.regenerated,
             source_count: accounting.source_count,
             hierarchy_depth: accounting.hierarchy_depth,
+            input_tokens: accounting.input_tokens,
+            output_tokens: accounting.output_tokens,
+            cache_read_tokens: accounting.cache_read_tokens,
+            cache_write_tokens: accounting.cache_write_tokens,
+            cost_usd: accounting.cost_usd,
+            provider_usage_actual: accounting.provider_usage_actual,
         })
     }
 
@@ -2410,6 +2501,7 @@ where
                 );
                 accounting.estimated_input_units += request.estimated_input_units;
                 let output = summarizer.summarize(&request)?;
+                accounting.add_provider_usage(&output.usage);
                 accounting.remote_calls += 1;
                 let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
                 let mut ready = node.clone();
@@ -2453,6 +2545,7 @@ where
                 let request = project_knowledge::build_synthesis_request(&children, node.level);
                 accounting.estimated_input_units += request.estimated_input_units;
                 let output = summarizer.summarize(&request)?;
+                accounting.add_provider_usage(&output.usage);
                 accounting.remote_calls += 1;
                 let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
                 let mut ready = node.clone();
@@ -2953,6 +3046,35 @@ fn sha256_hex(data: &[u8]) -> String {
         hex.push_str(&format!("{b:02x}"));
     }
     hex
+}
+
+fn record_turn_usage(
+    conversation_id: &str,
+    turn_id: Option<&str>,
+    model: Option<&ModelRef>,
+    usage: &RemoteUsage,
+) {
+    let (provider, model) = model
+        .map(|model| (model.provider_id.clone(), model.model_id.clone()))
+        .unwrap_or_else(|| ("unavailable".to_owned(), "unavailable".to_owned()));
+    crate::session_log::record_usage(crate::session_log::SessionUsage {
+        conversation_id: conversation_id.to_owned(),
+        turn_id: turn_id.unwrap_or("unavailable").to_owned(),
+        provider,
+        model,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        total_tokens: usage.total_tokens,
+        cost_usd: usage.cost_usd,
+        source: match usage.source {
+            UsageSource::ProviderActual => "provider_actual",
+            UsageSource::Estimated => "estimated",
+            UsageSource::Unavailable => "unavailable",
+        }
+        .to_owned(),
+    });
 }
 
 fn encode_base64(bytes: &[u8]) -> String {

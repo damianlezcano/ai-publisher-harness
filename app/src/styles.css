@@ -700,6 +700,39 @@ select {
   line-height: 1.45;
 }
 
+.session-usage-summary {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.session-usage-summary h4 {
+  margin: 0 0 var(--space-2);
+}
+
+.session-usage-summary dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-meta);
+}
+
+.session-usage-summary dl div {
+  display: contents;
+}
+
+.session-usage-summary dt,
+.session-usage-summary dd {
+  margin: 0;
+}
+
+.session-usage-summary dd {
+  text-align: right;
+}
+
 .section-heading {
   display: flex;
   align-items: center;

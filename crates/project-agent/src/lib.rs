@@ -15,7 +15,7 @@ pub use fake::{FakeAgentEngine, FakeCall};
 pub use model::{
     AgentBackendInfo, AgentEvidenceProvenance, AgentKnowledgeContext, AgentKnowledgeEntry,
     AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact, ArtifactKind,
-    ModelRef, TaskStatus,
+    ModelRef, RemoteUsage, TaskStatus, UsageSource,
 };
 pub use opencode::OpenCodeAgentEngine;
 pub use port::AgentEngine;

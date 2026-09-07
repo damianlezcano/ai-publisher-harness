@@ -211,6 +211,19 @@ pub struct SummaryOutput {
     pub text: String,
     pub model_id: Option<String>,
     pub provider_id: Option<String>,
+    pub usage: SummaryUsage,
+}
+
+/// Actual provider telemetry for one K6 synthesis call. It is intentionally
+/// independent from K6's local estimated input units.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SummaryUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub provider_actual: bool,
 }
 
 /// Provider-independent summarizer boundary. Implementations call one remote
@@ -245,7 +258,7 @@ impl SummaryRequest {
 }
 
 /// Cost/accounting totals for one orchestrated summarization pass.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SummaryAccounting {
     pub remote_calls: usize,
     pub estimated_input_units: usize,
@@ -255,6 +268,46 @@ pub struct SummaryAccounting {
     pub regenerated: usize,
     pub source_count: usize,
     pub hierarchy_depth: usize,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub provider_usage_actual: bool,
+}
+
+impl SummaryAccounting {
+    pub fn add_provider_usage(&mut self, usage: &SummaryUsage) {
+        if self.remote_calls == 0 {
+            self.input_tokens = usage.input_tokens;
+            self.output_tokens = usage.output_tokens;
+            self.cache_read_tokens = usage.cache_read_tokens;
+            self.cache_write_tokens = usage.cache_write_tokens;
+            self.cost_usd = usage.cost_usd;
+            self.provider_usage_actual = usage.provider_actual;
+            return;
+        }
+        self.provider_usage_actual |= usage.provider_actual;
+        self.input_tokens = add_optional(self.input_tokens, usage.input_tokens);
+        self.output_tokens = add_optional(self.output_tokens, usage.output_tokens);
+        self.cache_read_tokens = add_optional(self.cache_read_tokens, usage.cache_read_tokens);
+        self.cache_write_tokens = add_optional(self.cache_write_tokens, usage.cache_write_tokens);
+        self.cost_usd = add_optional_f64(self.cost_usd, usage.cost_usd);
+    }
+}
+
+fn add_optional(current: Option<u64>, next: Option<u64>) -> Option<u64> {
+    match (current, next) {
+        (Some(current), Some(next)) => current.checked_add(next),
+        _ => None,
+    }
+}
+
+fn add_optional_f64(current: Option<f64>, next: Option<f64>) -> Option<f64> {
+    match (current, next) {
+        (Some(current), Some(next)) => Some(current + next),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

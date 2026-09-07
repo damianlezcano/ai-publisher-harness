@@ -209,7 +209,7 @@ pub struct SummaryNodeView {
 }
 
 /// Result of one summarization run: accounting only, never summary content.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SummarizationReportView {
     pub remote_calls: usize,
@@ -219,11 +219,17 @@ pub struct SummarizationReportView {
     pub regenerated: usize,
     pub source_count: usize,
     pub hierarchy_depth: usize,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub provider_usage_actual: bool,
 }
 
 /// Whole-project summary answer: K6 accounting plus the user-facing global
 /// summary text (or `None` when the project has no indexed sources).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummaryAnswerView {
     pub report: SummarizationReportView,

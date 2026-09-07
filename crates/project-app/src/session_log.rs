@@ -32,6 +32,38 @@ impl LogLevel {
 pub struct SessionLogEntry {
     pub level: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knowledge: Option<SessionKnowledgeMetrics>,
+}
+
+/// Sanitized, per-turn remote-provider accounting for the session viewer.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsage {
+    pub conversation_id: String,
+    pub turn_id: String,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub source: String,
+}
+
+/// Local architectural estimates. These are deliberately separate from remote
+/// provider telemetry and contain no material names or content.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionKnowledgeMetrics {
+    pub conversation_id: String,
+    pub corpus_est_tokens: usize,
+    pub evidence_est_tokens: usize,
+    pub context_reduction_pct: usize,
 }
 
 fn buffer() -> &'static Mutex<VecDeque<SessionLogEntry>> {
@@ -54,7 +86,65 @@ pub fn record(level: &str, message: impl Into<String>) {
     logs.push_back(SessionLogEntry {
         level: level.to_owned(),
         message,
+        usage: None,
+        knowledge: None,
     });
+}
+
+pub fn record_usage(usage: SessionUsage) {
+    let message = format!(
+        "[usage] conversation_id={} turn_id={} provider={} model={} input_tokens={} output_tokens={} cache_read_tokens={} cache_write_tokens={} total_tokens={} cost_usd={} usage_source={}",
+        usage.conversation_id,
+        usage.turn_id,
+        usage.provider,
+        usage.model,
+        optional_u64(usage.input_tokens),
+        optional_u64(usage.output_tokens),
+        optional_u64(usage.cache_read_tokens),
+        optional_u64(usage.cache_write_tokens),
+        optional_u64(usage.total_tokens),
+        optional_f64(usage.cost_usd),
+        usage.source,
+    );
+    record_structured("INFO", message, Some(usage), None);
+}
+
+pub fn record_knowledge(metrics: SessionKnowledgeMetrics, message: String) {
+    record_structured("INFO", message, None, Some(metrics));
+}
+
+fn record_structured(
+    level: &str,
+    message: String,
+    usage: Option<SessionUsage>,
+    knowledge: Option<SessionKnowledgeMetrics>,
+) {
+    if LogLevel::from_entry(level) < *min_level().lock().unwrap_or_else(|e| e.into_inner()) {
+        return;
+    }
+    eprintln!("[EducAI][{level}] {message}");
+    let mut logs = buffer().lock().unwrap_or_else(|e| e.into_inner());
+    if logs.len() == CAPACITY {
+        logs.pop_front();
+    }
+    logs.push_back(SessionLogEntry {
+        level: level.to_owned(),
+        message,
+        usage,
+        knowledge,
+    });
+}
+
+fn optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "unavailable".to_owned())
+}
+
+fn optional_f64(value: Option<f64>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "unavailable".to_owned())
 }
 /// Minimal launch parser: `--debug` or `--log-level debug|info|warn|error`.
 pub fn configure_from_args(args: impl IntoIterator<Item = String>) {

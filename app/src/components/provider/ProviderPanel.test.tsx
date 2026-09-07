@@ -137,6 +137,54 @@ describe("ProviderPanel", () => {
     expect(screen.getByText("Sin eventos todavía.")).toBeInTheDocument();
   });
 
+  it("shows actual provider usage separately from Knowledge estimates", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "provider_list") return Promise.resolve([]);
+      if (cmd === "session_logs") {
+        return Promise.resolve([
+          {
+            level: "INFO",
+            message: "[knowledge] counts only",
+            knowledge: {
+              conversationId: "c1",
+              corpusEstTokens: 195237,
+              evidenceEstTokens: 612,
+              contextReductionPct: 99,
+            },
+          },
+          {
+            level: "INFO",
+            message: "[usage] metadata only",
+            usage: {
+              conversationId: "c1",
+              turnId: "t1",
+              provider: "provider-id",
+              model: "model-id",
+              inputTokens: 1834,
+              outputTokens: 426,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              totalTokens: 2260,
+              costUsd: 0.0018,
+              source: "provider_actual",
+            },
+          },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<ProviderPanel onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByRole("dialog", { name: "Configuración" });
+    await userEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(screen.getByRole("heading", { name: "Último turno" })).toBeVisible();
+    expect(screen.getByText("1.834 tokens")).toBeVisible();
+    expect(screen.getByText("USD 0.0018")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Knowledge" })).toBeVisible();
+    expect(screen.getByText("195.237 tokens")).toBeVisible();
+    expect(screen.getByText(/no un ahorro de facturación exacto/)).toBeVisible();
+    expect(screen.queryByText("provider-id")).not.toBeInTheDocument();
+  });
+
   it("keeps Configuración open and focused when switching tabs, and supports arrow keys", async () => {
     const onClose = vi.fn();
     render(<ProviderPanel onClose={onClose} onChanged={() => {}} />);

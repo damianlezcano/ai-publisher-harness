@@ -19,7 +19,7 @@ export interface ComposerBarProps {
 }
 
 const TEXTAREA_MAX_HEIGHT_PX = 150;
-const ATTACHMENT_COLLAPSE_THRESHOLD = 8;
+const ATTACHMENT_COLLAPSE_THRESHOLD = 5;
 
 function clipboardHasImage(items: DataTransferItemList): DataTransferItem | null {
   for (let i = 0; i < items.length; i++) {
@@ -130,8 +130,18 @@ export default function ComposerBar({
     if (text === "" || composerDisabled) return;
     const ids = attachmentIds;
     setPrompt("");
-    setAttachmentIds([]);
-    await onSend(text, ids);
+    try {
+      await onSend(text, ids);
+      // `agent_send` resolves only after the user turn is durably accepted.
+      // Keep the pending selection on a pre-acceptance failure so the person can
+      // retry. Once accepted, Materials are already durable project state; these
+      // ids must no longer describe attachments for the next turn.
+      setAttachmentIds([]);
+      setAttachmentsExpanded(false);
+    } catch {
+      // WorkspaceView owns the user-facing failure and retry state. The pending
+      // attachment selection intentionally remains untouched here.
+    }
   }
 
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -144,9 +154,7 @@ export default function ComposerBar({
 
   function renderAttachmentList() {
     const compact = !attachmentsExpanded && attachmentIds.length > ATTACHMENT_COLLAPSE_THRESHOLD;
-    const visibleIds = compact
-      ? attachmentIds.slice(0, ATTACHMENT_COLLAPSE_THRESHOLD)
-      : attachmentIds;
+    const visibleIds = compact ? [] : attachmentIds;
     return (
       <div
         className={`composer-attachments${compact ? " is-collapsed" : ""}`}
