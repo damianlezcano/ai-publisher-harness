@@ -46,6 +46,12 @@ continue to the provider request; `started_outcome_unknown` (and any other
 state) is never auto-resent, because a prior outbound request may already have
 succeeded before process termination.
 
+A pre-turn interruption — the process was killed after material copy but before
+the user turn was persisted, leaving `turn_id` null and no message/prompt to
+reuse — is a terminal, non-retryable denial (`recovery_no_turn`). The frontend
+surfaces a truthful "re-send" message without a retry action, because retrying
+can never recover a prompt that was never durably recorded.
+
 Embedding selection has an accepted-batch boundary. It considers chunks reached
 by the newly accepted Material IDs once, reuses ready vectors for the active
 generation, and does not repeat a whole-corpus selection per file. One verified
