@@ -512,7 +512,7 @@ where
             }
             items.push(item);
         }
-        self.index_accepted_material_batch(&pid, &accepted, None);
+        self.index_accepted_material_batch(&pid, &accepted, None, false);
         Ok(MaterialsImportReport { items })
     }
 
@@ -947,6 +947,7 @@ where
         project_id: &ProjectId,
         material_ids: &[String],
         operation_id: Option<&str>,
+        recovering: bool,
     ) {
         if material_ids.is_empty() {
             return;
@@ -1004,6 +1005,15 @@ where
                 failed += 1;
             }
         }
+        if recovering && let Some(operation_id) = operation_id {
+            crate::session_log::record(
+                "INFO",
+                format!(
+                    "[knowledge][recovery] phase=lexical operation_id={operation_id} completed={indexed} total={}",
+                    material_ids.len()
+                ),
+            );
+        }
         let material_ids = material_ids
             .iter()
             .filter_map(|id| MaterialId::parse(id).ok())
@@ -1040,6 +1050,16 @@ where
                 failure_state.map(|state| state.as_str()).unwrap_or("none")
             ),
         );
+        if recovering && let Some(operation_id) = operation_id {
+            crate::session_log::record(
+                if embedded.is_some() { "INFO" } else { "WARN" },
+                format!(
+                    "[knowledge][recovery] phase=embeddings operation_id={operation_id} created={} reused={}",
+                    embedded.unwrap_or(0),
+                    reused.unwrap_or(0)
+                ),
+            );
+        }
         if let Some(operation_id) = operation_id {
             let embedding_completed = if embedded.is_some() { indexed } else { 0 };
             let final_failed = failed + usize::from(embedded.is_none() && indexed > 0);
@@ -2011,12 +2031,21 @@ where
     /// safely leave the ledger in `pending_retry` if the process stops here.
     pub fn run_accepted_staged_turn(
         &self,
+        accepted: AcceptedStagedTurn,
+    ) -> AppResult<AgentRunView> {
+        self.run_accepted_staged_turn_inner(accepted, false)
+    }
+
+    fn run_accepted_staged_turn_inner(
+        &self,
         mut accepted: AcceptedStagedTurn,
+        recovering: bool,
     ) -> AppResult<AgentRunView> {
         self.index_accepted_material_batch(
             &accepted.inputs.project_id,
             &accepted.material_ids,
             Some(&accepted.operation_id),
+            recovering,
         );
         accepted.inputs.knowledge = match self
             .prepare_knowledge_context(&accepted.inputs.project_id, &accepted.inputs.prompt)
@@ -2074,17 +2103,15 @@ where
         }
     }
 
-    /// Explicitly resumes only a durably accepted operation whose remote agent
-    /// boundary has not started. All identity comes from the ledger and the
-    /// existing user message; no composer proposal, source path, Material, or
-    /// user turn is recreated. `PendingRetry` is intentionally refused here:
-    /// it means the remote outcome might be unknown and requires a deliberate
-    /// user retry rather than an automatic duplicate request.
-    pub fn resume_accepted_import_operation(
+    /// Returns the persisted user-turn id that owns a durable accepted-import
+    /// operation, or `NotFound` when the operation does not exist. Used by the
+    /// reopen recovery trigger to validate an operation identity before emitting
+    /// a `working` event. This never reconstructs or resumes any work.
+    pub fn accepted_import_operation_turn_id(
         &self,
         project_id: &str,
         operation_id: &str,
-    ) -> AppResult<AgentRunView> {
+    ) -> AppResult<String> {
         let pid = parse_project_id(project_id)?;
         let root = self.base.join("projects").join(pid.as_str());
         let store = KnowledgeStore::open(&root, &pid)
@@ -2093,10 +2120,57 @@ where
             .accepted_import_operation(operation_id)
             .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?
             .ok_or_else(|| AppError::new(ErrorCode::NotFound, "No se encontró esa operación."))?;
-        let turn_id = operation
+        operation
             .turn_id
-            .as_deref()
-            .ok_or_else(|| AppError::internal("La operación aceptada no tiene turno."))?;
+            .ok_or_else(|| AppError::internal("La operación aceptada no tiene turno."))
+    }
+
+    /// Explicitly resumes only a durably accepted operation whose remote agent
+    /// boundary has not started. All identity comes from the ledger and the
+    /// existing user message; no composer proposal, source path, Material, or
+    /// user turn is recreated.
+    ///
+    /// The remote boundary is gated on `agent_state`: `NotStarted` is safe to
+    /// continue (the provider request can never have already happened), while
+    /// any other state (`StartedOutcomeUnknown`, `Completed`, `FailedRetryable`,
+    /// `FailedTerminal`) is refused here so a prior outbound request is never
+    /// duplicated. A `PendingRetry` operation with `NotStarted` agent state is
+    /// a local-only interruption and remains explicitly resumable.
+    pub fn resume_accepted_import_operation(
+        &self,
+        project_id: &str,
+        operation_id: &str,
+    ) -> AppResult<AgentRunView> {
+        let pid = parse_project_id(project_id)?;
+        let root = self.base.join("projects").join(pid.as_str());
+        let store = KnowledgeStore::open(&root, &pid).map_err(|_| {
+            record_recovery_error(operation_id, "durable_state_read_failed");
+            AppError::internal("No pudimos recuperar los materiales.")
+        })?;
+        let operation = store
+            .accepted_import_operation(operation_id)
+            .map_err(|_| {
+                record_recovery_error(operation_id, "durable_state_read_failed");
+                AppError::internal("No pudimos recuperar los materiales.")
+            })?
+            .ok_or_else(|| {
+                record_recovery_error(operation_id, "durable_state_read_failed");
+                AppError::new(ErrorCode::NotFound, "No se encontró esa operación.")
+            })?;
+        let turn_id = operation.turn_id.as_deref().ok_or_else(|| {
+            record_recovery_error(operation_id, "durable_state_read_failed");
+            AppError::internal("La operación aceptada no tiene turno.")
+        })?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "[knowledge][recovery] operation discovered operation_id={operation_id} prepared={} indexed={} ready={} agent_state={}",
+                operation.copied,
+                operation.lexical_completed,
+                operation.embedding_completed,
+                accepted_import_agent_state_str(operation.agent_state),
+            ),
+        );
         if operation.state == project_knowledge::AcceptedImportState::Completed {
             return Ok(AgentRunView {
                 status: "completed".to_owned(),
@@ -2114,16 +2188,20 @@ where
                 message: None,
             });
         }
-        if operation.agent_state != project_knowledge::AcceptedImportAgentState::NotStarted
-            || operation.state == project_knowledge::AcceptedImportState::PendingRetry
-        {
+        // The remote boundary must be pristine. Any other agent state means a
+        // prior provider request may already have happened; never auto-resend.
+        if operation.agent_state != project_knowledge::AcceptedImportAgentState::NotStarted {
+            record_recovery_error(operation_id, "remote_outcome_unknown");
             return Err(AppError::invalid(
-                "Esta creación necesita una confirmación para reintentarla; el resultado remoto no se reenviará automáticamente.",
+                "El resultado anterior quedó pendiente; no se puede reenviar automáticamente.",
             ));
         }
         let material_ids = store
             .accepted_import_material_ids(operation_id)
-            .map_err(|_| AppError::internal("No pudimos recuperar los materiales."))?
+            .map_err(|_| {
+                record_recovery_error(operation_id, "durable_state_read_failed");
+                AppError::internal("No pudimos recuperar los materiales.")
+            })?
             .into_iter()
             .map(|id| id.as_str().to_owned())
             .collect::<Vec<_>>();
@@ -2137,7 +2215,10 @@ where
             .messages
             .iter()
             .find(|message| message.id.as_str() == turn_id && message.role == MessageRole::User)
-            .ok_or_else(|| AppError::internal("No pudimos recuperar el turno aceptado."))?;
+            .ok_or_else(|| {
+                record_recovery_error(operation_id, "durable_state_read_failed");
+                AppError::internal("No pudimos recuperar el turno aceptado.")
+            })?;
         let mut inputs =
             self.resolve_agent_inputs_without_knowledge(project_id, &message.text, &material_ids)?;
         inputs.turn_id = Some(
@@ -2146,19 +2227,33 @@ where
         );
         crate::session_log::record(
             "INFO",
-            format!(
-                "accepted_import resumed conversation_id={} operation_id={} turn_id={} materials={}",
-                project_id,
-                operation_id,
-                turn_id,
-                material_ids.len()
-            ),
+            format!("[knowledge][recovery] local resume started operation_id={operation_id}"),
         );
-        self.run_accepted_staged_turn(AcceptedStagedTurn {
-            inputs,
-            operation_id: operation_id.to_owned(),
-            material_ids,
-        })
+        let result = self.run_accepted_staged_turn_inner(
+            AcceptedStagedTurn {
+                inputs,
+                operation_id: operation_id.to_owned(),
+                material_ids,
+            },
+            true,
+        );
+        match &result {
+            Ok(_) => {
+                if let Ok(Some(progress)) = store.accepted_import_operation(operation_id) {
+                    crate::session_log::record(
+                        "INFO",
+                        format!(
+                            "[knowledge][recovery] local resume completed operation_id={operation_id} ready={} failed={}",
+                            progress.embedding_completed, progress.failed,
+                        ),
+                    );
+                }
+            }
+            Err(error) => {
+                record_recovery_error(operation_id, recovery_failure_class(error));
+            }
+        }
+        result
     }
 
     fn finish_accepted_import_operation(
@@ -3445,6 +3540,46 @@ fn accepted_operation_id(project_id: &ProjectId, prompt: &str) -> String {
     format!("{}-{nanos}-{}", project_id.as_str(), &digest[..16])
 }
 
+/// Structural, sanitized label for the remote agent boundary. Never a path,
+/// prompt, or payload.
+fn accepted_import_agent_state_str(
+    state: project_knowledge::AcceptedImportAgentState,
+) -> &'static str {
+    match state {
+        project_knowledge::AcceptedImportAgentState::NotStarted => "not_started",
+        project_knowledge::AcceptedImportAgentState::StartedOutcomeUnknown => {
+            "started_outcome_unknown"
+        }
+        project_knowledge::AcceptedImportAgentState::Completed => "completed",
+        project_knowledge::AcceptedImportAgentState::FailedRetryable => "failed_retryable",
+        project_knowledge::AcceptedImportAgentState::FailedTerminal => "failed_terminal",
+    }
+}
+
+/// Sanitized recovery error log. Only the opaque operation id, the typed
+/// failure class, and structural counters are emitted — never document bodies,
+/// chunk text, prompts, assistant text, vectors, or absolute paths.
+fn record_recovery_error(operation_id: &str, failure_class: &str) {
+    crate::session_log::record(
+        "ERROR",
+        format!(
+            "[knowledge][ERROR] operation_id={operation_id} phase=recovery failure_class={failure_class}"
+        ),
+    );
+}
+
+/// Maps a resume failure onto the recovery failure taxonomy without inventing a
+/// parallel enum. Agent/inference failures reuse the existing inference class;
+/// everything else is a sanitized typed local failure.
+fn recovery_failure_class(error: &AppError) -> &'static str {
+    match error.code {
+        ErrorCode::AiUnavailable | ErrorCode::AiTaskFailed => "inference_failed",
+        ErrorCode::StorageUnavailable | ErrorCode::NotFound => "durable_state_read_failed",
+        ErrorCode::InvalidInput => "remote_outcome_unknown",
+        _ => "other_typed_local_failure",
+    }
+}
+
 fn summary_node_view(node: &project_knowledge::SummaryNode) -> SummaryNodeView {
     SummaryNodeView {
         summary_id: node.summary_id.clone(),
@@ -3537,6 +3672,7 @@ fn accepted_import_progress_view(
     operation: project_knowledge::AcceptedImportOperation,
 ) -> AcceptedImportProgressView {
     AcceptedImportProgressView {
+        operation_id: operation.operation_id,
         state: match operation.state {
             project_knowledge::AcceptedImportState::Accepted => "accepted",
             project_knowledge::AcceptedImportState::Copying => "copying",
@@ -3544,6 +3680,16 @@ fn accepted_import_progress_view(
             project_knowledge::AcceptedImportState::IndexingEmbeddings => "indexing_embeddings",
             project_knowledge::AcceptedImportState::PendingRetry => "pending_retry",
             project_knowledge::AcceptedImportState::Completed => "completed",
+        }
+        .to_owned(),
+        agent_state: match operation.agent_state {
+            project_knowledge::AcceptedImportAgentState::NotStarted => "not_started",
+            project_knowledge::AcceptedImportAgentState::StartedOutcomeUnknown => {
+                "started_outcome_unknown"
+            }
+            project_knowledge::AcceptedImportAgentState::Completed => "completed",
+            project_knowledge::AcceptedImportAgentState::FailedRetryable => "failed_retryable",
+            project_knowledge::AcceptedImportAgentState::FailedTerminal => "failed_terminal",
         }
         .to_owned(),
         total: operation.total,

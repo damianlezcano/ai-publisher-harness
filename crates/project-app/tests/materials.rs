@@ -818,3 +818,238 @@ fn remove_material_unknown_project_is_not_found() {
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
 }
+
+// -- Reopen recovery regression (52-file accepted operation) -----------------
+
+#[test]
+fn fifty_two_file_accepted_operation_resumes_after_reopen_without_duplication() {
+    use project_knowledge::{AcceptedImportState, KnowledgeStore};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let first = app(tmp.path());
+    let project = first.create_project("P").unwrap();
+
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..52 {
+        let path = corpus.join(format!("nota-{i:02}.md"));
+        std::fs::write(&path, format!("# Nota {i}\n\nContenido {i}.\n")).unwrap();
+        paths.push(path.to_str().unwrap().to_owned());
+    }
+
+    let accepted = first
+        .send_staged_message_persist(&project.id, "haceme un resumen por fecha", &paths, &[])
+        .unwrap();
+    let turn_id = accepted.turn_id().unwrap().to_owned();
+    let operation_id = accepted.operation_id().to_owned();
+
+    // The exact real-world stop state: prepared=52, indexed=0, ready=0. The
+    // process closed after acceptance, before any derived local work ran.
+    let pid = project_core::ProjectId::parse(&project.id).unwrap();
+    let root = tmp.path().join("projects").join(&project.id);
+    let mut store = KnowledgeStore::open(&root, &pid).unwrap();
+    store
+        .update_accepted_import_operation(
+            &operation_id,
+            Some(&turn_id),
+            AcceptedImportState::Copying,
+            52,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+    store
+        .update_accepted_import_agent_state(
+            &operation_id,
+            project_knowledge::AcceptedImportAgentState::NotStarted,
+        )
+        .unwrap();
+    drop(store);
+    drop(first);
+
+    // Reopen discovers the incomplete operation through the durable read model
+    // and the explicit resume API moves beyond the 0/52 state.
+    let reopened = app_with_agent_message(tmp.path(), "Listo.");
+    let before = reopened.open_project(&project.id).unwrap();
+    let progress = before
+        .accepted_import
+        .expect("operation survives reopen")
+        .clone();
+    assert_eq!(progress.operation_id, operation_id);
+    assert_eq!(progress.agent_state, "not_started");
+    assert_eq!(progress.total, 52);
+    assert_eq!(progress.copied, 52);
+    assert_eq!(progress.lexical_completed, 0);
+    assert_eq!(progress.embedding_completed, 0);
+
+    let run = reopened
+        .resume_accepted_import_operation(&project.id, &operation_id)
+        .unwrap();
+    assert_eq!(run.status, "completed");
+
+    let after = reopened.open_project(&project.id).unwrap();
+    assert_eq!(after.materials.len(), 52, "no duplicate Materials");
+    assert_eq!(
+        after.messages.iter().filter(|m| m.role == "user").count(),
+        1,
+        "exactly one user turn"
+    );
+    assert_eq!(after.messages[0].id, turn_id);
+    assert_eq!(after.messages[0].material_ids.len(), 52);
+    let done = after.accepted_import.expect("completed operation").clone();
+    assert_eq!(done.state, "completed");
+    assert_eq!(done.lexical_completed, 52, "indexing moved beyond 0");
+    assert_eq!(done.copied, 52);
+}
+
+#[test]
+fn repeated_restart_recovery_is_idempotent_and_reuses_ready_work() {
+    use project_knowledge::{AcceptedImportState, KnowledgeStore};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let first = app(tmp.path());
+    let project = first.create_project("P").unwrap();
+
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..52 {
+        let path = corpus.join(format!("doc-{i:02}.md"));
+        std::fs::write(&path, format!("# Doc {i}\n\nTexto {i}.\n")).unwrap();
+        paths.push(path.to_str().unwrap().to_owned());
+    }
+
+    let accepted = first
+        .send_staged_message_persist(&project.id, "Resumí todo", &paths, &[])
+        .unwrap();
+    let turn_id = accepted.turn_id().unwrap().to_owned();
+    let operation_id = accepted.operation_id().to_owned();
+    let pid = project_core::ProjectId::parse(&project.id).unwrap();
+    let root = tmp.path().join("projects").join(&project.id);
+
+    // Restart #0 -> partial lexical work before close.
+    let mut store = KnowledgeStore::open(&root, &pid).unwrap();
+    store
+        .update_accepted_import_operation(
+            &operation_id,
+            Some(&turn_id),
+            AcceptedImportState::IndexingLexical,
+            52,
+            10,
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+    drop(store);
+    drop(first);
+
+    // Restart #1: resume finishes the interrupted phase.
+    let second = app_with_agent_message(tmp.path(), "Primera reapertura.");
+    let run1 = second
+        .resume_accepted_import_operation(&project.id, &operation_id)
+        .unwrap();
+    assert_eq!(run1.status, "completed");
+    let after1 = second.open_project(&project.id).unwrap();
+    assert_eq!(after1.materials.len(), 52);
+    assert_eq!(
+        after1.messages.iter().filter(|m| m.role == "user").count(),
+        1
+    );
+    assert_eq!(after1.accepted_import.unwrap().state, "completed");
+    let stats_before = {
+        let store = KnowledgeStore::open(&root, &pid).unwrap();
+        let stats = store.corpus_stats().unwrap();
+        drop(store);
+        stats
+    };
+    drop(second);
+
+    // Restart #2: the operation is complete; resume finalizes idempotently and
+    // never re-runs remote work or creates a second turn/material.
+    let third = app_with_agent_message(tmp.path(), "Segunda reapertura.");
+    let run2 = third
+        .resume_accepted_import_operation(&project.id, &operation_id)
+        .unwrap();
+    assert_eq!(run2.status, "completed");
+    let after2 = third.open_project(&project.id).unwrap();
+    assert_eq!(after2.materials.len(), 52, "no duplicate Materials");
+    assert_eq!(
+        after2.messages.iter().filter(|m| m.role == "user").count(),
+        1,
+        "one user turn after repeated restarts"
+    );
+    assert_eq!(after2.messages[0].id, turn_id);
+    assert_eq!(after2.accepted_import.unwrap().state, "completed");
+
+    // Corpus state unchanged: no duplicate source associations or chunks.
+    let store = KnowledgeStore::open(&root, &pid).unwrap();
+    let stats_after = store.corpus_stats().unwrap();
+    assert_eq!(stats_after.material_count, stats_before.material_count);
+    assert_eq!(stats_after.chunks_total, stats_before.chunks_total);
+    drop(store);
+}
+
+#[test]
+fn pending_retry_not_started_is_locally_resumable_but_remote_unknown_is_not() {
+    use project_knowledge::{AcceptedImportAgentState, AcceptedImportState, KnowledgeStore};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let first = app(tmp.path());
+    let project = first.create_project("P").unwrap();
+    let accepted = first
+        .send_staged_message_persist(
+            &project.id,
+            "Reanudá",
+            &[],
+            &[StagedImage {
+                staging_id: "clipboard-opaque-id".into(),
+                file_name: "captura.png".into(),
+                content_type: "image/png".into(),
+                bytes: png_bytes(),
+            }],
+        )
+        .unwrap();
+    let turn_id = accepted.turn_id().unwrap().to_owned();
+    let pid = project_core::ProjectId::parse(&project.id).unwrap();
+    let root = tmp.path().join("projects").join(&project.id);
+    let mut store = KnowledgeStore::open(&root, &pid).unwrap();
+    // Local interruption: state pending_retry but the remote boundary never
+    // started. Safe explicit resume must complete it.
+    store
+        .update_accepted_import_operation(
+            accepted.operation_id(),
+            Some(&turn_id),
+            AcceptedImportState::PendingRetry,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+        )
+        .unwrap();
+    store
+        .update_accepted_import_agent_state(
+            accepted.operation_id(),
+            AcceptedImportAgentState::NotStarted,
+        )
+        .unwrap();
+    drop(store);
+    drop(first);
+
+    let reopened = app_with_agent_message(tmp.path(), "Listo.");
+    let run = reopened
+        .resume_accepted_import_operation(&project.id, accepted.operation_id())
+        .unwrap();
+    assert_eq!(run.status, "completed");
+    let view = reopened.open_project(&project.id).unwrap();
+    assert_eq!(view.messages.iter().filter(|m| m.role == "user").count(), 1);
+    assert_eq!(view.messages[0].id, turn_id);
+    assert_eq!(view.accepted_import.unwrap().state, "completed");
+}

@@ -48,6 +48,7 @@ pub fn run() {
             commands::summarize_project,
             commands::agent_send,
             commands::agent_send_staged,
+            commands::agent_resume_import,
             commands::agent_cancel,
             commands::agent_status,
             commands::publish,

@@ -157,7 +157,15 @@ pub struct ProjectView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedImportProgressView {
+    /// Opaque identity of the durable accepted-import operation. This is how
+    /// the frontend addresses an explicit recovery/resume command; it never
+    /// encodes a path, source, or storage detail.
+    pub operation_id: String,
     pub state: String,
+    /// The remote agent boundary, distinct from local progress:
+    /// `not_started`, `started_outcome_unknown`, `completed`,
+    /// `failed_retryable`, or `failed_terminal`.
+    pub agent_state: String,
     pub total: usize,
     pub copied: usize,
     pub lexical_completed: usize,

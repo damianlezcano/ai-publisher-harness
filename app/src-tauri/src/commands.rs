@@ -474,6 +474,60 @@ pub struct StagedImagePayload {
     data: Vec<u8>,
 }
 
+/// Explicitly resumes a durably accepted import operation whose remote agent
+/// boundary has not started. This is the reopen recovery trigger: the frontend
+/// discovers an incomplete operation from the durable `ProjectView.acceptedImport`
+/// read model and invokes this command once; the facade enforces the remote
+/// safety rule (never auto-resend an outcome-unknown request).
+#[tauri::command]
+pub async fn agent_resume_import(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    project_id: String,
+    operation_id: String,
+) -> Result<(), AppError> {
+    let shared = state.inner().clone();
+    let resume_project = project_id.clone();
+    let resume_operation = operation_id.clone();
+    // Validate the identity against the durable ledger before emitting any
+    // event, so a bogus operation id cannot manufacture a "working" turn.
+    let turn_id = blocking(shared.clone(), move |app_state| {
+        app_state.accepted_import_operation_turn_id(&resume_project, &resume_operation)
+    })
+    .await?;
+    let _ = app.emit(
+        "agent://task",
+        AgentTaskEvent {
+            project_id: project_id.clone(),
+            turn_id: turn_id.clone(),
+            status: "working".to_owned(),
+            message: None,
+            registered_creation_ids: Vec::new(),
+        },
+    );
+    std::thread::spawn(move || {
+        let run = shared.resume_accepted_import_operation(&project_id, &operation_id);
+        let event = match run {
+            Ok(run) => AgentTaskEvent {
+                project_id,
+                turn_id: run.turn_id.unwrap_or(turn_id),
+                status: run.status,
+                message: run.message,
+                registered_creation_ids: run.registered_creation_ids,
+            },
+            Err(err) => AgentTaskEvent {
+                project_id,
+                turn_id,
+                status: "failed".to_owned(),
+                message: Some(err.message),
+                registered_creation_ids: Vec::new(),
+            },
+        };
+        let _ = app.emit("agent://task", event);
+    });
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agent_cancel(
     state: State<'_, SharedState>,
