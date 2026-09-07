@@ -79,7 +79,9 @@ export interface ProjectView {
 }
 
 export interface AcceptedImportProgressView {
+  operationId: string;
   state: string;
+  agentState: string;
   total: number;
   copied: number;
   lexicalCompleted: number;

@@ -90,6 +90,8 @@ export const api = {
     return invoke<void>("agent_send_staged", args);
   },
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),
+  agentResumeImport: (projectId: string, operationId: string) =>
+    invoke<void>("agent_resume_import", { projectId, operationId }),
   publish: (projectId: string, creationId?: string | null) =>
     invoke<PublicationView>("publish", { projectId, creationId: creationId ?? null }),
   unpublish: (projectId: string) => invoke<PublicationView>("unpublish", { projectId }),

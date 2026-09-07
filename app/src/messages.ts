@@ -407,6 +407,31 @@ export const messages = {
     generatingQr: "Generando código QR…",
   },
 
+  processing: {
+    title(count: number): string {
+      return `Procesando ${count} archivos`;
+    },
+    prepared(copied: number, total: number): string {
+      return `Archivos preparados: ${copied} / ${total}`;
+    },
+    indexed(lexical: number, total: number): string {
+      return `Indexación: ${lexical} / ${total}`;
+    },
+    embeddings(created: number, reused: number): string {
+      return `Embeddings: ${created} creados · ${reused} reutilizados`;
+    },
+    ready(count: number): string {
+      return `Listos: ${count}`;
+    },
+    errors(count: number): string {
+      return `Errores: ${count}`;
+    },
+    pendingRetry: "El procesamiento quedó pendiente. Podés reintentarlo.",
+    outcomeUnknown:
+      "El resultado anterior quedó pendiente y no se puede continuar automáticamente.",
+    cannotContinue: "No pudimos continuar el procesamiento local.",
+  },
+
   error: {
     actionRetry: "Reintentar",
     actionConnectAi: "Conectar IA",

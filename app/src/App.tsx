@@ -26,6 +26,7 @@ export default function App() {
   const { toasts, show } = useToast();
   const selectedIdRef = useRef(selectedId);
   const inFlightRef = useRef(new Map<string, string>());
+  const resumeTriggeredRef = useRef(new Set<string>());
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -167,6 +168,25 @@ export default function App() {
       active = false;
     };
   }, [providerRefreshKey]);
+
+  // Reopen recovery: discover an incomplete, not-yet-remote accepted-import
+  // operation from the durable read model and trigger exactly one safe local
+  // resume per operation. This is the explicit recovery seam — never a generic
+  // background worker, and never an automatic resend of an outcome-unknown
+  // provider request (the backend enforces that gate on `agent_state`).
+  useEffect(() => {
+    const acceptedImport = conversation?.acceptedImport;
+    if (!conversation || !acceptedImport) return;
+    if (acceptedImport.state === "completed") return;
+    if (acceptedImport.agentState !== "not_started") return;
+    if (acceptedImport.state === "pending_retry") return;
+    const key = `${conversation.id}:${acceptedImport.operationId}`;
+    if (resumeTriggeredRef.current.has(key)) return;
+    resumeTriggeredRef.current.add(key);
+    void api
+      .agentResumeImport(conversation.id, acceptedImport.operationId)
+      .catch(() => resumeTriggeredRef.current.delete(key));
+  }, [conversation]);
 
   useEffect(() => {
     let active = true;

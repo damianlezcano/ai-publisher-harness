@@ -62,6 +62,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
   } = props;
 
   const [sendError, setSendError] = useState<unknown | null>(null);
+  const [resumeError, setResumeError] = useState<unknown | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{
     text: string;
     materialIds: string[];
@@ -230,6 +231,35 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
     }
   }
 
+  async function resumeImport(operationId: string) {
+    setResumeError(null);
+    try {
+      await api.agentResumeImport(project.id, operationId);
+      await onRefresh();
+    } catch (err) {
+      setResumeError(err);
+    }
+  }
+
+  const acceptedImport = project.acceptedImport ?? null;
+  const processingNotice = useMemo(() => {
+    if (!acceptedImport) return null;
+    if (acceptedImport.state === "completed") return null;
+    if (acceptedImport.agentState === "started_outcome_unknown") {
+      return { text: messages.processing.outcomeUnknown, retry: false };
+    }
+    if (
+      acceptedImport.agentState === "failed_retryable" ||
+      acceptedImport.agentState === "failed_terminal"
+    ) {
+      return { text: messages.processing.cannotContinue, retry: false };
+    }
+    if (acceptedImport.state === "pending_retry" && acceptedImport.agentState === "not_started") {
+      return { text: messages.processing.pendingRetry, retry: true };
+    }
+    return null;
+  }, [acceptedImport]);
+
   return (
     <div className={workspaceClass}>
       {dragging && (
@@ -272,20 +302,38 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
         />
         {project.acceptedImport && (
           <section className="import-progress" role="status" aria-live="polite">
-            <strong>Procesando {project.acceptedImport.total} archivos</strong>
+            <strong>{messages.processing.title(project.acceptedImport.total)}</strong>
             <span>
-              Archivos preparados: {project.acceptedImport.copied} / {project.acceptedImport.total}
+              {messages.processing.prepared(
+                project.acceptedImport.copied,
+                project.acceptedImport.total,
+              )}
             </span>
             <span>
-              Indexación: {project.acceptedImport.lexicalCompleted} / {project.acceptedImport.total}
+              {messages.processing.indexed(
+                project.acceptedImport.lexicalCompleted,
+                project.acceptedImport.total,
+              )}
             </span>
             <span>
-              Embeddings: {project.acceptedImport.embeddingsCreated} creados ·{" "}
-              {project.acceptedImport.embeddingsReused} reutilizados
+              {messages.processing.embeddings(
+                project.acceptedImport.embeddingsCreated,
+                project.acceptedImport.embeddingsReused,
+              )}
             </span>
-            <span>Listos: {project.acceptedImport.embeddingCompleted}</span>
+            <span>{messages.processing.ready(project.acceptedImport.embeddingCompleted)}</span>
             {project.acceptedImport.failed > 0 && (
-              <span>Errores: {project.acceptedImport.failed}</span>
+              <span>{messages.processing.errors(project.acceptedImport.failed)}</span>
+            )}
+            {processingNotice && <p className="import-progress-notice">{processingNotice.text}</p>}
+            {processingNotice?.retry && (
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => void resumeImport(project.acceptedImport!.operationId)}
+              >
+                {messages.common.retry}
+              </button>
             )}
           </section>
         )}
@@ -324,6 +372,7 @@ export default function WorkspaceView(props: WorkspaceViewProps) {
       </div>
 
       {materialError !== null && <ErrorNotice error={materialError} />}
+      {resumeError !== null && <ErrorNotice error={resumeError} />}
 
       {backendStatus === "starting" && (
         <p className="notice composer-import-status" role="status">
