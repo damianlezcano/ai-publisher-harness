@@ -27,10 +27,17 @@ the independent `Pending`, `Ready`, `Failed`, and `Unsupported` contract.
 
 SQLite and filesystem copies are not claimed to be atomic. The ledger is
 committed before copies, Material persistence precedes derived indexing, and a
-turn is only linked once its Material list is durable. On restart, an incomplete
-ledger is discoverable and remains `pending_retry`; it is never silently marked
-ready or automatically advanced. Recovery is an explicit retry of that accepted
-operation, not a global worker.
+turn is only linked once its Material list is durable. The first durable
+`prepared > 0` (`copied`) write carries the turn link in the same ledger update,
+so the invariant `prepared > 0 => turn_id != NULL` holds: a crash between the
+material copy and user-turn persistence leaves the operation at `copied == 0`,
+never a recoverable-looking `prepared > 0` row without a turn. A crash in the
+narrower window between the turn append and that single ledger write leaves the
+turn durable but the operation at `copied == 0` with no link — also a safe
+pre-turn denial (never fabricated, never resent). On restart, an
+incomplete ledger is discoverable and remains `pending_retry`; it is never
+silently marked ready or automatically advanced. Recovery is an explicit retry
+of that accepted operation, not a global worker.
 
 Reopen recovery has one explicit seam: after project reconstruction, the
 application reads the durable operation read model (`acceptedImport`) and, when

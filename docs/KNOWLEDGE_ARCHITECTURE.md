@@ -116,8 +116,11 @@ project-local import/index operation (ADR-0017). Its ledger is committed before
 the first project-owned copy and records `accepted`, `copying`,
 `indexing_lexical`, `indexing_embeddings`, `pending_retry`, or `completed` plus
 truthful counters. SQLite and filesystem are deliberately separate durable
-boundaries; no false cross-store atomicity is claimed. Materials retain their
-own durable Pending/Ready/Failed/Unsupported Knowledge state.
+boundaries; no false cross-store atomicity is claimed. The user turn is persisted
+before the operation ledger exposes `prepared > 0`, so `prepared > 0` always
+implies a durable, linked `turn_id` (the first `copied > 0` write carries the
+turn link). Materials retain their own durable Pending/Ready/Failed/Unsupported
+Knowledge state.
 
 On restart an incomplete operation is discoverable and stays recoverable
 `pending_retry` until explicit retry; reopening never starts an always-running
