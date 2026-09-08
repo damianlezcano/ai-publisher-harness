@@ -4878,13 +4878,18 @@ fn encode_base64(bytes: &[u8]) -> String {
 mod durable_k6_tests {
     use super::*;
     use project_agent::FakeAgentEngine;
+    use project_core::{MaterialId, ProjectId};
     use project_knowledge::{
+        EmbeddingGeneration, EmbeddingProvider, KnowledgeStore, MaterialIndexState, ModelManifest,
         RemoteSummarizer, SummaryContent, SummaryFailure, SummaryOutput, SummaryRequest,
         SummaryUsage,
     };
+    use project_opencode::OpenCodeBackend;
     use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
     use project_tunnel::FakeTunnel;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     fn connector() -> FakeProviderConnector {
         FakeProviderConnector::new()
@@ -5180,6 +5185,259 @@ mod durable_k6_tests {
         assert_eq!(metrics.selected_evidence_count, None);
         assert_eq!(metrics.retrieval_candidate_count, None);
         assert!(metrics.material_count.unwrap() >= 6);
+    }
+
+    struct DeterministicEmbeddings {
+        generation: EmbeddingGeneration,
+    }
+    impl EmbeddingProvider for DeterministicEmbeddings {
+        fn generation(&self) -> &EmbeddingGeneration {
+            &self.generation
+        }
+        fn embed_query(&mut self, _query: &str) -> project_knowledge::Result<Vec<f32>> {
+            Ok(vec![0.0; 384])
+        }
+        fn embed_passages(
+            &mut self,
+            passages: &[String],
+        ) -> project_knowledge::Result<Vec<Vec<f32>>> {
+            Ok(passages
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let mut vector = vec![0.0; 384];
+                    vector[index % 384] = 1.0;
+                    vector
+                })
+                .collect())
+        }
+    }
+
+    fn valid_k6_json() -> String {
+        serde_json::to_string(&SummaryContent {
+            summary: "Resumen usable del archivo seleccionado.".to_owned(),
+            topics: vec![],
+            decisions: vec![],
+            action_items: vec![],
+            questions: vec![],
+        })
+        .unwrap()
+    }
+
+    /// Production-faithful Fedora 5-file exhaustive summary: composer-staged
+    /// acceptance, lexical+deterministic embedding index, then the same K6
+    /// terminal (`send_summary_run_with`) against the real OpenCode message
+    /// envelope. Before the list-envelope unwrap, this path timed out 5×120s
+    /// with `remote_calls=0` and "No se pudo procesar este archivo."
+    #[test]
+    fn five_staged_ready_markdown_files_generate_k6_nodes_through_opencode_envelope() {
+        let _session_log_guard = crate::session_log::test_guard();
+        crate::session_log::clear();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = app(tmp.path());
+        let project = state.create_project("P").unwrap();
+        let historical = tmp.path().join("1999-01-01-historical.md");
+        std::fs::write(&historical, "HISTORICAL_ONLY_BODY_SENTINEL").unwrap();
+        state
+            .add_material_from_path(&project.id, historical.to_str().unwrap())
+            .unwrap();
+
+        let names = [
+            "2026-07-28-c.md",
+            "2026-07-17-a.md",
+            "2026-07-27-b.md",
+            "2026-07-30-d.md",
+            "2026-07-31-e.md",
+        ];
+        let corpus = tmp.path().join("corpus");
+        std::fs::create_dir_all(&corpus).unwrap();
+        let paths: Vec<String> = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let path = corpus.join(name);
+                std::fs::write(
+                    &path,
+                    format!("SELECTED_{index}_BODY_SENTINEL decision unique to {name}\n"),
+                )
+                .unwrap();
+                path.to_string_lossy().to_string()
+            })
+            .collect();
+
+        let before = state.open_project(&project.id).unwrap();
+        assert_eq!(
+            before.materials.len(),
+            1,
+            "only historical material pre-send"
+        );
+        assert!(before.messages.is_empty());
+
+        let prompt = "haceme un resumen de cada archivo ordenado por fecha";
+        let accepted = state
+            .send_staged_message_persist(&project.id, prompt, &paths, &[])
+            .unwrap();
+        assert_eq!(accepted.inputs.selected_material_ids.len(), 5);
+        state.index_accepted_material_batch(
+            &accepted.inputs.project_id,
+            &accepted.material_ids,
+            Some(&accepted.operation_id),
+            false,
+        );
+
+        let pid = ProjectId::parse(&project.id).unwrap();
+        let root = tmp.path().join("projects").join(&project.id);
+        let mut store = KnowledgeStore::open(&root, &pid).unwrap();
+        let material_ids: Vec<MaterialId> = accepted
+            .material_ids
+            .iter()
+            .map(|id| MaterialId::parse(id).unwrap())
+            .collect();
+        for material_id in &material_ids {
+            let status = store.material_index_status(material_id).unwrap().unwrap();
+            assert_eq!(status.state, MaterialIndexState::Ready);
+            assert!(
+                store
+                    .document_for_material(material_id.as_str())
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        let mut embeddings = DeterministicEmbeddings {
+            generation: EmbeddingGeneration::from(ModelManifest::embedded().unwrap().active()),
+        };
+        let outcome = store
+            .index_embeddings_for_materials(&mut embeddings, 8, &material_ids)
+            .unwrap();
+        assert!(
+            outcome.embedded > 0,
+            "deterministic embeddings must persist for the accepted batch"
+        );
+
+        let server = fake_opencode_server::FakeServer::start();
+        server.set_prompt_response_text(&valid_k6_json());
+        let backend = OpenCodeBackend::new(
+            PathBuf::from("/usr/bin/true"),
+            tmp.path().join("oc-config"),
+            0,
+        );
+        backend.set_base_url(server.base_url());
+        backend.ensure_ready().expect("fake OpenCode ready");
+        let summarizer = crate::summarize::OpenCodeRemoteSummarizer::new(
+            Arc::new(backend),
+            tmp.path().join("opencode-scratch"),
+        )
+        .with_task_timeout(Duration::from_secs(2));
+
+        let run = state
+            .send_summary_run_with(accepted.inputs, &summarizer)
+            .unwrap();
+        assert_eq!(run.status, "completed");
+        let surface = run.message.expect("selected source surface");
+        for name in names {
+            assert_eq!(
+                surface.matches(name).count(),
+                1,
+                "missing or duplicate {name}"
+            );
+        }
+        assert!(!surface.contains("historical"));
+        assert!(!surface.contains("HISTORICAL_ONLY_BODY_SENTINEL"));
+        assert!(
+            !surface.contains("No se pudo procesar este archivo."),
+            "READY selected Markdown must not degrade to the per-source failure copy: {surface}"
+        );
+        let positions: Vec<usize> = [
+            "2026-07-17-a.md",
+            "2026-07-27-b.md",
+            "2026-07-28-c.md",
+            "2026-07-30-d.md",
+            "2026-07-31-e.md",
+        ]
+        .iter()
+        .map(|name| surface.find(name).unwrap())
+        .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let prompts = server.prompt_texts();
+        assert!(
+            prompts.len() >= 5,
+            "K6 must actually invoke the remote summarizer: {}",
+            prompts.len()
+        );
+        for (index, name) in names.iter().enumerate() {
+            let sentinel = format!("SELECTED_{index}_BODY_SENTINEL");
+            assert!(
+                prompts.iter().any(|prompt| prompt.contains(&sentinel)),
+                "{name} must contribute its own indexed chunks to a K6 request"
+            );
+        }
+        assert_eq!(state.test_activity().raw_attachment_forwarding, 0);
+        let metrics = state.last_turn_metrics(&project.id).unwrap().unwrap();
+        assert!(metrics.remote_calls.unwrap() > 0);
+        assert_eq!(metrics.remote_calls, Some(prompts.len()));
+        assert_eq!(metrics.selected_evidence_count, None);
+        assert!(metrics.material_count.unwrap() >= 6);
+        assert_eq!(metrics.input_tokens, None);
+        assert_eq!(metrics.output_tokens, None);
+
+        let k6_before_reopen = state.test_activity().k6_calls;
+        drop(state);
+        let fresh = app(tmp.path());
+        let after = fresh.last_turn_metrics(&project.id).unwrap().unwrap();
+        assert_eq!(after.remote_calls, metrics.remote_calls);
+        assert_eq!(after.material_count, metrics.material_count);
+        assert_eq!(
+            fresh.test_activity(),
+            TestActivity::default(),
+            "reopening Conversation Details must not start provider/index/embed/K6 work"
+        );
+        assert_eq!(k6_before_reopen, 1);
+
+        let cache_prompts = server.prompt_texts().len();
+        let selected = fresh
+            .open_project(&project.id)
+            .unwrap()
+            .messages
+            .iter()
+            .find(|message| message.role == "user")
+            .unwrap()
+            .material_ids
+            .clone();
+        let cache_backend = OpenCodeBackend::new(
+            PathBuf::from("/usr/bin/true"),
+            tmp.path().join("oc-config-cache"),
+            0,
+        );
+        cache_backend.set_base_url(server.base_url());
+        cache_backend.ensure_ready().unwrap();
+        let cache_summarizer = crate::summarize::OpenCodeRemoteSummarizer::new(
+            Arc::new(cache_backend),
+            tmp.path().join("opencode-scratch"),
+        )
+        .with_task_timeout(Duration::from_secs(2));
+        let cached = fresh
+            .summarize_selected_sources(&project.id, &selected, &cache_summarizer)
+            .unwrap();
+        assert_eq!(cached.report.remote_calls, 0);
+        assert!(cached.report.reused >= 5);
+        assert_eq!(
+            server.prompt_texts().len(),
+            cache_prompts,
+            "cache reuse must not issue another remote summary"
+        );
+
+        let logs = crate::session_log::list();
+        let joined = logs
+            .iter()
+            .map(|entry| entry.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("SELECTED_0_BODY_SENTINEL"));
+        assert!(!joined.contains("HISTORICAL_ONLY_BODY_SENTINEL"));
+        let project_json = std::fs::read_to_string(root.join("project.json")).unwrap();
+        assert!(!project_json.contains("SELECTED_0_BODY_SENTINEL"));
+        assert!(!project_json.contains("/home/"));
     }
 
     #[test]
