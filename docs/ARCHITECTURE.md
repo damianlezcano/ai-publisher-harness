@@ -67,6 +67,23 @@ change an active turn; credential mutations
 restart the shared backend so no stale session uses a removed credential
 (ADR-0008, ADR-0009).
 
+## Knowledge summarization routing (K6)
+
+Ordinary questions use bounded hybrid Knowledge retrieval; its top-k evidence
+set is not a source inventory. An explicit per-file request with composer
+selected materials (for example, “resumí cada archivo”) uses K6 planning over
+exactly that selected set. K6 creates/reuses a document summary for every
+ready selected source and may retain its bounded batch/global nodes for cache
+and accounting, but the response surfaces one labelled entry per selected
+source. Historical project materials are not implicitly added.
+
+For “ordenado por fecha”, only an unambiguous ISO-like date in a sanitized
+filename is a trusted ordering hint. Dated files sort chronologically; ties
+and undated files retain composer order, and no date is inferred from content.
+An unsupported or unindexed selected source remains an explicit labelled
+failure entry rather than silently disappearing. Supported indexed text stays
+on the Knowledge/K6 path and is never raw-forwarded solely for coverage.
+
 ## Dependency rules
 - UI does not invoke OpenCode/cloudflared directly.
 - Core does not import Tauri APIs.
