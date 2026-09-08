@@ -930,15 +930,11 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             body
         };
         drop(state);
-        // OpenCode 1.18.25 wraps `/session/{id}/message` like other list
-        // endpoints: `{"location":{...},"data":[...]}`. Keep the in-memory
-        // script as a bare array so prompt-append stays simple.
-        let payload = if body.trim_start().starts_with('[') {
-            enveloped(body.as_bytes())
-        } else {
-            body.into_bytes()
-        };
-        write_response(&mut stream, 200, &payload);
+        // OpenCode 1.18.25 `GET /session/{id}/message` returns a bare JSON
+        // array of `{info, parts}`. Do not wrap it in `{data:[...]}` — that
+        // envelope belongs to other list endpoints (`/api/model`,
+        // `/api/integration`) and is not this route's contract.
+        write_response(&mut stream, 200, body.as_bytes());
         return;
     }
 
