@@ -85,8 +85,14 @@ failure entry rather than silently disappearing. Supported indexed text stays
 on the Knowledge/K6 path and is never raw-forwarded solely for coverage.
 
 K6 remote synthesis uses a dedicated OpenCode scratch session. Completing a
-node requires the same `/session/{id}/message` list envelope as the chat
-adapter (`{"data":[...]}` on OpenCode 1.18.25, or a bare array).
+node polls `GET /session/{id}/message?limit=1000&directory=`, matching OpenCode
+1.18.25: a **bare array** of `{info, parts}` (the `{data:[...]}` envelope is
+used by other list endpoints, not this route). Role, id, and `finish` live
+under `info`. `finish` is omitted while streaming, `"tool-calls"` on
+intermediate tool turns, and `"stop"` when the turn is done. K6 denies scratch
+session tools so a permission wait cannot replace completion, aborts the
+scratch session on timeout, and accepts either a bare array or a `data`
+envelope for compatibility.
 
 ## Dependency rules
 - UI does not invoke OpenCode/cloudflared directly.
