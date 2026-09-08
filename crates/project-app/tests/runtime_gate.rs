@@ -300,6 +300,48 @@ fn five_file_batch_send_indexes_all_and_links_one_turn() {
     assert_eq!(op.lexical_completed, 5);
 }
 
+/// SEMANTIC_CHAT_REMAINS_TOP_K: an ordinary question over five selected files
+/// remains on the normal bounded-Knowledge route. It must not create K6
+/// document nodes simply because several attachments were selected.
+#[test]
+fn semantic_chat_with_five_selected_files_does_not_force_exhaustive_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = FakeAgentEngine::new();
+    inner.set_message("Respuesta con evidencia acotada.".to_owned());
+    let state = AppState::with_components(
+        tmp.path().to_path_buf(),
+        RecordingEngine(inner, calls.clone()),
+        FakeTunnel::new(),
+        connector(),
+        FakeRestarter::new(),
+    );
+    let project = state.create_project("P").unwrap();
+    let corpus = tmp.path().join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    let paths: Vec<String> = (0..5)
+        .map(|i| {
+            let path = corpus.join(format!("grammar-{i}.md"));
+            std::fs::write(&path, format!("# Gramática {i}\n\nRegla compartida.")).unwrap();
+            path.to_string_lossy().to_string()
+        })
+        .collect();
+    assert_eq!(
+        project_app::summarize::detect_summary_intent("¿qué dicen sobre gramática?", 5),
+        project_app::summarize::SummaryIntent::None
+    );
+    let accepted = state
+        .send_staged_message_persist(&project.id, "¿qué dicen sobre gramática?", &paths, &[])
+        .unwrap();
+    let run = state.run_accepted_staged_turn(accepted).unwrap();
+    assert_eq!(run.status, "completed");
+    assert_eq!(calls.lock().unwrap().len(), 1, "one normal chat call");
+    assert!(
+        state.summary_status(&project.id).unwrap().is_empty(),
+        "semantic chat must not create exhaustive K6 nodes"
+    );
+}
+
 /// The multi-file operation identity is stable and observable through the
 /// public `ProjectView.accepted_import` progress (no private-store dependency).
 fn run_operation_id(view: &project_app::ProjectView) -> String {

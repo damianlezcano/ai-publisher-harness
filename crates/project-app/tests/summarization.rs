@@ -11,8 +11,8 @@ use project_agent::FakeAgentEngine;
 use project_app::AppState;
 use project_core::ProjectId;
 use project_knowledge::{
-    BatchOptions, ContextAssemblyOptions, KnowledgeStore, RemoteSummarizer, SummaryContent,
-    SummaryFailure, SummaryLevel, SummaryOutput, SummaryRequest, SummaryState,
+    BatchOptions, ContextAssemblyOptions, HybridSearchOptions, KnowledgeStore, RemoteSummarizer,
+    SummaryContent, SummaryFailure, SummaryLevel, SummaryOutput, SummaryRequest, SummaryState,
 };
 use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
 use project_tunnel::FakeTunnel;
@@ -59,6 +59,7 @@ struct CaptureSummarizer {
 struct CapturedRequest {
     level: SummaryLevel,
     labels: Vec<String>,
+    source_names: Vec<String>,
     evidence_texts: Vec<String>,
 }
 
@@ -117,6 +118,11 @@ impl RemoteSummarizer for CaptureSummarizer {
         self.calls.lock().unwrap().push(CapturedRequest {
             level: request.level,
             labels: request.labels.iter().map(|r| r.label.clone()).collect(),
+            source_names: request
+                .labels
+                .iter()
+                .map(|r| r.source_name.clone())
+                .collect(),
             evidence_texts: request.evidence_texts.clone(),
         });
         Ok(Self::output_for(request))
@@ -682,4 +688,242 @@ fn representative_51_markdown_corpus_flow() {
     let second = app.summarize_project(&p.id, &summarizer).unwrap();
     assert_eq!(second.remote_calls, 0, "identical request must reuse cache");
     assert!(calls.lock().unwrap().is_empty());
+}
+
+/// FIVE_SELECTED_FILES_EXHAUSTIVE_SUMMARY / FIVE_SELECTED_PLUS_ONE_HISTORICAL:
+/// selected composer identities, not K3/K4 top-k or the historical project
+/// corpus, define the K6 source plan and the one-entry-per-source response.
+#[test]
+fn five_selected_files_are_exhaustive_and_exclude_historical_material() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let historical = add_txt(
+        &app,
+        tmp.path(),
+        &project.id,
+        "1999-01-01-historical.md",
+        "HISTORICAL_ONLY_SENTINEL",
+    );
+    let names = [
+        "2024-03-02-c.md",
+        "2024-01-03-a.md",
+        "2024-01-03-b.md",
+        "2024-02-01-d.md",
+        "2024-04-05-e.md",
+    ];
+    let selected: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            add_txt(
+                &app,
+                tmp.path(),
+                &project.id,
+                name,
+                &format!("SELECTED_{i}_SENTINEL"),
+            )
+        })
+        .collect();
+
+    let (summarizer, calls) = CaptureSummarizer::new();
+    let answer = app
+        .summarize_selected_sources(&project.id, &selected, &summarizer)
+        .unwrap();
+    assert_eq!(answer.report.source_count, 5);
+    let surface = answer
+        .summarize_surface_text()
+        .expect("five source entries");
+    for name in names {
+        assert_eq!(
+            surface.matches(name).count(),
+            1,
+            "missing or duplicate {name}"
+        );
+    }
+    assert!(!surface.contains("historical"));
+    assert!(!surface.contains("HISTORICAL_ONLY_SENTINEL"));
+    let positions: Vec<usize> = [
+        "2024-01-03-a.md",
+        "2024-01-03-b.md",
+        "2024-02-01-d.md",
+        "2024-03-02-c.md",
+        "2024-04-05-e.md",
+    ]
+    .iter()
+    .map(|name| surface.find(name).unwrap())
+    .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let captured = calls.lock().unwrap();
+    let document_calls: Vec<_> = captured
+        .iter()
+        .filter(|call| call.level == SummaryLevel::Document)
+        .collect();
+    assert_eq!(
+        document_calls.len(),
+        5,
+        "one K6 document node per selected source"
+    );
+    let source_names: std::collections::BTreeSet<_> = document_calls
+        .iter()
+        .flat_map(|call| call.source_names.iter().cloned())
+        .collect();
+    assert_eq!(source_names.len(), 5);
+    assert!(!source_names.iter().any(|name| name.contains("historical")));
+    assert_ne!(historical, selected[0]);
+}
+
+/// PARTIAL_DATE_METADATA and unsafe timestamp noise use the documented stable
+/// fallback: dated names first in chronological order, then undated names in
+/// composer order, with no fabricated chronology.
+#[test]
+fn selected_summary_date_order_is_safe_for_partial_and_noisy_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let names = [
+        "undated-first.md",
+        "2024-02-03-safe.md",
+        "capture-202401011230-noise.md",
+        "2024_01_02-safe.md",
+        "2024-13-40-invalid.md",
+        "2024-02-30-bad.md",
+    ];
+    let selected: Vec<String> = names
+        .iter()
+        .map(|name| add_txt(&app, tmp.path(), &project.id, name, "source text"))
+        .collect();
+    let (summarizer, _) = CaptureSummarizer::new();
+    let answer = app
+        .summarize_selected_sources(&project.id, &selected, &summarizer)
+        .unwrap();
+    let surface = answer.summarize_surface_text().unwrap();
+    let ordered = [
+        "2024_01_02-safe.md",
+        "2024-02-03-safe.md",
+        "undated-first.md",
+        "capture-202401011230-noise.md",
+        "2024-13-40-invalid.md",
+        "2024-02-30-bad.md",
+    ];
+    let positions: Vec<_> = ordered
+        .iter()
+        .map(|name| surface.find(name).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(surface.contains("Sin fecha confiable — capture-202401011230-noise.md"));
+    assert!(surface.contains("Sin fecha confiable — 2024-13-40-invalid.md"));
+    assert!(surface.contains("Sin fecha confiable — 2024-02-30-bad.md"));
+}
+
+/// SELECTED_SOURCE_IDENTITIES_NOT_RETRIEVAL_TOP_K: even when hybrid retrieval
+/// can return only one hit, the selected-set plan still covers every selected
+/// ready source. Top-k evidence is not the inventory.
+#[test]
+fn selected_summary_coverage_does_not_depend_on_retrieval_top_k() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let selected: Vec<String> = (0..5)
+        .map(|i| {
+            add_txt(
+                &app,
+                tmp.path(),
+                &project.id,
+                &format!("unique-topic-{i}.md"),
+                &format!("UNIQUE_TOKEN_{i} only in this file"),
+            )
+        })
+        .collect();
+    let store = open_store(tmp.path(), &project.id);
+    let (hits, _) = store
+        .hybrid_search(
+            "UNIQUE_TOKEN_0",
+            None,
+            HybridSearchOptions {
+                final_limit: 1,
+                ..HybridSearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        hits.len() <= 1,
+        "retrieval must remain bounded/top-k, not an inventory"
+    );
+    let (summarizer, calls) = CaptureSummarizer::new();
+    let answer = app
+        .summarize_selected_sources(&project.id, &selected, &summarizer)
+        .unwrap();
+    assert_eq!(answer.report.source_count, 5);
+    let document_calls = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| call.level == SummaryLevel::Document)
+        .count();
+    assert_eq!(document_calls, 5);
+}
+
+/// ONE_FILE_REGRESSION: a single selected Markdown/TXT explicit summary still
+/// surfaces exactly one labelled source entry through the selected-set path.
+#[test]
+fn one_selected_markdown_file_summary_surfaces_one_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let selected = add_txt(
+        &app,
+        tmp.path(),
+        &project.id,
+        "nota.md",
+        "Única nota seleccionada.",
+    );
+    let (summarizer, calls) = CaptureSummarizer::new();
+    let answer = app
+        .summarize_selected_sources(&project.id, &[selected], &summarizer)
+        .unwrap();
+    let surface = answer.summarize_surface_text().unwrap();
+    assert_eq!(answer.report.source_count, 1);
+    assert_eq!(surface.matches("nota.md").count(), 1);
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.level == SummaryLevel::Document)
+            .count(),
+        1
+    );
+}
+
+/// SOURCE_FAILURE_IS_EXPLICIT: a selected source that has no indexed text
+/// identity still occupies one deterministic entry rather than disappearing.
+#[test]
+fn selected_source_without_indexed_document_is_explicit_failure_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let ready = add_txt(
+        &app,
+        tmp.path(),
+        &project.id,
+        "2024-01-01-ready.md",
+        "ready text",
+    );
+    let unavailable = add_txt(
+        &app,
+        tmp.path(),
+        &project.id,
+        "broken.pdf",
+        "not indexed here",
+    );
+    let (summarizer, _) = CaptureSummarizer::new();
+    let answer = app
+        .summarize_selected_sources(&project.id, &[ready, unavailable], &summarizer)
+        .unwrap();
+    let surface = answer.summarize_surface_text().unwrap();
+    assert_eq!(answer.report.source_count, 2);
+    assert!(surface.contains("2024-01-01-ready.md"));
+    assert!(surface.contains("broken.pdf\nNo se pudo procesar este archivo."));
 }

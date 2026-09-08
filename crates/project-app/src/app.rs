@@ -6,6 +6,7 @@
 //! plus human-facing errors. The Tauri command layer is a thin adapter over
 //! this facade; no domain logic lives in the frontend.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -221,6 +222,10 @@ pub struct AgentRunInputs {
     prompt: String,
     model: Option<ModelRef>,
     attachments: Vec<AgentAttachment>,
+    /// Opaque material identities selected in this exact composer turn. These
+    /// are deliberately retained separately from `attachments`: supported text
+    /// is indexed and must not be raw-forwarded merely to preserve coverage.
+    selected_material_ids: Vec<String>,
     knowledge: Option<AgentKnowledgeContext>,
     /// Local structural facts observed while preparing this exact request.
     /// They stay local until the owning user turn reaches a successful terminal
@@ -242,6 +247,14 @@ struct TurnKnowledgeMetrics {
     context_reduction_pct: Option<usize>,
     semantic_provider_state: String,
     request_preparation_ms: Option<u64>,
+}
+
+/// One source explicitly selected in the current composer turn. This is kept
+/// application-local: material ids never cross the provider boundary.
+struct SelectedSummarySource {
+    source_label: String,
+    selected_order: usize,
+    document_id: Option<String>,
 }
 
 /// Durable hand-off between the fast acceptance boundary and its derived
@@ -1908,7 +1921,10 @@ where
         attachment_ids: &[String],
     ) -> AppResult<AgentRunView> {
         let inputs = self.send_message_persist(project_id, prompt, attachment_ids)?;
-        if crate::summarize::detect_summarize_intent(prompt) && self.summarizer_backend.is_some() {
+        if crate::summarize::detect_summary_intent(prompt, attachment_ids.len())
+            != crate::summarize::SummaryIntent::None
+            && self.summarizer_backend.is_some()
+        {
             return self.send_summary_run(inputs);
         }
         self.send_message_run(inputs)
@@ -1960,7 +1976,21 @@ where
                 turn_id.as_deref().unwrap_or("none")
             ),
         );
-        let answer = match self.summarize_project_with(project_id.as_str(), summarizer) {
+        let summary_intent = crate::summarize::detect_summary_intent(
+            &inputs.prompt,
+            inputs.selected_material_ids.len(),
+        );
+        let selected_per_source =
+            summary_intent == crate::summarize::SummaryIntent::SelectedPerSource;
+        let answer = match if selected_per_source {
+            self.summarize_selected_sources(
+                project_id.as_str(),
+                &inputs.selected_material_ids,
+                summarizer,
+            )
+        } else {
+            self.summarize_project_with(project_id.as_str(), summarizer)
+        } {
             Ok(answer) => answer,
             Err(error) => {
                 let text = error.message.clone();
@@ -2056,6 +2086,11 @@ where
             inputs_model.as_ref(),
             &answer.report,
             duration_ms,
+            if selected_per_source {
+                "summary_selected_sources"
+            } else {
+                "summary_global"
+            },
         );
         // Knowledge architecture metrics survive semantic/evidence variation:
         // the corpus/index facts are emitted for the summary turn too, so the
@@ -2331,7 +2366,10 @@ where
         // chat run. This mirrors `send_message` so an accepted staged send with
         // an attached supported document cannot both raw-forward the file AND
         // run a second normal-chat summary for the same logical request.
-        let summarize_intent = crate::summarize::detect_summarize_intent(&accepted.inputs.prompt)
+        let summarize_intent = crate::summarize::detect_summary_intent(
+            &accepted.inputs.prompt,
+            accepted.inputs.selected_material_ids.len(),
+        ) != crate::summarize::SummaryIntent::None
             && self.summarizer_backend.is_some();
         if !summarize_intent {
             let (knowledge, knowledge_metrics) = match self
@@ -2863,6 +2901,144 @@ where
         })
     }
 
+    /// K6 execution for an explicit composer-selected set. Unlike semantic
+    /// retrieval, the planner receives every selected ready source directly;
+    /// top-k evidence therefore cannot decide whether a source exists. K6's
+    /// document/batch/global nodes and cache semantics are preserved, while the
+    /// user-facing answer deliberately surfaces the document nodes one-for-one.
+    pub fn summarize_selected_sources(
+        &self,
+        project_id: &str,
+        selected_material_ids: &[String],
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+    ) -> AppResult<ProjectSummaryAnswerView> {
+        let pid = parse_project_id(project_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        let root = self.base.join("projects").join(pid.as_str());
+        let mut store = KnowledgeStore::open(&root, &pid)
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+
+        // Composer ids are already authorized at acceptance. Deduplicate here
+        // defensively so repeated ids cannot create duplicate source entries.
+        let mut seen = HashSet::new();
+        let mut sources = Vec::new();
+        for (selected_order, material_id) in selected_material_ids.iter().enumerate() {
+            if !seen.insert(material_id.clone()) {
+                continue;
+            }
+            let source_label = project
+                .materials
+                .iter()
+                .find(|material| material.id.as_str() == material_id)
+                .map(|material| project_core::safe_file_name(&material.original_file_name))
+                .unwrap_or_else(|| "Archivo seleccionado".to_owned());
+            let document_id = store.document_for_material(material_id).ok().flatten();
+            sources.push(SelectedSummarySource {
+                source_label,
+                selected_order,
+                document_id,
+            });
+        }
+
+        let chunk_counts: std::collections::BTreeMap<String, usize> = store
+            .summary_document_levels()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?
+            .into_iter()
+            .collect();
+        let mut document_ids = HashSet::new();
+        let levels: Vec<(String, usize)> = sources
+            .iter()
+            .filter_map(|source| source.document_id.as_ref())
+            .filter(|document_id| document_ids.insert((*document_id).clone()))
+            .filter_map(|document_id| {
+                chunk_counts
+                    .get(document_id)
+                    .copied()
+                    .filter(|count| *count > 0)
+                    .map(|count| (document_id.clone(), count))
+            })
+            .collect();
+
+        let mut accounting = project_knowledge::SummaryAccounting {
+            source_count: sources.len(),
+            ..Default::default()
+        };
+        if !levels.is_empty() {
+            let existing = store.summary_existing().map_err(|_| {
+                AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen.")
+            })?;
+            let plan = project_knowledge::plan_project_summaries(
+                &levels,
+                &existing,
+                project_knowledge::BatchOptions::default(),
+                None,
+            )
+            .map_err(|_| AppError::new(ErrorCode::Internal, "No pudimos preparar el resumen."))?;
+            accounting.reused = plan.reused.len();
+            accounting.cache_hits = plan.reused.len();
+            accounting.hierarchy_depth = plan.hierarchy_depth;
+            for node in &plan.pending {
+                if let Err(failure) =
+                    self.synthesize_node(&mut store, node, summarizer, &mut accounting)
+                {
+                    store
+                        .mark_summary_failed(&node.summary_id, failure)
+                        .map_err(|_| {
+                            AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
+                        })?;
+                }
+            }
+        }
+
+        let mut contents = std::collections::BTreeMap::new();
+        for summary_id in store.summary_ids().map_err(|_| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos leer el estado del resumen.",
+            )
+        })? {
+            if let Some(node) = store.get_summary(&summary_id).map_err(|_| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "No pudimos leer el estado del resumen.",
+                )
+            })? && node.level == project_knowledge::SummaryLevel::Document
+                && node.source_ids.len() == 1
+            {
+                contents.insert(node.source_ids[0].clone(), node.content);
+            }
+        }
+        let surface = render_selected_summary_surface(&sources, &contents);
+        let naive_corpus_est_tokens = store
+            .corpus_stats()
+            .map(|stats| stats.naive_corpus_est_tokens)
+            .unwrap_or(0);
+        Ok(ProjectSummaryAnswerView {
+            report: SummarizationReportView {
+                remote_calls: accounting.remote_calls,
+                estimated_input_units: accounting.estimated_input_units,
+                cache_hits: accounting.cache_hits,
+                reused: accounting.reused,
+                regenerated: accounting.regenerated,
+                source_count: accounting.source_count,
+                hierarchy_depth: accounting.hierarchy_depth,
+                input_tokens: accounting.input_tokens,
+                output_tokens: accounting.output_tokens,
+                cache_read_tokens: accounting.cache_read_tokens,
+                cache_write_tokens: accounting.cache_write_tokens,
+                cost_usd: accounting.cost_usd,
+                provider_usage_actual: accounting.provider_usage_actual,
+            },
+            global_summary: Some(surface),
+            naive_corpus_est_tokens,
+        })
+    }
+
     /// Reads the `global`-level (or single-document) summary prose, if present.
     fn global_summary_text(&self, project_id: &str) -> AppResult<Option<String>> {
         let nodes = self.summary_status(project_id)?;
@@ -2987,6 +3163,7 @@ where
             prompt: prompt.to_owned(),
             model,
             attachments,
+            selected_material_ids: attachment_ids.to_vec(),
             knowledge: None,
             knowledge_metrics: None,
         })
@@ -4335,6 +4512,86 @@ fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// Renders one entry for every source selected by the user. Dated names sort
+/// chronologically; ties and entries without a safe filename date retain the
+/// original composer order. This avoids inventing chronology from content.
+fn render_selected_summary_surface(
+    sources: &[SelectedSummarySource],
+    contents: &std::collections::BTreeMap<String, Option<project_knowledge::SummaryContent>>,
+) -> String {
+    let mut ordered: Vec<&SelectedSummarySource> = sources.iter().collect();
+    ordered.sort_by_key(|source| {
+        let date = safe_filename_date(&source.source_label);
+        (date.is_none(), date, source.selected_order)
+    });
+    ordered
+        .into_iter()
+        .map(|source| {
+            let heading = match safe_filename_date(&source.source_label) {
+                Some((year, month, day)) => {
+                    format!("{year:04}-{month:02}-{day:02} — {}", source.source_label)
+                }
+                None => format!("Sin fecha confiable — {}", source.source_label),
+            };
+            let text = source
+                .document_id
+                .as_ref()
+                .and_then(|document_id| contents.get(document_id))
+                .and_then(|content| content.as_ref())
+                .map(|content| content.summary.trim())
+                .filter(|summary| !summary.is_empty())
+                .unwrap_or("No se pudo procesar este archivo.");
+            format!("{heading}\n{text}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Accept only an unambiguous ISO-like filename date (`YYYY-MM-DD` or
+/// `YYYY_MM_DD`) bounded by non-alphanumeric characters. Numeric timestamp
+/// noise such as `202401011230` is deliberately not a date hint.
+fn safe_filename_date(name: &str) -> Option<(i32, u32, u32)> {
+    let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);
+    let bytes = stem.as_bytes();
+    for start in 0..bytes.len().saturating_sub(9) {
+        let end = start + 10;
+        if end > bytes.len()
+            || (start > 0 && bytes[start - 1].is_ascii_alphanumeric())
+            || (end < bytes.len() && bytes[end].is_ascii_alphanumeric())
+            || (bytes[start + 4] != b'-' && bytes[start + 4] != b'_')
+            || (bytes[start + 7] != b'-' && bytes[start + 7] != b'_')
+            || !bytes[start..start + 4].iter().all(u8::is_ascii_digit)
+            || !bytes[start + 5..start + 7].iter().all(u8::is_ascii_digit)
+            || !bytes[start + 8..end].iter().all(u8::is_ascii_digit)
+        {
+            continue;
+        }
+        let year = std::str::from_utf8(&bytes[start..start + 4])
+            .ok()?
+            .parse()
+            .ok()?;
+        let month: u32 = std::str::from_utf8(&bytes[start + 5..start + 7])
+            .ok()?
+            .parse()
+            .ok()?;
+        let day: u32 = std::str::from_utf8(&bytes[start + 8..end])
+            .ok()?
+            .parse()
+            .ok()?;
+        let days = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+            2 => 28,
+            _ => continue,
+        };
+        if day > 0 && day <= days {
+            return Some((year, month, day));
+        }
+    }
+    None
+}
+
 /// SVG is validated for the `svg` root element only: the bytes are text and must
 /// contain an `<svg` opening tag within a small leading window (after an optional
 /// XML prolog, BOM, and whitespace). The renderer never executes it (rendered via
@@ -4552,15 +4809,18 @@ fn completed_summary_turn_metrics_without_corpus(
 
 /// Records the AGGREGATE provider usage for a K6 summarization turn. The K6
 /// per-node `SummaryAccounting` already sums every document/batch/global call,
-/// so one record represents the whole logical turn. `reason` is always
-/// `summary_global`; token fields stay `None` (and render "No disponible")
-/// when the summarizer reported no actual provider telemetry.
+/// so one record represents the whole logical turn. `reason` is
+/// `summary_global` or `summary_selected_sources`; token fields stay `None`
+/// (and render "No disponible") when the summarizer reported no actual
+/// provider telemetry. Additional raw attachment forwarding is always false
+/// on this path: supported indexed text stays on K6 evidence.
 fn record_summary_turn_usage(
     conversation_id: &str,
     turn_id: Option<&str>,
     model: Option<&ModelRef>,
     report: &SummarizationReportView,
     turn_duration_ms: u128,
+    reason: &str,
 ) {
     let (provider, model) = model
         .map(|model| (model.provider_id.clone(), model.model_id.clone()))
@@ -4584,7 +4844,7 @@ fn record_summary_turn_usage(
         turn_duration_ms: Some(turn_duration_ms),
         source: source.to_owned(),
         remote_calls: Some(report.remote_calls),
-        reason: "summary_global".to_owned(),
+        reason: reason.to_owned(),
         additional_attachment_route: false,
     });
 }
@@ -4843,6 +5103,102 @@ mod durable_k6_tests {
             TestActivity::default(),
             "reopening durable K6 metrics invokes no provider/OpenCode, K6, indexing, embedding inference/persistence, retrieval, or raw attachment forwarding"
         );
+    }
+
+    #[test]
+    fn selected_per_source_send_path_keeps_exact_identities_and_truthful_metrics() {
+        let _session_log_guard = crate::session_log::test_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = app(tmp.path());
+        let project = state.create_project("P").unwrap();
+        let historical = tmp.path().join("1999-01-01-historical.md");
+        std::fs::write(&historical, "HISTORICAL_ONLY_SENTINEL").unwrap();
+        state
+            .add_material_from_path(&project.id, historical.to_str().unwrap())
+            .unwrap();
+        let names = [
+            "2024-03-02-c.md",
+            "2024-01-03-a.md",
+            "2024-01-03-b.md",
+            "2024-02-01-d.md",
+            "2024-04-05-e.md",
+        ];
+        let selected: Vec<String> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let path = tmp.path().join(name);
+                std::fs::write(&path, format!("SELECTED_{i}_SENTINEL")).unwrap();
+                state
+                    .add_material_from_path(&project.id, path.to_str().unwrap())
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        let prompt = "haceme un resumen de cada archivo ordenado por fecha";
+        assert_eq!(
+            crate::summarize::detect_summary_intent(prompt, selected.len()),
+            crate::summarize::SummaryIntent::SelectedPerSource
+        );
+        let inputs = state
+            .send_message_persist(&project.id, prompt, &selected)
+            .unwrap();
+        assert_eq!(inputs.selected_material_ids, selected);
+        let calls = Arc::new(Mutex::new(0));
+        let summarizer = Multi {
+            calls: calls.clone(),
+        };
+        let run = state.send_summary_run_with(inputs, &summarizer).unwrap();
+        assert_eq!(run.status, "completed");
+        let surface = run.message.expect("selected source surface");
+        for name in names {
+            assert_eq!(
+                surface.matches(name).count(),
+                1,
+                "missing or duplicate {name}"
+            );
+        }
+        assert!(!surface.contains("historical"));
+        assert!(!surface.contains("HISTORICAL_ONLY_SENTINEL"));
+        let positions: Vec<usize> = [
+            "2024-01-03-a.md",
+            "2024-01-03-b.md",
+            "2024-02-01-d.md",
+            "2024-03-02-c.md",
+            "2024-04-05-e.md",
+        ]
+        .iter()
+        .map(|name| surface.find(name).unwrap())
+        .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(state.test_activity().k6_calls, 1);
+        assert_eq!(state.test_activity().provider_calls, 0);
+        assert_eq!(state.test_activity().raw_attachment_forwarding, 0);
+        let metrics = state.last_turn_metrics(&project.id).unwrap().unwrap();
+        assert_eq!(metrics.remote_calls, Some(*calls.lock().unwrap()));
+        assert_eq!(metrics.remote_calls, Some(7));
+        assert_eq!(metrics.selected_evidence_count, None);
+        assert_eq!(metrics.retrieval_candidate_count, None);
+        assert!(metrics.material_count.unwrap() >= 6);
+    }
+
+    #[test]
+    fn safe_filename_date_rejects_noise_and_invalid_calendar_values() {
+        assert_eq!(
+            super::safe_filename_date("2024-01-03-a.md"),
+            Some((2024, 1, 3))
+        );
+        assert_eq!(
+            super::safe_filename_date("2024_01_02-safe.md"),
+            Some((2024, 1, 2))
+        );
+        assert_eq!(
+            super::safe_filename_date("capture-202401011230-noise.md"),
+            None
+        );
+        assert_eq!(super::safe_filename_date("2024-13-40-invalid.md"), None);
+        assert_eq!(super::safe_filename_date("2024-02-30-bad.md"), None);
+        assert_eq!(super::safe_filename_date("undated-first.md"), None);
     }
 
     /// A process can stop after the real terminal lifecycle persists its

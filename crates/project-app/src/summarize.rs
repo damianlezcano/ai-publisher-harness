@@ -20,7 +20,18 @@ use serde_json::{Value, json};
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SUMMARY_TASK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Provider- and language-independent whole-project summarization intent.
+/// The bounded summary operation requested by the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummaryIntent {
+    /// Ordinary question answering: K3/K4 retrieval remains appropriate.
+    None,
+    /// A request to summarize the complete existing project corpus.
+    Project,
+    /// An explicit request to summarize each source selected in this turn.
+    SelectedPerSource,
+}
+
+/// Provider- and language-independent summarization intent.
 ///
 /// This is deliberately not a single hardcoded Spanish string trigger. It
 /// detects a *summary verb* plus an *all/corpus scope marker* across a small
@@ -28,15 +39,38 @@ const SUMMARY_TASK_TIMEOUT: Duration = Duration::from_secs(120);
 /// "resumí el proyecto", etc. resolve to the same internal operation. Ordinary
 /// informational questions (which carry no corpus-scope marker) continue through
 /// K3/K4 chat.
-pub fn detect_summarize_intent(text: &str) -> bool {
+pub fn detect_summary_intent(text: &str, selected_attachment_count: usize) -> SummaryIntent {
     let normalized = text.to_lowercase();
     let has_summary_verb = SUMMARY_VERBS.iter().any(|verb| normalized.contains(verb));
     if !has_summary_verb {
-        return false;
+        return SummaryIntent::None;
     }
-    SCOPE_MARKERS
+    if PROJECT_SCOPE_MARKERS
         .iter()
         .any(|marker| normalized.contains(marker))
+    {
+        return SummaryIntent::Project;
+    }
+    let explicit_per_source = PER_SOURCE_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker));
+    if explicit_per_source && selected_attachment_count > 0 {
+        return SummaryIntent::SelectedPerSource;
+    }
+    // Corpus-wide wording without a current composer selection keeps the
+    // historical whole-project K6 route. Attachments are what convert the
+    // same wording into an exact selected-set inventory.
+    if explicit_per_source {
+        return SummaryIntent::Project;
+    }
+    SummaryIntent::None
+}
+
+/// Compatibility predicate for callers that only need to distinguish summary
+/// work from normal semantic chat. New routing must use [`detect_summary_intent`]
+/// so selected source identity is retained.
+pub fn detect_summarize_intent(text: &str) -> bool {
+    detect_summary_intent(text, 1) != SummaryIntent::None
 }
 
 const SUMMARY_VERBS: &[&str] = &[
@@ -47,22 +81,29 @@ const SUMMARY_VERBS: &[&str] = &[
     "sintetiz",
     "sintesis",
 ];
-const SCOPE_MARKERS: &[&str] = &[
-    "todos",
-    "todas",
-    "todo el",
-    "toda la",
-    "los archivos",
-    "las notas",
-    "all files",
-    "all documents",
+const PROJECT_SCOPE_MARKERS: &[&str] = &[
     "el proyecto",
     "the project",
-    "la reunión",
     "carpeta entera",
     "whole project",
     "entire project",
     "proyecto entero",
+];
+const PER_SOURCE_MARKERS: &[&str] = &[
+    "todos",
+    "todas",
+    "cada archivo",
+    "cada documento",
+    "each attached file",
+    "each file",
+    "each document",
+    "todo el",
+    "toda la",
+    "los archivos",
+    "los documentos",
+    "las notas",
+    "all files",
+    "all documents",
     // Explicit single-source summarization: "resumime el archivo", "resumí
     // este documento", "sintetizá el material". These route to K6 so a single
     // supported indexed document is summarized through bounded evidence instead
@@ -357,6 +398,50 @@ mod tests {
             "resumime qué dijo Carla en la última reunión"
         ));
         assert!(!detect_summarize_intent(""));
+    }
+
+    #[test]
+    fn selected_per_source_intent_does_not_turn_semantic_chat_into_summary() {
+        assert_eq!(
+            detect_summary_intent("haceme un resumen de cada archivo ordenado por fecha", 5),
+            SummaryIntent::SelectedPerSource
+        );
+        assert_eq!(
+            detect_summary_intent("summarize each attached file", 5),
+            SummaryIntent::SelectedPerSource
+        );
+        assert_eq!(
+            detect_summary_intent("resumí todo el proyecto", 5),
+            SummaryIntent::Project
+        );
+        assert_eq!(
+            detect_summary_intent("¿en cuál archivo hablan de vacaciones?", 5),
+            SummaryIntent::None
+        );
+        assert_eq!(
+            detect_summary_intent("compará lo que dicen sobre X", 5),
+            SummaryIntent::None
+        );
+        assert_eq!(
+            detect_summary_intent("resumime todos los archivos", 0),
+            SummaryIntent::Project
+        );
+        assert_eq!(
+            detect_summary_intent("resumime todos los archivos", 5),
+            SummaryIntent::SelectedPerSource
+        );
+        assert_eq!(
+            detect_summary_intent("resumime el archivo", 0),
+            SummaryIntent::Project
+        );
+        assert_eq!(
+            detect_summary_intent("resumime el archivo", 1),
+            SummaryIntent::SelectedPerSource
+        );
+        assert_eq!(
+            detect_summary_intent("¿qué dicen sobre gramática?", 5),
+            SummaryIntent::None
+        );
     }
 
     #[test]

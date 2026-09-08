@@ -26,4 +26,4 @@ pub use dtos::{
 pub use error::{AppError, AppResult, ErrorCode};
 pub use session_log::SessionLogEntry;
 pub use summarize::OpenCodeRemoteSummarizer;
-pub use summarize::detect_summarize_intent;
+pub use summarize::{SummaryIntent, detect_summarize_intent, detect_summary_intent};
