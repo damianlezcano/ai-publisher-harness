@@ -57,6 +57,33 @@ export interface PublicationView {
   publicUrl: string | null;
 }
 
+export interface TurnMetrics {
+  provider: string | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+  turnDurationMs: number | null;
+  source: string | null;
+  remoteCalls: number | null;
+  // Knowledge structural metrics
+  materialCount: number | null;
+  corpusBytes: number | null;
+  corpusUtf8Chars: number | null;
+  corpusEstTokens: number | null;
+  retrievalCandidateCount: number | null;
+  selectedEvidenceCount: number | null;
+  selectedEvidenceBytes: number | null;
+  selectedEvidenceUtf8Chars: number | null;
+  evidenceEstTokens: number | null;
+  contextReductionPct: number | null;
+  semanticProviderState: string | null;
+  requestPreparationMs: number | null;
+}
+
 export interface MessageView {
   id: string;
   role: "user" | "assistant";
@@ -65,6 +92,7 @@ export interface MessageView {
   createdAt: string;
   materialIds: string[];
   creationIds: string[];
+  turnMetrics?: TurnMetrics | null;
 }
 
 export interface ProjectView {

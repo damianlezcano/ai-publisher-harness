@@ -780,9 +780,25 @@ pub async fn session_logs(state: State<'_, SharedState>) -> Result<Vec<SessionLo
 
 #[tauri::command]
 pub async fn session_logs_clear(state: State<'_, SharedState>) -> Result<(), AppError> {
-    blocking(state.inner().clone(), |app| {
+    blocking(state.inner().clone(), move |app| {
         app.clear_session_logs();
         Ok(())
+    })
+    .await
+}
+
+/// Returns the most recent durable turn metrics for a conversation.
+///
+/// Reads from the persisted `turn_metrics` on the latest user message in
+/// `project.json`. Returns `null` when the conversation has no completed
+/// turn with metrics (old projects, or conversations without Knowledge).
+#[tauri::command]
+pub async fn conversation_last_turn_metrics(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<Option<project_app::TurnMetricsView>, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.last_turn_metrics(&project_id)
     })
     .await
 }

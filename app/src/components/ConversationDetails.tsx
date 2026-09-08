@@ -6,6 +6,7 @@ import type {
   ProjectView,
   ProviderSummary,
   SessionLogEntry,
+  TurnMetrics,
 } from "../types";
 import Dialog from "./ui/Dialog";
 import PreviewModal from "./PreviewModal";
@@ -25,6 +26,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [logs, setLogs] = useState<SessionLogEntry[]>([]);
+  const [durableMetrics, setDurableMetrics] = useState<TurnMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{
     title: string;
@@ -34,11 +36,17 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   } | null>(null);
 
   useEffect(() => {
-    void Promise.all([api.modelList(), api.providerList(), api.sessionLogs().catch(() => [])])
-      .then(([modelList, providerList, sessionLogs]) => {
+    void Promise.all([
+      api.modelList(),
+      api.providerList(),
+      api.sessionLogs().catch(() => []),
+      api.conversationTurnMetrics(project.id).catch(() => null),
+    ])
+      .then(([modelList, providerList, sessionLogs, metrics]) => {
         setModels(modelList);
         setProviders(providerList);
         setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
+        setDurableMetrics(metrics);
       })
       .catch((err) => setError(errorMessage(err)));
   }, [project.id, project.name]);
@@ -146,7 +154,11 @@ export default function ConversationDetails({ project, active, onClose, onRefres
           </button>
         </div>
       </section>
-      <ConversationMetrics conversationId={project.id} logs={logs} />
+      <ConversationMetrics
+        conversationId={project.id}
+        logs={logs}
+        durableMetrics={durableMetrics}
+      />
       <section className="provider-section">
         <h3>{messages.conversationDetails.modelHeading}</h3>
         <label htmlFor="conversation-model">{messages.conversationDetails.modelLabel}</label>

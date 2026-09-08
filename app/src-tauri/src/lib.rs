@@ -73,6 +73,7 @@ pub fn run() {
             commands::session_logs,
             commands::session_logs_clear,
             commands::session_log_record,
+            commands::conversation_last_turn_metrics,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

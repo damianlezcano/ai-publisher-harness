@@ -1,9 +1,10 @@
-import type { SessionKnowledgeMetrics, SessionLogEntry, SessionUsage } from "../types";
+import type { SessionKnowledgeMetrics, SessionLogEntry, SessionUsage, TurnMetrics } from "../types";
 import { messages } from "../messages";
 
 interface Props {
   conversationId: string;
   logs: SessionLogEntry[];
+  durableMetrics: TurnMetrics | null;
 }
 
 function latest<T>(
@@ -168,14 +169,12 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
   );
 }
 
-export default function ConversationMetrics({ conversationId, logs }: Props) {
-  const selected = logs.filter(
-    (entry) =>
-      entry.usage?.conversationId === conversationId ||
-      entry.knowledge?.conversationId === conversationId,
-  );
-  const usage = latest(selected, (entry) => entry.usage);
-  const knowledge = latest(selected, (entry) => entry.knowledge);
+export default function ConversationMetrics({ conversationId, logs, durableMetrics }: Props) {
+  // Durable metrics (persisted in project.json) are the authoritative source.
+  // Fall back to session_logs when durable metrics are unavailable
+  // (old projects, in-flight sessions before restart).
+  const usage = durableUsage(durableMetrics, logs, conversationId);
+  const knowledge = durableKnowledge(durableMetrics, logs, conversationId);
 
   return (
     <section
@@ -188,4 +187,75 @@ export default function ConversationMetrics({ conversationId, logs }: Props) {
       <KnowledgeMetrics knowledge={knowledge} />
     </section>
   );
+}
+
+function durableUsage(
+  durable: TurnMetrics | null,
+  logs: SessionLogEntry[],
+  conversationId: string,
+): SessionUsage | null {
+  // `source`/`remoteCalls` can be the only available provider facts (for
+  // example, a completed zero-source K6 turn). It is still the authoritative
+  // durable record and must not be replaced with a stale session-log entry.
+  if (durable && Object.values(durable).some((value) => value != null)) {
+    return {
+      conversationId,
+      turnId: "",
+      provider: durable.provider || "",
+      model: durable.model || "",
+      inputTokens: durable.inputTokens ?? null,
+      outputTokens: durable.outputTokens ?? null,
+      cacheReadTokens: durable.cacheReadTokens ?? null,
+      cacheWriteTokens: durable.cacheWriteTokens ?? null,
+      totalTokens: durable.totalTokens ?? null,
+      costUsd: durable.costUsd ?? null,
+      turnDurationMs: durable.turnDurationMs ?? null,
+      source: durable.source || "unavailable",
+      remoteCalls: durable.remoteCalls ?? null,
+    };
+  }
+  const selected = logs.filter((entry) => entry.usage?.conversationId === conversationId);
+  return latest(selected, (entry) => entry.usage);
+}
+
+function durableKnowledge(
+  durable: TurnMetrics | null,
+  logs: SessionLogEntry[],
+  conversationId: string,
+): SessionKnowledgeMetrics | null {
+  const materialCount = durable?.materialCount;
+  const corpusBytes = durable?.corpusBytes;
+  const corpusUtf8Chars = durable?.corpusUtf8Chars;
+  const corpusEstTokens = durable?.corpusEstTokens;
+  // These four corpus facts are a single measured local snapshot. Do not turn
+  // a malformed/older partial snapshot into invented zeroes; use the existing
+  // compatibility fallback instead.
+  if (
+    durable &&
+    materialCount != null &&
+    corpusBytes != null &&
+    corpusUtf8Chars != null &&
+    corpusEstTokens != null
+  ) {
+    return {
+      conversationId,
+      materialCount,
+      corpusBytes,
+      corpusUtf8Chars,
+      corpusEstTokens,
+      retrievalCandidateCount: durable.retrievalCandidateCount ?? null,
+      selectedEvidenceCount: durable.selectedEvidenceCount ?? null,
+      selectedEvidenceBytes: durable.selectedEvidenceBytes ?? null,
+      selectedEvidenceUtf8Chars: durable.selectedEvidenceUtf8Chars ?? null,
+      evidenceEstTokens: durable.evidenceEstTokens ?? null,
+      contextReductionPct: durable.contextReductionPct ?? null,
+      semanticProviderState: durable.semanticProviderState || "",
+      requestPreparationMs: durable.requestPreparationMs ?? null,
+    };
+  }
+  // A partial durable record is authoritative but incomplete. Never fill it
+  // from a session entry (which might belong to a different/in-flight turn).
+  if (durable && Object.values(durable).some((value) => value != null)) return null;
+  const selected = logs.filter((entry) => entry.knowledge?.conversationId === conversationId);
+  return latest(selected, (entry) => entry.knowledge);
 }

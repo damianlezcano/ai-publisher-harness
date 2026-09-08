@@ -22,6 +22,7 @@ import type {
   PublicationView,
   SelectedModelView,
   SessionLogEntry,
+  TurnMetrics,
 } from "./types";
 
 export interface StagedImagePayload {
@@ -137,6 +138,8 @@ export const api = {
   sessionLogs: () => invoke<SessionLogEntry[]>("session_logs"),
   sessionLogsClear: () => invoke<void>("session_logs_clear"),
   sessionLogRecord: (message: string) => invoke<void>("session_log_record", { message }),
+  conversationTurnMetrics: (projectId: string) =>
+    invoke<TurnMetrics | null>("conversation_last_turn_metrics", { projectId }),
 };
 
 export function isAppError(value: unknown): value is AppError {

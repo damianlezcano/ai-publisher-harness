@@ -94,6 +94,55 @@ beforeEach(() => {
 });
 
 describe("ConversationDetails metrics", () => {
+  it("renders explicit durable metrics ahead of conflicting session-log fallback", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "conversation_last_turn_metrics")
+        return Promise.resolve({
+          provider: "durable-provider",
+          model: "durable-model",
+          inputTokens: 4321,
+          outputTokens: 876,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+          costUsd: 0.123,
+          turnDurationMs: 88,
+          source: "provider_actual",
+          remoteCalls: 2,
+          materialCount: 4,
+          corpusBytes: 9876,
+          corpusUtf8Chars: 9000,
+          corpusEstTokens: 2222,
+          retrievalCandidateCount: 9,
+          selectedEvidenceCount: 3,
+          selectedEvidenceBytes: 444,
+          selectedEvidenceUtf8Chars: 400,
+          evidenceEstTokens: 111,
+          contextReductionPct: 95,
+          semanticProviderState: "available",
+          requestPreparationMs: 12,
+        });
+      if (command === "session_logs")
+        return Promise.resolve([
+          { level: "INFO", message: "fallback", usage: { ...providerUsage, inputTokens: 999999 } },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    expect(await screen.findByText("4.321 tokens")).toBeVisible();
+    expect(screen.getByText("USD 0.123")).toBeVisible();
+    expect(screen.getByText("2.222 tokens estimados")).toBeVisible();
+    expect(screen.queryByText("999.999 tokens")).not.toBeInTheDocument();
+  });
+
   it("preserves name, model, resource rows, folder actions, and close behavior", async () => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "model_list") return Promise.resolve([model]);
