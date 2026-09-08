@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SUMMARY_TASK_TIMEOUT: Duration = Duration::from_secs(120);
+const MESSAGE_LIMIT: &str = "1000";
 
 /// The bounded summary operation requested by the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub struct OpenCodeRemoteSummarizer {
     backend: Arc<OpenCodeBackend>,
     scratch_dir: PathBuf,
     task_timeout: Duration,
+    model: Option<(String, String)>,
 }
 
 impl OpenCodeRemoteSummarizer {
@@ -133,7 +135,15 @@ impl OpenCodeRemoteSummarizer {
             backend,
             scratch_dir,
             task_timeout: SUMMARY_TASK_TIMEOUT,
+            model: None,
         }
+    }
+
+    /// Pins the same provider/model the conversation already selected so the
+    /// scratch session does not depend on OpenCode's default-model resolution.
+    pub fn with_model(mut self, provider_id: String, model_id: String) -> Self {
+        self.model = Some((provider_id, model_id));
+        self
     }
 
     /// Test-only bound so a broken poll cannot stall the suite for 120s per node.
@@ -174,58 +184,98 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
 
         let directory = self.scratch_dir.to_string_lossy().replace('\\', "/");
         let path = with_directory_query("/session", &directory);
+        // Scratch synthesis is not a coding-agent turn. An empty ruleset lets
+        // OpenCode 1.18.25 request tools; a blocked permission never writes
+        // `info.finish: "stop"` and the poll hits SUMMARY_TASK_TIMEOUT (120s).
         let (status, text) = self
             .backend
-            .post(&path, &json!({ "permission": [] }))
+            .post(
+                &path,
+                &json!({
+                    "permission": [
+                        {
+                            "permission": "external_directory",
+                            "pattern": "*",
+                            "action": "deny"
+                        },
+                        {
+                            "permission": "*",
+                            "pattern": "*",
+                            "action": "deny"
+                        }
+                    ]
+                }),
+            )
             .map_err(|_| SummaryFailure::ExecutionFailed)?;
         if !(200..300).contains(&status) {
             return Err(SummaryFailure::ExecutionFailed);
         }
         let value: Value =
             serde_json::from_str(&text).map_err(|_| SummaryFailure::ExecutionFailed)?;
-        let session_id = value
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or(SummaryFailure::ExecutionFailed)?
-            .to_owned();
+        let session_id = session_id_from_value(&value).ok_or(SummaryFailure::ExecutionFailed)?;
+        let abort_path = with_directory_query(&format!("/session/{session_id}/abort"), &directory);
         // OpenCode session metadata is local bookkeeping for this exact
         // execution, not an additional provider/model request. The session may
         // be reused by neither K6 nor any chat turn, but use a delta anyway to
         // preserve the accounting contract.
-        let usage_before = session_usage(&self.backend, &session_id);
+        let usage_before = session_usage(&self.backend, &session_id, &directory);
 
-        let body = json!({ "parts": [{ "type": "text", "text": prompt }] });
-        let prompt_path = format!("/session/{session_id}/prompt_async");
+        let mut body = json!({ "parts": [{ "type": "text", "text": prompt }] });
+        if let Some((provider_id, model_id)) = &self.model {
+            body["model"] = json!({
+                "providerID": provider_id,
+                "modelID": model_id,
+            });
+        }
+        let prompt_path =
+            with_directory_query(&format!("/session/{session_id}/prompt_async"), &directory);
         let (status, _) = self
             .backend
             .post(&prompt_path, &body)
             .map_err(|_| SummaryFailure::ExecutionFailed)?;
         if !(200..300).contains(&status) && status != 204 {
+            let _ = self.backend.post(&abort_path, &json!({}));
             return Err(SummaryFailure::ExecutionFailed);
         }
 
-        // Poll the dedicated session for the single terminal assistant text.
+        // Poll the dedicated session for the newest terminal assistant text.
+        // OpenCode 1.18.25 `GET /session/{id}/message` returns a bare array of
+        // `{info, parts}` (not a `{data:[...]}` envelope). `info.finish` is
+        // omitted while streaming, `"tool-calls"` on intermediate tool turns,
+        // and `"stop"` when the turn is done. A trailing in-progress assistant
+        // (empty parts, no finish) must not hide an earlier `stop`.
         let deadline = Instant::now() + self.task_timeout;
-        let message_path = format!("/session/{session_id}/message?limit=16");
+        let message_path = with_directory_query(
+            &format!("/session/{session_id}/message?limit={MESSAGE_LIMIT}"),
+            &directory,
+        );
         loop {
-            let (status, body) = self
-                .backend
-                .get(&message_path)
-                .map_err(|_| SummaryFailure::ExecutionFailed)?;
+            let (status, body) = match self.backend.get(&message_path) {
+                Ok(response) => response,
+                Err(_) => {
+                    if Instant::now() >= deadline {
+                        let _ = self.backend.post(&abort_path, &json!({}));
+                        return Err(SummaryFailure::ExecutionFailed);
+                    }
+                    thread::sleep(STATUS_POLL_INTERVAL);
+                    continue;
+                }
+            };
             if (200..300).contains(&status)
                 && let Some(messages) = session_messages_from_body(&body)
                 && let Some(text) = terminal_assistant_text(&messages)
             {
                 return Ok(SummaryOutput {
                     text,
-                    model_id: None,
-                    provider_id: None,
-                    usage: session_usage(&self.backend, &session_id)
+                    model_id: self.model.as_ref().map(|(_, model)| model.clone()),
+                    provider_id: self.model.as_ref().map(|(provider, _)| provider.clone()),
+                    usage: session_usage(&self.backend, &session_id, &directory)
                         .map(|after| usage_delta(usage_before.as_ref(), &after))
                         .unwrap_or_default(),
                 });
             }
             if Instant::now() >= deadline {
+                let _ = self.backend.post(&abort_path, &json!({}));
                 return Err(SummaryFailure::ExecutionFailed);
             }
             thread::sleep(STATUS_POLL_INTERVAL);
@@ -233,11 +283,26 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
     }
 }
 
+fn session_id_from_value(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|data| data.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned)
+}
+
 fn session_usage(
     backend: &OpenCodeBackend,
     session_id: &str,
+    directory: &str,
 ) -> Option<project_knowledge::SummaryUsage> {
-    let (status, body) = backend.get(&format!("/session/{session_id}")).ok()?;
+    let path = with_directory_query(&format!("/session/{session_id}"), directory);
+    let (status, body) = backend.get(&path).ok()?;
     if !(200..300).contains(&status) {
         return None;
     }
@@ -313,9 +378,10 @@ fn usage_delta(
     }
 }
 
-/// OpenCode 1.18.25 list endpoints wrap rows as `{"data":[...]}`. The agent
-/// and provider adapters already unwrap that envelope; K6 must use the same
-/// shape or it never observes a completed assistant message.
+/// OpenCode 1.18.25 `GET /session/{id}/message` returns a bare array of
+/// `{info, parts}`. Other list endpoints (integrations/models, and some
+/// `/api/` routes) wrap rows as `{"data":[...]}`. Accept both; never treat a
+/// non-array `data` object as a completed message list.
 fn session_messages_from_body(body: &str) -> Option<Vec<Value>> {
     let value: Value = serde_json::from_str(body).ok()?;
     Some(match value {
@@ -329,12 +395,15 @@ fn session_messages_from_body(body: &str) -> Option<Vec<Value>> {
 }
 
 fn terminal_assistant_text(messages: &[Value]) -> Option<String> {
-    messages
-        .iter()
-        .rfind(|message| message_role(message) == "assistant")
-        .filter(|message| assistant_finish(message) == Some("stop"))
-        .and_then(message_text)
-        .filter(|text| !text.trim().is_empty())
+    messages.iter().rev().find_map(|message| {
+        if message_role(message) != "assistant" {
+            return None;
+        }
+        if assistant_finish(message) != Some("stop") {
+            return None;
+        }
+        message_text(message).filter(|text| !text.trim().is_empty())
+    })
 }
 
 fn message_role(message: &Value) -> &str {
@@ -412,6 +481,103 @@ mod tests {
         assert_eq!(
             terminal_assistant_text(&session_messages_from_body(bare).unwrap()).as_deref(),
             Some("bare")
+        );
+    }
+
+    #[test]
+    fn terminal_text_uses_newest_stop_even_if_a_later_assistant_is_still_open() {
+        let body = r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"tool","tool":"read"}]},{"info":{"id":"a2","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"ok\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"questions\":[]}"}]},{"info":{"id":"a3","role":"assistant"},"parts":[]}]"#;
+        let text = terminal_assistant_text(&session_messages_from_body(body).unwrap())
+            .expect("stop must not be hidden by a trailing in-progress assistant");
+        assert!(text.contains("\"summary\":\"ok\""));
+        let streaming_only = r#"[{"info":{"id":"a1","role":"assistant"},"parts":[]}]"#;
+        assert_eq!(
+            terminal_assistant_text(&session_messages_from_body(streaming_only).unwrap()),
+            None
+        );
+        let tool_calls_only = r#"[{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"text","text":"not yet"}]}]"#;
+        assert_eq!(
+            terminal_assistant_text(&session_messages_from_body(tool_calls_only).unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn summarize_observes_real_1_18_25_bare_array_stop_without_120s_timeout() {
+        let server = fake_opencode_server::FakeServer::start();
+        server.set_prompt_appends_response(false);
+        server.set_messages_sequence(&[
+            "[]",
+            r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant"},"parts":[]}]"#,
+            r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"tool","tool":"read"}]},{"info":{"id":"a2","role":"assistant"},"parts":[]}]"#,
+            r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"tool","tool":"read"}]},{"info":{"id":"a2","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"ok\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"questions\":[]}"}]},{"info":{"id":"a3","role":"assistant"},"parts":[]}]"#,
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let backend =
+            OpenCodeBackend::new(PathBuf::from("/usr/bin/true"), tmp.path().join("cfg"), 0);
+        backend.set_base_url(server.base_url());
+        backend.ensure_ready().expect("ready");
+        let summarizer = OpenCodeRemoteSummarizer::new(Arc::new(backend), tmp.path().to_path_buf())
+            .with_task_timeout(Duration::from_millis(400));
+        let request = SummaryRequest {
+            level: project_knowledge::SummaryLevel::Document,
+            labels: vec![project_knowledge::SummaryEvidenceRef {
+                label: "E1".to_owned(),
+                source_label: "sample.md".to_owned(),
+                source_name: "sample.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+            }],
+            evidence_texts: vec!["Se definió el presupuesto.".to_owned()],
+            instruction: "Resumí.".to_owned(),
+            estimated_input_units: 10,
+        };
+        let started = Instant::now();
+        let output = summarizer.summarize(&request).expect("must observe stop");
+        assert!(output.text.contains("\"summary\":\"ok\""));
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "poll must not fall through to the 120s timeout: {:?}",
+            started.elapsed()
+        );
+        assert!(!server.abort_called());
+    }
+
+    #[test]
+    fn summarize_times_out_when_1_18_25_never_writes_finish_stop() {
+        let server = fake_opencode_server::FakeServer::start();
+        server.set_prompt_appends_response(false);
+        server.set_messages_sequence(&[
+            r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"tool","tool":"read"}]},{"info":{"id":"a2","role":"assistant"},"parts":[]}]"#,
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let backend =
+            OpenCodeBackend::new(PathBuf::from("/usr/bin/true"), tmp.path().join("cfg"), 0);
+        backend.set_base_url(server.base_url());
+        backend.ensure_ready().expect("ready");
+        let summarizer = OpenCodeRemoteSummarizer::new(Arc::new(backend), tmp.path().to_path_buf())
+            .with_task_timeout(Duration::from_millis(80));
+        let request = SummaryRequest {
+            level: project_knowledge::SummaryLevel::Document,
+            labels: vec![project_knowledge::SummaryEvidenceRef {
+                label: "E1".to_owned(),
+                source_label: "sample.md".to_owned(),
+                source_name: "sample.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+            }],
+            evidence_texts: vec!["Se definió el presupuesto.".to_owned()],
+            instruction: "Resumí.".to_owned(),
+            estimated_input_units: 10,
+        };
+        let started = Instant::now();
+        match summarizer.summarize(&request) {
+            Err(SummaryFailure::ExecutionFailed) => {}
+            Err(_) => panic!("expected execution timeout"),
+            Ok(_) => panic!("expected execution timeout"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            server.abort_called(),
+            "timed-out scratch session must abort"
         );
     }
 

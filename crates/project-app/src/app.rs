@@ -1943,8 +1943,11 @@ where
                 "No pudimos preparar el resumen del material.",
             )
         })?;
-        let summarizer =
+        let mut summarizer =
             OpenCodeRemoteSummarizer::new(Arc::clone(backend), self.base.join("opencode-scratch"));
+        if let Some(model) = &inputs.model {
+            summarizer = summarizer.with_model(model.provider_id.clone(), model.model_id.clone());
+        }
         self.send_summary_run_with(inputs, &summarizer)
     }
 
@@ -5226,9 +5229,11 @@ mod durable_k6_tests {
 
     /// Production-faithful Fedora 5-file exhaustive summary: composer-staged
     /// acceptance, lexical+deterministic embedding index, then the same K6
-    /// terminal (`send_summary_run_with`) against the real OpenCode message
-    /// envelope. Before the list-envelope unwrap, this path timed out 5×120s
-    /// with `remote_calls=0` and "No se pudo procesar este archivo."
+    /// terminal (`send_summary_run_with`) against the real OpenCode 1.18.25
+    /// `GET /session/{id}/message` contract (bare `{info, parts}` array,
+    /// `info.finish` omitted → `tool-calls` → `stop`). Before completion
+    /// detection matched that lifecycle, this path timed out 5×120s with
+    /// `remote_calls=0` and "No se pudo procesar este archivo."
     #[test]
     fn five_staged_ready_markdown_files_generate_k6_nodes_through_opencode_envelope() {
         let _session_log_guard = crate::session_log::test_guard();
