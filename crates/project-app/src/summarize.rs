@@ -124,6 +124,7 @@ const PER_SOURCE_MARKERS: &[&str] = &[
 pub struct OpenCodeRemoteSummarizer {
     backend: Arc<OpenCodeBackend>,
     scratch_dir: PathBuf,
+    task_timeout: Duration,
 }
 
 impl OpenCodeRemoteSummarizer {
@@ -131,7 +132,15 @@ impl OpenCodeRemoteSummarizer {
         Self {
             backend,
             scratch_dir,
+            task_timeout: SUMMARY_TASK_TIMEOUT,
         }
+    }
+
+    /// Test-only bound so a broken poll cannot stall the suite for 120s per node.
+    #[cfg(test)]
+    pub fn with_task_timeout(mut self, task_timeout: Duration) -> Self {
+        self.task_timeout = task_timeout;
+        self
     }
 
     /// Builds one self-contained prompt from a request (evidence-labelled, with
@@ -196,7 +205,7 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
         }
 
         // Poll the dedicated session for the single terminal assistant text.
-        let deadline = Instant::now() + SUMMARY_TASK_TIMEOUT;
+        let deadline = Instant::now() + self.task_timeout;
         let message_path = format!("/session/{session_id}/message?limit=16");
         loop {
             let (status, body) = self
@@ -204,9 +213,8 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
                 .get(&message_path)
                 .map_err(|_| SummaryFailure::ExecutionFailed)?;
             if (200..300).contains(&status)
-                && let Ok(value) = serde_json::from_str::<Value>(&body)
-                && let Some(messages) = value.as_array()
-                && let Some(text) = terminal_assistant_text(messages)
+                && let Some(messages) = session_messages_from_body(&body)
+                && let Some(text) = terminal_assistant_text(&messages)
             {
                 return Ok(SummaryOutput {
                     text,
@@ -305,6 +313,21 @@ fn usage_delta(
     }
 }
 
+/// OpenCode 1.18.25 list endpoints wrap rows as `{"data":[...]}`. The agent
+/// and provider adapters already unwrap that envelope; K6 must use the same
+/// shape or it never observes a completed assistant message.
+fn session_messages_from_body(body: &str) -> Option<Vec<Value>> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    Some(match value {
+        Value::Array(items) => items,
+        Value::Object(mut map) => map
+            .remove("data")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    })
+}
+
 fn terminal_assistant_text(messages: &[Value]) -> Option<String> {
     messages
         .iter()
@@ -377,6 +400,19 @@ mod tests {
         assert!(prompt.contains("Resumí."));
         assert!(prompt.contains("[E1]"));
         assert!(prompt.contains("Se definió el presupuesto."));
+    }
+
+    #[test]
+    fn session_messages_unwrap_opencode_1_18_25_list_envelope() {
+        let body = r#"{"location":{"directory":"/tmp/scratch"},"data":[{"info":{"id":"a1","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"ok\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"questions\":[]}"}]}]}"#;
+        let messages = session_messages_from_body(body).expect("enveloped list");
+        let text = terminal_assistant_text(&messages).expect("completed assistant");
+        assert!(text.contains("\"summary\":\"ok\""));
+        let bare = r#"[{"info":{"role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"bare"}]}]"#;
+        assert_eq!(
+            terminal_assistant_text(&session_messages_from_body(bare).unwrap()).as_deref(),
+            Some("bare")
+        );
     }
 
     #[test]
