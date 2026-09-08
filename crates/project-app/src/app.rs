@@ -2989,8 +2989,16 @@ where
                 if let Err(failure) =
                     self.synthesize_node(&mut store, node, summarizer, &mut accounting)
                 {
+                    crate::session_log::record(
+                        "WARN",
+                        format!(
+                            "[knowledge][summary] node_kind={} error_class={} cache=miss",
+                            node.level.as_db(),
+                            summary_failure_class(failure)
+                        ),
+                    );
                     store
-                        .mark_summary_failed(&node.summary_id, failure)
+                        .mark_summary_failed(&node.summary_id, node.level, failure)
                         .map_err(|_| {
                             AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
                         })?;
@@ -3746,7 +3754,7 @@ where
                 Ok(()) => {}
                 Err(failure) => {
                     store
-                        .mark_summary_failed(&node.summary_id, failure)
+                        .mark_summary_failed(&node.summary_id, node.level, failure)
                         .map_err(|_| {
                             AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
                         })?;
@@ -3836,7 +3844,7 @@ where
                 self.synthesize_node(&mut store, node, summarizer, &mut accounting)
             {
                 store
-                    .mark_summary_failed(&node.summary_id, failure)
+                    .mark_summary_failed(&node.summary_id, node.level, failure)
                     .map_err(|_| {
                         AppError::new(ErrorCode::Internal, "No pudimos guardar el resumen.")
                     })?;
@@ -3890,10 +3898,8 @@ where
                     SummaryLevel::Document,
                 );
                 accounting.estimated_input_units += request.estimated_input_units;
-                let output = summarizer.summarize(&request)?;
-                accounting.add_provider_usage(&output.usage);
-                accounting.remote_calls += 1;
-                let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
+                let (output, content) =
+                    self.summarize_and_validate(summarizer, &request, &labels, accounting)?;
                 let mut ready = node.clone();
                 ready.content = Some(content.clone());
                 ready.source_chunk_ids = evidence
@@ -3934,10 +3940,8 @@ where
                 let labels: Vec<String> = (1..=children.len()).map(|i| format!("P{i}")).collect();
                 let request = project_knowledge::build_synthesis_request(&children, node.level);
                 accounting.estimated_input_units += request.estimated_input_units;
-                let output = summarizer.summarize(&request)?;
-                accounting.add_provider_usage(&output.usage);
-                accounting.remote_calls += 1;
-                let content = project_knowledge::validate_summary_output(&output.text, &labels)?;
+                let (output, content) =
+                    self.summarize_and_validate(summarizer, &request, &labels, accounting)?;
                 let mut ready = node.clone();
                 ready.content = Some(content.clone());
                 ready.output_fingerprint = project_knowledge::fingerprint_output(&content);
@@ -3950,6 +3954,44 @@ where
                     .map_err(|_| project_knowledge::SummaryFailure::ExecutionFailed)?;
                 accounting.regenerated += 1;
                 Ok(())
+            }
+        }
+    }
+
+    fn summarize_and_validate(
+        &self,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+        request: &project_knowledge::SummaryRequest,
+        labels: &[String],
+        accounting: &mut project_knowledge::SummaryAccounting,
+    ) -> std::result::Result<
+        (
+            project_knowledge::SummaryOutput,
+            project_knowledge::SummaryContent,
+        ),
+        project_knowledge::SummaryFailure,
+    > {
+        const INVALID_OUTPUT_RETRIES: usize = 1;
+        let mut attempt = 0usize;
+        loop {
+            let output = summarizer.summarize(request)?;
+            accounting.add_provider_usage(&output.usage);
+            accounting.remote_calls += 1;
+            match project_knowledge::validate_summary_output(&output.text, labels) {
+                Ok(content) => return Ok((output, content)),
+                Err(project_knowledge::SummaryFailure::InvalidOutput)
+                    if attempt < INVALID_OUTPUT_RETRIES =>
+                {
+                    crate::session_log::record(
+                        "WARN",
+                        format!(
+                            "[knowledge][summary] node_kind={} error_class=invalid_output retry=1",
+                            request.level.as_db()
+                        ),
+                    );
+                    attempt += 1;
+                }
+                Err(failure) => return Err(failure),
             }
         }
     }
@@ -4176,6 +4218,15 @@ fn recovery_failure_class(error: &AppError) -> &'static str {
         ErrorCode::InvalidInput => "remote_outcome_unknown",
         ErrorCode::RecoveryNoTurn => "no_turn",
         _ => "other_typed_local_failure",
+    }
+}
+
+fn summary_failure_class(failure: project_knowledge::SummaryFailure) -> &'static str {
+    match failure {
+        project_knowledge::SummaryFailure::ProviderUnavailable => "provider_unavailable",
+        project_knowledge::SummaryFailure::ExecutionFailed => "execution_failed",
+        project_knowledge::SummaryFailure::InvalidOutput => "invalid_output",
+        project_knowledge::SummaryFailure::EmptyCorpus => "empty_corpus",
     }
 }
 
@@ -5320,6 +5371,7 @@ mod durable_k6_tests {
         );
 
         let server = fake_opencode_server::FakeServer::start();
+        server.set_k6_echo_from_prompt(true);
         server.set_prompt_response_text(&valid_k6_json());
         let backend = OpenCodeBackend::new(
             PathBuf::from("/usr/bin/true"),
@@ -5341,9 +5393,9 @@ mod durable_k6_tests {
         let surface = run.message.expect("selected source surface");
         for name in names {
             assert_eq!(
-                surface.matches(name).count(),
+                surface.matches(&format!("— {name}")).count(),
                 1,
-                "missing or duplicate {name}"
+                "missing or duplicate heading for {name}"
             );
         }
         assert!(!surface.contains("historical"));
@@ -5352,6 +5404,12 @@ mod durable_k6_tests {
             !surface.contains("No se pudo procesar este archivo."),
             "READY selected Markdown must not degrade to the per-source failure copy: {surface}"
         );
+        for name in names {
+            assert!(
+                surface.contains(&format!("{name}\nResumen de {name}")),
+                "each selected source must keep its own summary: {surface}"
+            );
+        }
         let positions: Vec<usize> = [
             "2026-07-17-a.md",
             "2026-07-27-b.md",
@@ -5365,11 +5423,39 @@ mod durable_k6_tests {
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let prompts = server.prompt_texts();
-        assert!(
-            prompts.len() >= 5,
-            "K6 must actually invoke the remote summarizer: {}",
+        let document_prompts = prompts
+            .iter()
+            .filter(|prompt| prompt.contains("[E1]") && prompt.contains("BODY_SENTINEL"))
+            .count();
+        let synthesis_prompts = prompts
+            .iter()
+            .filter(|prompt| prompt.contains("[P1]"))
+            .count();
+        assert_eq!(
+            document_prompts,
+            5,
+            "five selected READY sources must each generate a document node: {}",
             prompts.len()
         );
+        assert_eq!(
+            synthesis_prompts,
+            2,
+            "successful five-source plan must execute batch then global: {}",
+            prompts.len()
+        );
+        assert_eq!(
+            prompts.len(),
+            document_prompts + synthesis_prompts,
+            "remote prompts must be exactly the executed document+batch+global nodes"
+        );
+        let session_ids = server.created_session_ids();
+        assert_eq!(
+            session_ids.len(),
+            prompts.len(),
+            "each K6 remote call must own a distinct OpenCode scratch session: {session_ids:?}"
+        );
+        let unique_sessions: std::collections::HashSet<_> = session_ids.iter().collect();
+        assert_eq!(unique_sessions.len(), session_ids.len());
         for (index, name) in names.iter().enumerate() {
             let sentinel = format!("SELECTED_{index}_BODY_SENTINEL");
             assert!(
@@ -5379,7 +5465,6 @@ mod durable_k6_tests {
         }
         assert_eq!(state.test_activity().raw_attachment_forwarding, 0);
         let metrics = state.last_turn_metrics(&project.id).unwrap().unwrap();
-        assert!(metrics.remote_calls.unwrap() > 0);
         assert_eq!(metrics.remote_calls, Some(prompts.len()));
         assert_eq!(metrics.selected_evidence_count, None);
         assert!(metrics.material_count.unwrap() >= 6);

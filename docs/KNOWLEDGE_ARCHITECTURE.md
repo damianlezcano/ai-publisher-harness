@@ -502,6 +502,16 @@ the `summary_sources` graph; unrelated summaries stay `Ready`. Deletion
 replaces a valid `Ready` summary; provider unavailability keeps cached summaries
 readable.
 
+If any child of a batch or global node is not `Ready`, that downstream node is
+marked `Failed(EmptyCorpus)` and is **not** sent to the remote synthesizer.
+K6 must not invent a project-level summary from an incomplete child set.
+Selected-per-source UI still lists every selected identity: successful document
+summaries stay visible, and a genuine per-source failure is shown explicitly
+rather than dropped or fabricated. Failed document nodes are retried on a later
+request; they are not a permanent cache hit. A fully successful selected
+five-source run therefore executes five document nodes plus one batch plus one
+global.
+
 SUMMARIZATION REMOTE LLM CALLS: ZERO on a full cache hit; nonzero only when a
 stale/missing node must actually be synthesized. All ingestion/embedding/
 retrieval/context-assembly/invalidation/cache-lookup remain local (zero remote

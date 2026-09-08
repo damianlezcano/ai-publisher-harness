@@ -1959,13 +1959,18 @@ impl KnowledgeStore {
 
     /// Marks a summary node Failed with a sanitized category. Failing a new
     /// synthesis never replaces an existing Ready summary's content.
-    pub fn mark_summary_failed(&mut self, summary_id: &str, failure: SummaryFailure) -> Result<()> {
+    pub fn mark_summary_failed(
+        &mut self,
+        summary_id: &str,
+        level: crate::summary::SummaryLevel,
+        failure: SummaryFailure,
+    ) -> Result<()> {
         let now = unix_seconds();
         self.connection.execute(
             "INSERT INTO summaries(summary_id, level, state, failure_category, content_json, input_fingerprint, output_fingerprint, contract_version, generation_id, created_at, updated_at)
-             VALUES(?1, 'document', 'failed', ?2, NULL, '', '', ?3, '', ?4, ?4)
+             VALUES(?1, ?2, 'failed', ?3, NULL, '', '', ?4, '', ?5, ?5)
              ON CONFLICT(summary_id) DO UPDATE SET state='failed', failure_category=excluded.failure_category, updated_at=excluded.updated_at",
-            params![summary_id, failure.as_db(), SUMMARY_CONTRACT_VERSION, now],
+            params![summary_id, level.as_db(), failure.as_db(), SUMMARY_CONTRACT_VERSION, now],
         )?;
         Ok(())
     }

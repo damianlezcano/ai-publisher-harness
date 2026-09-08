@@ -53,6 +53,7 @@ fn make_app(
 struct CaptureSummarizer {
     calls: Arc<Mutex<Vec<CapturedRequest>>>,
     fail: bool,
+    empty_output_sources: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +71,7 @@ impl CaptureSummarizer {
             Self {
                 calls: calls.clone(),
                 fail: false,
+                empty_output_sources: Vec::new(),
             },
             calls,
         )
@@ -78,6 +80,14 @@ impl CaptureSummarizer {
     fn failing() -> Self {
         let (this, _) = Self::new();
         Self { fail: true, ..this }
+    }
+
+    fn empty_output_for_source_with_calls(
+        source_name: &str,
+    ) -> (Self, Arc<Mutex<Vec<CapturedRequest>>>) {
+        let (mut this, calls) = Self::new();
+        this.empty_output_sources.push(source_name.to_owned());
+        (this, calls)
     }
 
     fn output_for(request: &SummaryRequest) -> SummaryOutput {
@@ -125,6 +135,18 @@ impl RemoteSummarizer for CaptureSummarizer {
                 .collect(),
             evidence_texts: request.evidence_texts.clone(),
         });
+        if request
+            .labels
+            .iter()
+            .any(|label| self.empty_output_sources.contains(&label.source_name))
+        {
+            return Ok(SummaryOutput {
+                text: "   ".to_owned(),
+                model_id: Some("capture-model".to_owned()),
+                provider_id: Some("capture-provider".to_owned()),
+                usage: project_knowledge::SummaryUsage::default(),
+            });
+        }
         Ok(Self::output_for(request))
     }
 }
@@ -926,4 +948,63 @@ fn selected_source_without_indexed_document_is_explicit_failure_entry() {
     assert_eq!(answer.report.source_count, 2);
     assert!(surface.contains("2024-01-01-ready.md"));
     assert!(surface.contains("broken.pdf\nNo se pudo procesar este archivo."));
+}
+
+/// PARTIAL_SOURCE_FAILURE: a genuine empty/invalid remote result for one READY
+/// source stays explicit. Successful siblings remain visible. Batch/global are
+/// not synthesized from an incomplete child set (no fake project summary).
+#[test]
+fn one_genuine_selected_source_failure_stays_explicit_and_skips_batch_global() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = make_app(tmp.path());
+    let project = app.create_project("P").unwrap();
+    let names = [
+        "2026-07-17-a.md",
+        "2026-07-27-b.md",
+        "2026-07-28-c.md",
+        "2026-07-30-d.md",
+        "2026-07-31-e.md",
+    ];
+    let selected: Vec<String> = names
+        .iter()
+        .map(|name| add_txt(&app, tmp.path(), &project.id, name, &format!("{name} body")))
+        .collect();
+    let (summarizer, calls) =
+        CaptureSummarizer::empty_output_for_source_with_calls("2026-07-17-a.md");
+    let answer = app
+        .summarize_selected_sources(&project.id, &selected, &summarizer)
+        .unwrap();
+    let surface = answer.summarize_surface_text().unwrap();
+    assert!(
+        surface.contains("2026-07-17-a.md\nNo se pudo procesar este archivo."),
+        "{surface}"
+    );
+    for name in &names[1..] {
+        assert!(surface.contains(name), "{surface}");
+        let block = surface
+            .split("\n\n")
+            .find(|part| part.contains(name))
+            .unwrap();
+        assert!(
+            !block.contains("No se pudo procesar este archivo."),
+            "successful source must keep its summary: {block}"
+        );
+    }
+    assert_eq!(answer.report.regenerated, 4);
+    assert_eq!(answer.report.source_count, 5);
+    let captured = calls.lock().unwrap();
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|call| call.level == SummaryLevel::Document)
+            .count(),
+        6,
+        "four successes plus one failed source with a single invalid-output retry"
+    );
+    assert!(
+        captured
+            .iter()
+            .all(|call| call.level == SummaryLevel::Document),
+        "batch/global must not run over an incomplete child set"
+    );
 }

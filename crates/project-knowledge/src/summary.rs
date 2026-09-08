@@ -44,7 +44,7 @@ pub enum SummaryLevel {
 }
 
 impl SummaryLevel {
-    pub(crate) fn as_db(&self) -> &'static str {
+    pub fn as_db(&self) -> &'static str {
         match self {
             Self::Document => "document",
             Self::Batch => "batch",
@@ -149,9 +149,13 @@ pub struct SummaryItem {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SummaryContent {
     pub summary: String,
+    #[serde(default)]
     pub topics: Vec<SummaryItem>,
+    #[serde(default)]
     pub decisions: Vec<SummaryItem>,
+    #[serde(default)]
     pub action_items: Vec<SummaryItem>,
+    #[serde(default)]
     pub questions: Vec<SummaryItem>,
 }
 
@@ -440,10 +444,12 @@ pub fn plan_project_summaries(
         .filter(|node| node.state == SummaryState::Ready)
         .map(|node| node.summary_id.clone())
         .collect();
+    // Failed nodes are retried on the next request (`place_node` resets them to
+    // Pending). Caching a failure permanently would hide READY sources behind
+    // a sticky "No se pudo procesar este archivo."
     let pending: Vec<SummaryNode> = all_nodes
         .into_iter()
         .filter(|node| node.state != SummaryState::Ready)
-        .filter(|node| node.state != SummaryState::Failed)
         .collect();
 
     Ok(SummaryPlan {
@@ -505,8 +511,8 @@ fn sha256_node_id(
 }
 
 /// Reconciles a planned node against durable state: a `Ready` node whose stored
-/// fingerprint matches the current one is a cache hit; anything else is reset to
-/// `Pending` (or already `Failed`, which is left failed for explicit retry).
+/// fingerprint matches the current one is a cache hit. `Failed` and `Stale`
+/// nodes are reset to `Pending` so the next request retries them.
 fn place_node(
     node: SummaryNode,
     existing: &BTreeMap<String, (SummaryState, String)>,
@@ -539,12 +545,38 @@ pub fn select_document_evidence(
     chunks: &[(String, String)], // (chunk_id, chunk_text) ordered by ordinal
     labels: &[String],           // pre-assigned stable labels E1..En for the whole document
 ) -> Vec<(String, String, String)> {
-    chunks
+    let mut selected = Vec::new();
+    let mut used_units = 0usize;
+    for ((chunk_id, text), label) in chunks
         .iter()
         .zip(labels.iter())
         .take(DOC_SUMMARY_MAX_CHUNKS)
-        .map(|((chunk_id, text), label)| (label.clone(), chunk_id.clone(), text.clone()))
-        .collect()
+    {
+        let remaining = SUMMARY_EVIDENCE_BUDGET.saturating_sub(used_units);
+        if remaining == 0 {
+            break;
+        }
+        let max_bytes = remaining.saturating_mul(3);
+        let excerpt = utf8_prefix(text, max_bytes);
+        if excerpt.trim().is_empty() {
+            break;
+        }
+        let units = excerpt.len().div_ceil(3).max(1);
+        selected.push((label.clone(), chunk_id.clone(), excerpt.to_owned()));
+        used_units = used_units.saturating_add(units);
+    }
+    selected
+}
+
+fn utf8_prefix(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Builds the instruction + evidence for a document summary request.
@@ -636,56 +668,149 @@ fn synthesis_instruction() -> String {
 // Structured output validation
 // ---------------------------------------------------------------------------
 
-/// Parses and validates raw model text into [`SummaryContent`]. Rejects
-/// non-JSON, missing `summary`, and evidence references that do not resolve to
-/// the supplied label set (`valid_labels`). Unknown labels are stripped, so
-/// hallucinated references never enter a `Ready` summary.
+/// Parses and validates raw model text into [`SummaryContent`]. Prefers a JSON
+/// object with a nonempty `summary`. Unknown evidence labels are stripped, so
+/// hallucinated references never enter a `Ready` summary. Models that return
+/// usable Spanish prose without the schema still become a truthful summary
+/// rather than a blank failure; empty output is rejected.
 pub fn validate_summary_output(
     raw: &str,
     valid_labels: &[String],
 ) -> std::result::Result<SummaryContent, SummaryFailure> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(extract_json(raw)).map_err(|_| SummaryFailure::InvalidOutput)?;
-    let SummaryContent {
-        summary,
-        mut topics,
-        mut decisions,
-        mut action_items,
-        mut questions,
-    } = serde_json::from_value::<SummaryContent>(parsed)
-        .map_err(|_| SummaryFailure::InvalidOutput)?;
-    if summary.trim().is_empty() {
+    let mut content = match parse_json_object(raw) {
+        Some(parsed) => coerce_summary_content(parsed)?,
+        None => {
+            let prose = strip_code_fence(raw).trim().to_owned();
+            if prose.is_empty() || prose.starts_with('{') {
+                return Err(SummaryFailure::InvalidOutput);
+            }
+            SummaryContent {
+                summary: prose,
+                topics: Vec::new(),
+                decisions: Vec::new(),
+                action_items: Vec::new(),
+                questions: Vec::new(),
+            }
+        }
+    };
+    if content.summary.trim().is_empty() {
         return Err(SummaryFailure::InvalidOutput);
     }
     let label_set: BTreeSet<&str> = valid_labels.iter().map(String::as_str).collect();
     for vec in [
-        &mut topics,
-        &mut decisions,
-        &mut action_items,
-        &mut questions,
+        &mut content.topics,
+        &mut content.decisions,
+        &mut content.action_items,
+        &mut content.questions,
     ] {
         for item in vec.iter_mut() {
             item.evidence
                 .retain(|label| label_set.contains(label.as_str()));
         }
     }
-    Ok(SummaryContent {
-        summary,
-        topics,
-        decisions,
-        action_items,
-        questions,
+    Ok(content)
+}
+
+fn parse_json_object(raw: &str) -> Option<serde_json::Value> {
+    let stripped = strip_code_fence(raw);
+    let trimmed = stripped.trim();
+    if let Some(value) = parse_json_value(trimmed).filter(|value| value.is_object()) {
+        return Some(value);
+    }
+    let mut best: Option<serde_json::Value> = None;
+    for (index, _) in trimmed.match_indices('{') {
+        if let Some(value) = parse_json_value(&trimmed[index..]).filter(|value| value.is_object()) {
+            best = Some(value);
+        }
+    }
+    best.or_else(|| {
+        extract_json(trimmed)
+            .and_then(parse_json_value)
+            .filter(|value| value.is_object())
     })
 }
 
-fn extract_json(raw: &str) -> &str {
+fn parse_json_value(raw: &str) -> Option<serde_json::Value> {
+    let mut deserializer = serde_json::Deserializer::from_str(raw);
+    serde::Deserialize::deserialize(&mut deserializer).ok()
+}
+
+fn coerce_summary_content(
+    parsed: serde_json::Value,
+) -> std::result::Result<SummaryContent, SummaryFailure> {
+    let summary = match parsed.get("summary") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => return Err(SummaryFailure::InvalidOutput),
+    };
+    Ok(SummaryContent {
+        summary,
+        topics: coerce_items(parsed.get("topics")),
+        decisions: coerce_items(parsed.get("decisions")),
+        action_items: coerce_items(parsed.get("action_items")),
+        questions: coerce_items(parsed.get("questions")),
+    })
+}
+
+fn coerce_items(value: Option<&serde_json::Value>) -> Vec<SummaryItem> {
+    let Some(serde_json::Value::Array(items)) = value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            serde_json::Value::String(text) if !text.trim().is_empty() => Some(SummaryItem {
+                text: text.clone(),
+                evidence: Vec::new(),
+            }),
+            serde_json::Value::Object(_) => {
+                let text = item
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if text.is_empty() {
+                    return None;
+                }
+                let evidence = item
+                    .get("evidence")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|labels| {
+                        labels
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(SummaryItem {
+                    text: text.to_owned(),
+                    evidence,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn strip_code_fence(raw: &str) -> String {
     let trimmed = raw.trim();
-    let start = trimmed.find('{');
-    let end = trimmed.rfind('}');
-    match (start, end) {
-        (Some(s), Some(e)) if e >= s => &trimmed[s..=e],
-        _ => trimmed,
-    }
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed.to_owned();
+    };
+    let rest = rest
+        .strip_prefix("json")
+        .or_else(|| rest.strip_prefix("JSON"))
+        .unwrap_or(rest);
+    let rest = rest.strip_prefix('\n').unwrap_or(rest);
+    rest.strip_suffix("```").unwrap_or(rest).trim().to_owned()
+}
+
+fn extract_json(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    (end >= start).then_some(&trimmed[start..=end])
 }
 
 // ---------------------------------------------------------------------------
@@ -759,8 +884,17 @@ mod tests {
         .unwrap();
         assert_eq!(stripped.topics[0].evidence, vec!["E1".to_owned()]);
 
+        let prose = validate_summary_output("Resumen usable en prosa, sin JSON.", &[]).unwrap();
+        assert_eq!(prose.summary, "Resumen usable en prosa, sin JSON.");
+        let fenced = validate_summary_output(
+            "```json\n{\"summary\":\"desde cerca\",\"topics\":[\"tema\"],\"decisions\":[],\"action_items\":[],\"questions\":[]}\n```",
+            &["E1".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(fenced.summary, "desde cerca");
+        assert_eq!(fenced.topics[0].text, "tema");
         assert!(matches!(
-            validate_summary_output("not json", &["E1".to_owned()]),
+            validate_summary_output("   \n  ", &[]),
             Err(SummaryFailure::InvalidOutput)
         ));
         assert!(matches!(
@@ -775,7 +909,22 @@ mod tests {
     #[test]
     fn extract_json_isolates_object_from_prose() {
         let raw = "Aquí va el objeto: {\"summary\":\"s\"} fin.";
-        assert_eq!(extract_json(raw), "{\"summary\":\"s\"}");
+        assert_eq!(extract_json(raw), Some("{\"summary\":\"s\"}"));
+    }
+
+    #[test]
+    fn document_evidence_respects_the_request_budget() {
+        let huge = "á".repeat(SUMMARY_EVIDENCE_BUDGET * 3);
+        let chunks = vec![
+            ("c1".to_owned(), huge),
+            ("c2".to_owned(), "second".to_owned()),
+        ];
+        let labels = vec!["E1".to_owned(), "E2".to_owned()];
+        let selected = select_document_evidence(&chunks, &labels);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0, "E1");
+        assert!(selected[0].2.len() <= SUMMARY_EVIDENCE_BUDGET * 3);
+        assert!(selected[0].2.is_char_boundary(selected[0].2.len()));
     }
 
     #[test]
