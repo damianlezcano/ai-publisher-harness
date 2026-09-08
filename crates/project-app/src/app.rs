@@ -19,7 +19,7 @@ use project_agent::{
 use project_core::{
     AddMaterial, ContentType, Creation, CreationId, CreationKind, CreationVisibility, Material,
     MaterialContent, MaterialId, Message, MessageId, MessageRole, MessageStatus,
-    ProjectContentStore, ProjectId, ProjectService, SystemClock, UuidV7IdGenerator,
+    ProjectContentStore, ProjectId, ProjectService, SystemClock, TurnMetrics, UuidV7IdGenerator,
 };
 use project_fs::{
     FilesystemProjectContentStore, FilesystemProjectRepository, ProjectPublishRootProvider,
@@ -143,6 +143,25 @@ pub struct AppState<
     /// loopback-only, token-guarded endpoint (ADR-0010). Removed (and torn down)
     /// by `preview_close`.
     previews: Mutex<std::collections::HashMap<String, LivePreview>>,
+    #[cfg(test)]
+    test_activity: Mutex<TestActivity>,
+    #[cfg(test)]
+    fail_next_turn_metrics_persistence: Mutex<bool>,
+}
+
+/// Narrow test-only observability for the zero-cost durable-read contract.
+/// These counters never exist in production builds and are incremented only
+/// at the real work boundaries, not by tests themselves.
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TestActivity {
+    provider_calls: usize,
+    k6_calls: usize,
+    indexing: usize,
+    embedding_inference: usize,
+    embedding_persistence: usize,
+    retrieval: usize,
+    raw_attachment_forwarding: usize,
 }
 
 /// A running isolated web preview: the loopback token server plus the immutable
@@ -203,6 +222,26 @@ pub struct AgentRunInputs {
     model: Option<ModelRef>,
     attachments: Vec<AgentAttachment>,
     knowledge: Option<AgentKnowledgeContext>,
+    /// Local structural facts observed while preparing this exact request.
+    /// They stay local until the owning user turn reaches a successful terminal
+    /// state, when they are written with provider accounting.
+    knowledge_metrics: Option<TurnKnowledgeMetrics>,
+}
+
+#[derive(Clone, Debug)]
+struct TurnKnowledgeMetrics {
+    material_count: usize,
+    corpus_bytes: u64,
+    corpus_utf8_chars: usize,
+    corpus_est_tokens: usize,
+    retrieval_candidate_count: Option<usize>,
+    selected_evidence_count: Option<usize>,
+    selected_evidence_bytes: Option<usize>,
+    selected_evidence_utf8_chars: Option<usize>,
+    evidence_est_tokens: Option<usize>,
+    context_reduction_pct: Option<usize>,
+    semantic_provider_state: String,
+    request_preparation_ms: Option<u64>,
 }
 
 /// Durable hand-off between the fast acceptance boundary and its derived
@@ -289,6 +328,10 @@ where
             knowledge_provider: Mutex::new(None),
             summarizer_backend: None,
             previews: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            test_activity: Mutex::new(TestActivity::default()),
+            #[cfg(test)]
+            fail_next_turn_metrics_persistence: Mutex::new(false),
         }
     }
 
@@ -421,6 +464,78 @@ where
             }),
             accepted_import,
         })
+    }
+
+    /// Returns the most recent user message with non-empty turn_metrics for
+    /// the given conversation, or None when no completed turn exists.
+    ///
+    /// This is the durable replacement for the process-local session_log
+    /// buffer: metrics persist in project.json alongside the message that
+    /// owns them, survive restarts, and are isolated per conversation.
+    pub fn last_turn_metrics(&self, project_id: &str) -> AppResult<Option<TurnMetricsView>> {
+        let pid = parse_project_id(project_id)?;
+        let project = self
+            .projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_project(&pid)
+            .map_err(AppError::from_core)?;
+        // "Último turno" is the newest relevant completed user turn with
+        // metrics. A later accepted/incomplete message must not hide it.
+        for msg in project.messages.iter().rev() {
+            if msg.role == MessageRole::User
+                && let Some(metrics) = &msg.turn_metrics
+            {
+                return Ok(Some(TurnMetricsView::from(metrics.clone())));
+            }
+        }
+        Ok(None)
+    }
+
+    fn persist_completed_turn_metrics(
+        &self,
+        project_id: &ProjectId,
+        turn_id: Option<&MessageId>,
+        metrics: TurnMetrics,
+    ) -> AppResult<()> {
+        #[cfg(test)]
+        if std::mem::replace(
+            &mut *self
+                .fail_next_turn_metrics_persistence
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            false,
+        ) {
+            return Err(AppError::new(
+                ErrorCode::Internal,
+                "test-only metrics persistence interruption",
+            ));
+        }
+        let turn_id = turn_id.ok_or_else(|| {
+            AppError::new(ErrorCode::Internal, "No pudimos guardar el uso del turno.")
+        })?;
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_turn_metrics(project_id, turn_id, metrics)
+            .map_err(AppError::from_core)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_next_turn_metrics_persistence(&self) {
+        *self
+            .fail_next_turn_metrics_persistence
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = true;
+    }
+
+    #[cfg(test)]
+    fn test_activity(&self) -> TestActivity {
+        self.test_activity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     // -- Materials ---------------------------------------------------------
@@ -904,13 +1019,21 @@ where
             );
             return;
         }
-        let (embedded, reused, failure_state) = match self
-            .with_local_embedding_provider(|provider| store.index_embeddings(provider, 8))
-        {
-            (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None),
-            (Some(Err(error)), _) => (None, None, Some(embedding_index_failure_state(&error))),
-            (None, state) => (None, None, Some(state)),
-        };
+        let (embedded, reused, failure_state) =
+            match self.with_local_embedding_provider(|provider| {
+                #[cfg(test)]
+                {
+                    self.test_activity
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .embedding_persistence += 1;
+                }
+                store.index_embeddings(provider, 8)
+            }) {
+                (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None),
+                (Some(Err(error)), _) => (None, None, Some(embedding_index_failure_state(&error))),
+                (None, state) => (None, None, Some(state)),
+            };
         if embedded.is_none() {
             crate::session_log::record(
                 "WARN",
@@ -942,6 +1065,13 @@ where
         operation_id: Option<&str>,
         recovering: bool,
     ) {
+        #[cfg(test)]
+        {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .indexing += 1;
+        }
         if material_ids.is_empty() {
             return;
         }
@@ -1026,6 +1156,13 @@ where
         }
         let (embedded, reused, failure_state, persist_failure) = match self
             .with_local_embedding_provider(|provider| {
+                #[cfg(test)]
+                {
+                    self.test_activity
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .embedding_persistence += 1;
+                }
                 store.index_embeddings_for_materials(provider, 8, &material_ids)
             }) {
             (Some(Ok(outcome)), _) => (Some(outcome.embedded), Some(outcome.reused), None, None),
@@ -1376,10 +1513,17 @@ where
         &self,
         project_id: &ProjectId,
         user_query: &str,
-    ) -> AppResult<Option<AgentKnowledgeContext>> {
+    ) -> AppResult<(Option<AgentKnowledgeContext>, Option<TurnKnowledgeMetrics>)> {
         let root = self.base.join("projects").join(project_id.as_str());
         if !root.join("knowledge/knowledge.sqlite").is_file() {
-            return Ok(None);
+            return Ok((None, None));
+        }
+        #[cfg(test)]
+        {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retrieval += 1;
         }
         let started = std::time::Instant::now();
         let store = KnowledgeStore::open(&root, project_id).map_err(|_| {
@@ -1443,21 +1587,35 @@ where
             let saved = naive_corpus_est_tokens.saturating_sub(evidence_est_tokens);
             saved * 100 / naive_corpus_est_tokens
         };
+        let knowledge_metrics = TurnKnowledgeMetrics {
+            material_count: corpus.material_count,
+            corpus_bytes: corpus.corpus_bytes,
+            corpus_utf8_chars: corpus.corpus_utf8_chars,
+            corpus_est_tokens: naive_corpus_est_tokens,
+            retrieval_candidate_count: Some(candidates.len()),
+            selected_evidence_count: Some(package.entries.len()),
+            selected_evidence_bytes: Some(evidence_bytes),
+            selected_evidence_utf8_chars: Some(evidence_utf8_chars),
+            evidence_est_tokens: Some(evidence_est_tokens),
+            context_reduction_pct: Some(context_reduction_pct_vs_naive_corpus),
+            semantic_provider_state: semantic_state.as_str().to_owned(),
+            request_preparation_ms: u64::try_from(started.elapsed().as_millis()).ok(),
+        };
         crate::session_log::record_knowledge(
             crate::session_log::SessionKnowledgeMetrics {
                 conversation_id: project_id.as_str().to_owned(),
-                material_count: corpus.material_count,
-                corpus_bytes: corpus.corpus_bytes,
-                corpus_utf8_chars: corpus.corpus_utf8_chars,
-                corpus_est_tokens: naive_corpus_est_tokens,
-                retrieval_candidate_count: Some(candidates.len()),
-                selected_evidence_count: Some(package.entries.len()),
-                selected_evidence_bytes: Some(evidence_bytes),
-                selected_evidence_utf8_chars: Some(evidence_utf8_chars),
-                evidence_est_tokens: Some(evidence_est_tokens),
-                context_reduction_pct: Some(context_reduction_pct_vs_naive_corpus),
-                semantic_provider_state: semantic_state.as_str().to_owned(),
-                request_preparation_ms: Some(started.elapsed().as_millis()),
+                material_count: knowledge_metrics.material_count,
+                corpus_bytes: knowledge_metrics.corpus_bytes,
+                corpus_utf8_chars: knowledge_metrics.corpus_utf8_chars,
+                corpus_est_tokens: knowledge_metrics.corpus_est_tokens,
+                retrieval_candidate_count: knowledge_metrics.retrieval_candidate_count,
+                selected_evidence_count: knowledge_metrics.selected_evidence_count,
+                selected_evidence_bytes: knowledge_metrics.selected_evidence_bytes,
+                selected_evidence_utf8_chars: knowledge_metrics.selected_evidence_utf8_chars,
+                evidence_est_tokens: knowledge_metrics.evidence_est_tokens,
+                context_reduction_pct: knowledge_metrics.context_reduction_pct,
+                semantic_provider_state: knowledge_metrics.semantic_provider_state.clone(),
+                request_preparation_ms: knowledge_metrics.request_preparation_ms.map(u128::from),
             },
             format!(
                 "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
@@ -1510,15 +1668,18 @@ where
         if package.entries.is_empty() {
             // No evidence for this turn, but the dedup contract still applies.
             if indexed_source_names.is_empty() {
-                return Ok(None);
+                return Ok((None, Some(knowledge_metrics)));
             }
-            return Ok(Some(AgentKnowledgeContext {
-                indexed_source_names,
-                entries: Vec::new(),
-                evidence_budget_used: 0,
-                evidence_budget_limit: package.totals.estimated_budget_limit,
-                citation_map: Vec::new(),
-            }));
+            return Ok((
+                Some(AgentKnowledgeContext {
+                    indexed_source_names,
+                    entries: Vec::new(),
+                    evidence_budget_used: 0,
+                    evidence_budget_limit: package.totals.estimated_budget_limit,
+                    citation_map: Vec::new(),
+                }),
+                Some(knowledge_metrics),
+            ));
         }
         let entries: Vec<AgentKnowledgeEntry> = package
             .entries
@@ -1543,13 +1704,16 @@ where
                 chunk_label: entry.chunk_label.clone(),
             })
             .collect();
-        Ok(Some(AgentKnowledgeContext {
-            indexed_source_names,
-            entries,
-            evidence_budget_used: package.totals.estimated_budget_used,
-            evidence_budget_limit: package.totals.estimated_budget_limit,
-            citation_map,
-        }))
+        Ok((
+            Some(AgentKnowledgeContext {
+                indexed_source_names,
+                entries,
+                evidence_budget_used: package.totals.estimated_budget_used,
+                evidence_budget_limit: package.totals.estimated_budget_limit,
+                citation_map,
+            }),
+            Some(knowledge_metrics),
+        ))
     }
 
     /// Runs an operation against the verified, bundled local E5 provider when
@@ -1565,6 +1729,13 @@ where
         Option<project_knowledge::Result<Output>>,
         project_knowledge::SemanticProviderState,
     ) {
+        #[cfg(test)]
+        {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .embedding_inference += 1;
+        }
         let mut provider = self
             .knowledge_provider
             .lock()
@@ -1749,8 +1920,36 @@ where
     /// global summary as the assistant message. It never creates a normal agent
     /// run or a scratch chat turn.
     pub fn send_summary_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
+        use crate::summarize::OpenCodeRemoteSummarizer;
+        let backend = self.summarizer_backend.as_ref().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::Internal,
+                "No pudimos preparar el resumen del material.",
+            )
+        })?;
+        let summarizer =
+            OpenCodeRemoteSummarizer::new(Arc::clone(backend), self.base.join("opencode-scratch"));
+        self.send_summary_run_with(inputs, &summarizer)
+    }
+
+    /// Shared K6 terminal lifecycle. Production and deterministic tests use
+    /// this same assistant/metrics persistence path.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn send_summary_run_with(
+        &self,
+        inputs: AgentRunInputs,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+    ) -> AppResult<AgentRunView> {
+        #[cfg(test)]
+        {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .k6_calls += 1;
+        }
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let durable_turn_id = inputs.turn_id.clone();
         let inputs_model = inputs.model.clone();
         let started = std::time::Instant::now();
         crate::session_log::record(
@@ -1761,7 +1960,7 @@ where
                 turn_id.as_deref().unwrap_or("none")
             ),
         );
-        let answer = match self.summarize_project_with_backend(project_id.as_str()) {
+        let answer = match self.summarize_project_with(project_id.as_str(), summarizer) {
             Ok(answer) => answer,
             Err(error) => {
                 let text = error.message.clone();
@@ -1788,6 +1987,18 @@ where
             }
         };
         let Some(surface) = answer.summarize_surface_text() else {
+            // A zero-source K6 turn is still a completed logical turn. Persist
+            // its truthful aggregate (normally zero remote calls) so restart
+            // does not fall back to process-local telemetry.
+            self.persist_completed_turn_metrics(
+                &project_id,
+                durable_turn_id.as_ref(),
+                completed_summary_turn_metrics_without_corpus(
+                    inputs_model.as_ref(),
+                    &answer.report,
+                    started.elapsed().as_millis(),
+                ),
+            )?;
             crate::session_log::record(
                 "INFO",
                 format!(
@@ -1838,12 +2049,13 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .append_assistant_message(&project_id, &surface, MessageStatus::Ok, &[])
             .map_err(AppError::from_core)?;
+        let duration_ms = started.elapsed().as_millis();
         record_summary_turn_usage(
             project_id.as_str(),
             turn_id.as_deref(),
             inputs_model.as_ref(),
             &answer.report,
-            started.elapsed().as_millis(),
+            duration_ms,
         );
         // Knowledge architecture metrics survive semantic/evidence variation:
         // the corpus/index facts are emitted for the summary turn too, so the
@@ -1860,6 +2072,26 @@ where
                 answer.report.source_count,
                 &corpus,
             );
+            self.persist_completed_turn_metrics(
+                &project_id,
+                durable_turn_id.as_ref(),
+                completed_summary_turn_metrics(
+                    inputs_model.as_ref(),
+                    &answer.report,
+                    duration_ms,
+                    &corpus,
+                ),
+            )?;
+        } else {
+            self.persist_completed_turn_metrics(
+                &project_id,
+                durable_turn_id.as_ref(),
+                completed_summary_turn_metrics_without_corpus(
+                    inputs_model.as_ref(),
+                    &answer.report,
+                    duration_ms,
+                ),
+            )?;
         }
         crate::session_log::record(
             "INFO",
@@ -2102,7 +2334,7 @@ where
         let summarize_intent = crate::summarize::detect_summarize_intent(&accepted.inputs.prompt)
             && self.summarizer_backend.is_some();
         if !summarize_intent {
-            accepted.inputs.knowledge = match self
+            let (knowledge, knowledge_metrics) = match self
                 .prepare_knowledge_context(&accepted.inputs.project_id, &accepted.inputs.prompt)
             {
                 Ok(knowledge) => knowledge,
@@ -2115,6 +2347,8 @@ where
                     return Err(error);
                 }
             };
+            accepted.inputs.knowledge = knowledge;
+            accepted.inputs.knowledge_metrics = knowledge_metrics;
         }
         let project_id = accepted.inputs.project_id.clone();
         // The durable ledger now says that the remote terminal outcome is
@@ -2412,9 +2646,18 @@ where
     /// Runs the agent using the prepared inputs and appends an assistant
     /// message reflecting the outcome (`ok`, `failed`, or `cancelled`).
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
+        #[cfg(test)]
+        {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .provider_calls += 1;
+        }
         let project_id = inputs.project_id.clone();
         let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let durable_turn_id = inputs.turn_id.clone();
         let model_ref = inputs.model.clone();
+        let knowledge_metrics = inputs.knowledge_metrics.clone();
         let model = model_ref
             .as_ref()
             .map(|model| format!("{}/{}", model.provider_id, model.model_id))
@@ -2433,6 +2676,13 @@ where
         let additional_attachment_route = inputs.attachments.iter().any(|attachment| {
             !indexed_names.contains(&project_core::safe_file_name(&attachment.display_name))
         });
+        #[cfg(test)]
+        if additional_attachment_route {
+            self.test_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .raw_attachment_forwarding += 1;
+        }
         crate::session_log::record(
             "INFO",
             format!(
@@ -2484,6 +2734,18 @@ where
                     .unwrap_or_else(|e| e.into_inner())
                     .append_assistant_message(&project_id, &text, status, &creation_ids)
                     .map_err(AppError::from_core)?;
+                if status == MessageStatus::Ok {
+                    self.persist_completed_turn_metrics(
+                        &project_id,
+                        durable_turn_id.as_ref(),
+                        completed_normal_turn_metrics(
+                            model_ref.as_ref(),
+                            &result.task.usage,
+                            started.elapsed().as_millis(),
+                            knowledge_metrics.as_ref(),
+                        ),
+                    )?;
+                }
                 crate::session_log::record(
                     "INFO",
                     format!(
@@ -2579,7 +2841,15 @@ where
         })?;
         let scratch = self.base.join("opencode-scratch");
         let summarizer = OpenCodeRemoteSummarizer::new(Arc::clone(backend), scratch);
-        let report = self.summarize_project(project_id, &summarizer)?;
+        self.summarize_project_with(project_id, &summarizer)
+    }
+
+    fn summarize_project_with(
+        &self,
+        project_id: &str,
+        summarizer: &dyn project_knowledge::RemoteSummarizer,
+    ) -> AppResult<ProjectSummaryAnswerView> {
+        let report = self.summarize_project(project_id, summarizer)?;
         let global_summary = self.global_summary_text(project_id)?;
         let naive_corpus_est_tokens = self
             .open_knowledge_store(project_id)?
@@ -2650,7 +2920,10 @@ where
     ) -> AppResult<AgentRunInputs> {
         let mut inputs =
             self.resolve_agent_inputs_without_knowledge(project_id, prompt, attachment_ids)?;
-        inputs.knowledge = self.prepare_knowledge_context(&inputs.project_id, prompt)?;
+        let (knowledge, knowledge_metrics) =
+            self.prepare_knowledge_context(&inputs.project_id, prompt)?;
+        inputs.knowledge = knowledge;
+        inputs.knowledge_metrics = knowledge_metrics;
         Ok(inputs)
     }
 
@@ -2715,6 +2988,7 @@ where
             model,
             attachments,
             knowledge: None,
+            knowledge_metrics: None,
         })
     }
 
@@ -3869,6 +4143,7 @@ fn message_view(m: &Message) -> MessageView {
             .iter()
             .map(|id| id.as_str().to_owned())
             .collect(),
+        turn_metrics: m.turn_metrics.clone().map(TurnMetricsView::from),
     }
 }
 
@@ -4094,9 +4369,9 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// Emits the local Knowledge architecture metrics (corpus/index facts) that are
 /// known regardless of semantic-provider success. This is deliberately separate
-/// from provider telemetry. A K6 summary turn has no K4 candidate/evidence set,
-/// so those per-turn fields stay `None` (rendered "No disponible") and never
-/// become an invented zero; the corpus/index counts are always known.
+/// from provider telemetry. A K6 summary turn does not query the semantic
+/// provider or build a K4 candidate/evidence set, so those per-turn fields are
+/// unavailable (rendered "No disponible") rather than invented values.
 fn record_summary_knowledge_metrics(
     project_id: &str,
     source_count: usize,
@@ -4115,7 +4390,7 @@ fn record_summary_knowledge_metrics(
             selected_evidence_utf8_chars: None,
             evidence_est_tokens: None,
             context_reduction_pct: None,
-            semantic_provider_state: "available".to_owned(),
+            semantic_provider_state: "unavailable".to_owned(),
             request_preparation_ms: None,
         },
         format!(
@@ -4164,6 +4439,115 @@ fn record_turn_usage(
         reason: reason.to_owned(),
         additional_attachment_route,
     });
+}
+
+fn provider_identity(model: Option<&ModelRef>) -> (Option<String>, Option<String>) {
+    model
+        .map(|model| {
+            (
+                Some(model.provider_id.clone()),
+                Some(model.model_id.clone()),
+            )
+        })
+        .unwrap_or((None, None))
+}
+
+fn completed_normal_turn_metrics(
+    model: Option<&ModelRef>,
+    usage: &RemoteUsage,
+    duration_ms: u128,
+    knowledge: Option<&TurnKnowledgeMetrics>,
+) -> TurnMetrics {
+    let (provider, model) = provider_identity(model);
+    TurnMetrics {
+        provider,
+        model,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        total_tokens: usage.total_tokens,
+        cost_usd: usage.cost_usd,
+        turn_duration_ms: u64::try_from(duration_ms).ok(),
+        source: Some(
+            match usage.source {
+                UsageSource::ProviderActual => "provider_actual",
+                UsageSource::Estimated => "estimated",
+                UsageSource::Unavailable => "unavailable",
+            }
+            .to_owned(),
+        ),
+        remote_calls: usage.available().then_some(1),
+        material_count: knowledge.map(|metrics| metrics.material_count),
+        corpus_bytes: knowledge.map(|metrics| metrics.corpus_bytes),
+        corpus_utf8_chars: knowledge.map(|metrics| metrics.corpus_utf8_chars),
+        corpus_est_tokens: knowledge.map(|metrics| metrics.corpus_est_tokens),
+        retrieval_candidate_count: knowledge.and_then(|metrics| metrics.retrieval_candidate_count),
+        selected_evidence_count: knowledge.and_then(|metrics| metrics.selected_evidence_count),
+        selected_evidence_bytes: knowledge.and_then(|metrics| metrics.selected_evidence_bytes),
+        selected_evidence_utf8_chars: knowledge
+            .and_then(|metrics| metrics.selected_evidence_utf8_chars),
+        evidence_est_tokens: knowledge.and_then(|metrics| metrics.evidence_est_tokens),
+        context_reduction_pct: knowledge.and_then(|metrics| metrics.context_reduction_pct),
+        semantic_provider_state: knowledge.map(|metrics| metrics.semantic_provider_state.clone()),
+        request_preparation_ms: knowledge.and_then(|metrics| metrics.request_preparation_ms),
+    }
+}
+
+fn completed_summary_turn_metrics(
+    model: Option<&ModelRef>,
+    report: &SummarizationReportView,
+    duration_ms: u128,
+    corpus: &project_knowledge::KnowledgeCorpusStats,
+) -> TurnMetrics {
+    let mut metrics = completed_summary_turn_metrics_without_corpus(model, report, duration_ms);
+    metrics.material_count = Some(corpus.material_count);
+    metrics.corpus_bytes = Some(corpus.corpus_bytes);
+    metrics.corpus_utf8_chars = Some(corpus.corpus_utf8_chars);
+    metrics.corpus_est_tokens = Some(corpus.naive_corpus_est_tokens);
+    // K6 does not query the semantic provider, so this intentionally remains
+    // None rather than inferring availability from corpus/index existence.
+    metrics
+}
+
+fn completed_summary_turn_metrics_without_corpus(
+    model: Option<&ModelRef>,
+    report: &SummarizationReportView,
+    duration_ms: u128,
+) -> TurnMetrics {
+    let (provider, model) = provider_identity(model);
+    TurnMetrics {
+        provider,
+        model,
+        input_tokens: report.input_tokens,
+        output_tokens: report.output_tokens,
+        cache_read_tokens: report.cache_read_tokens,
+        cache_write_tokens: report.cache_write_tokens,
+        total_tokens: None,
+        cost_usd: report.cost_usd,
+        turn_duration_ms: u64::try_from(duration_ms).ok(),
+        source: Some(
+            if report.provider_usage_actual {
+                "provider_actual"
+            } else {
+                "unavailable"
+            }
+            .to_owned(),
+        ),
+        remote_calls: Some(report.remote_calls),
+        material_count: None,
+        corpus_bytes: None,
+        corpus_utf8_chars: None,
+        corpus_est_tokens: None,
+        retrieval_candidate_count: None,
+        selected_evidence_count: None,
+        selected_evidence_bytes: None,
+        selected_evidence_utf8_chars: None,
+        evidence_est_tokens: None,
+        context_reduction_pct: None,
+        semantic_provider_state: None,
+        request_preparation_ms: None,
+    }
 }
 
 /// Records the AGGREGATE provider usage for a K6 summarization turn. The K6
@@ -4227,6 +4611,309 @@ fn encode_base64(bytes: &[u8]) -> String {
         });
     }
     out
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Production helpers continue below.
+mod durable_k6_tests {
+    use super::*;
+    use project_agent::FakeAgentEngine;
+    use project_knowledge::{
+        RemoteSummarizer, SummaryContent, SummaryFailure, SummaryOutput, SummaryRequest,
+        SummaryUsage,
+    };
+    use project_provider::{FakeProviderConnector, FakeRestarter, ModelSummary, ProviderDetail};
+    use project_tunnel::FakeTunnel;
+    use std::sync::{Arc, Mutex};
+
+    fn connector() -> FakeProviderConnector {
+        FakeProviderConnector::new()
+            .with_provider(ProviderDetail {
+                id: "opencode".into(),
+                name: "Gratis".into(),
+                auth_methods: vec![],
+                connections: vec![],
+            })
+            .with_model(ModelSummary {
+                provider_id: "opencode".into(),
+                model_id: "big-pickle".into(),
+                name: "big-pickle".into(),
+                free: true,
+                recommended: true,
+                deprecated: false,
+            })
+    }
+    fn app(
+        base: &std::path::Path,
+    ) -> AppState<FakeAgentEngine, FakeTunnel, FakeProviderConnector, FakeRestarter> {
+        AppState::with_components(
+            base.to_path_buf(),
+            FakeAgentEngine::new(),
+            FakeTunnel::new(),
+            connector(),
+            FakeRestarter::new(),
+        )
+    }
+    #[derive(Clone)]
+    struct Multi {
+        calls: Arc<Mutex<usize>>,
+    }
+    impl RemoteSummarizer for Multi {
+        fn summarize(&self, _request: &SummaryRequest) -> Result<SummaryOutput, SummaryFailure> {
+            let mut n = self.calls.lock().unwrap();
+            *n += 1;
+            let (input, output, cache, cost) = match *n {
+                1 => (101, 11, 1001, 0.01),
+                2 => (202, 22, 2002, 0.02),
+                3 => (303, 33, 3003, 0.03),
+                _ => (404, 44, 4004, 0.04),
+            };
+            let content = SummaryContent {
+                summary: "respuesta K6 durable sk-project-json-sentinel VECTOR_BLOB_SENTINEL /absolute/project-json-path-sentinel".into(),
+                topics: vec![],
+                decisions: vec![],
+                action_items: vec![],
+                questions: vec![],
+            };
+            Ok(SummaryOutput {
+                text: serde_json::to_string(&content).unwrap(),
+                model_id: Some("m".into()),
+                provider_id: Some("p".into()),
+                usage: SummaryUsage {
+                    input_tokens: Some(input),
+                    output_tokens: Some(output),
+                    cache_read_tokens: Some(cache),
+                    cache_write_tokens: None,
+                    cost_usd: Some(cost),
+                    provider_actual: true,
+                },
+            })
+        }
+    }
+    #[test]
+    fn k6_terminal_path_persists_aggregate_across_disk_restart() {
+        let _session_log_guard = crate::session_log::test_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let state = app(tmp.path());
+        let project = state.create_project("K6").unwrap();
+        for (name, body) in [
+            ("a.txt", "contenido uno sk-project-json-sentinel"),
+            (
+                "b.txt",
+                "contenido dos VECTOR_BLOB_SENTINEL /absolute/project-json-path-sentinel",
+            ),
+        ] {
+            let source = tmp.path().join(name);
+            std::fs::write(&source, body).unwrap();
+            state
+                .add_material_from_path(&project.id, source.to_str().unwrap())
+                .unwrap();
+        }
+        let inputs = state
+            .send_message_persist(
+                &project.id,
+                "resumime los archivos sk-project-json-sentinel",
+                &[],
+            )
+            .unwrap();
+        let calls = Arc::new(Mutex::new(0));
+        let summarizer = Multi {
+            calls: calls.clone(),
+        };
+        assert_eq!(
+            state
+                .send_summary_run_with(inputs, &summarizer)
+                .unwrap()
+                .status,
+            "completed"
+        );
+        assert_eq!(*calls.lock().unwrap(), 4);
+        let before = state.last_turn_metrics(&project.id).unwrap().unwrap();
+        assert_eq!(before.input_tokens, Some(1010));
+        assert_eq!(before.output_tokens, Some(110));
+        assert_eq!(before.cache_read_tokens, Some(10010));
+        assert_eq!(before.remote_calls, Some(4));
+        assert_eq!(before.cost_usd, Some(0.10));
+        assert_eq!(before.material_count, Some(2));
+        assert!(before.corpus_bytes.unwrap() > 0);
+        assert!(before.corpus_utf8_chars.unwrap() > 0);
+        assert!(before.corpus_est_tokens.unwrap() > 0);
+        assert_eq!(before.selected_evidence_count, None);
+        assert_eq!(before.retrieval_candidate_count, None);
+        assert_eq!(before.selected_evidence_bytes, None);
+        assert_eq!(before.selected_evidence_utf8_chars, None);
+        assert_eq!(before.evidence_est_tokens, None);
+        assert_eq!(before.context_reduction_pct, None);
+        assert_eq!(before.semantic_provider_state, None);
+        assert_eq!(before.request_preparation_ms, None);
+        let view = state.open_project(&project.id).unwrap();
+        assert_eq!(view.messages.iter().filter(|m| m.role == "user").count(), 1);
+        assert_eq!(
+            view.messages
+                .iter()
+                .filter(|m| m.role == "assistant")
+                .count(),
+            1
+        );
+        assert!(
+            view.messages
+                .iter()
+                .find(|m| m.role == "user")
+                .unwrap()
+                .turn_metrics
+                .is_some()
+        );
+        let disk = std::fs::read_to_string(
+            tmp.path()
+                .join("projects")
+                .join(&project.id)
+                .join("project.json"),
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&disk).unwrap();
+        let metrics = &json["messages"][0]["turnMetrics"];
+        assert!(metrics.is_object());
+        let serialized = metrics.to_string();
+        for forbidden in [
+            "resumime los archivos sk-project-json-sentinel",
+            "respuesta K6 durable",
+            "contenido uno",
+            "contenido dos",
+            "sk-project-json-sentinel",
+            "VECTOR_BLOB_SENTINEL",
+            "/absolute/project-json-path-sentinel",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+        let allowed = [
+            "provider",
+            "model",
+            "inputTokens",
+            "outputTokens",
+            "cacheReadTokens",
+            "cacheWriteTokens",
+            "totalTokens",
+            "costUsd",
+            "turnDurationMs",
+            "source",
+            "remoteCalls",
+            "materialCount",
+            "corpusBytes",
+            "corpusUtf8Chars",
+            "corpusEstTokens",
+            "retrievalCandidateCount",
+            "selectedEvidenceCount",
+            "selectedEvidenceBytes",
+            "selectedEvidenceUtf8Chars",
+            "evidenceEstTokens",
+            "contextReductionPct",
+            "semanticProviderState",
+            "requestPreparationMs",
+        ];
+        for key in metrics.as_object().unwrap().keys() {
+            assert!(
+                allowed.contains(&key.as_str()),
+                "unexpected metrics key: {key}"
+            );
+        }
+        state.clear_session_logs();
+        drop(state);
+        let fresh = app(tmp.path());
+        let after = fresh.last_turn_metrics(&project.id).unwrap().unwrap();
+        assert_eq!(after.input_tokens, Some(1010));
+        assert_eq!(after.output_tokens, Some(110));
+        assert_eq!(after.cache_read_tokens, Some(10010));
+        assert_eq!(after.remote_calls, Some(4));
+        assert_eq!(after.cost_usd, Some(0.10));
+        assert_eq!(after.material_count, Some(2));
+        assert!(after.corpus_bytes.unwrap() > 0);
+        assert!(after.corpus_utf8_chars.unwrap() > 0);
+        assert!(after.corpus_est_tokens.unwrap() > 0);
+        assert_eq!(after.selected_evidence_count, None);
+        assert_eq!(after.retrieval_candidate_count, None);
+        assert_eq!(after.selected_evidence_bytes, None);
+        assert_eq!(after.selected_evidence_utf8_chars, None);
+        assert_eq!(after.evidence_est_tokens, None);
+        assert_eq!(after.context_reduction_pct, None);
+        assert_eq!(after.semantic_provider_state, None);
+        assert_eq!(after.request_preparation_ms, None);
+        assert_eq!(*calls.lock().unwrap(), 4, "reopen/read performs no K6 work");
+        assert_eq!(
+            fresh.test_activity(),
+            TestActivity::default(),
+            "reopening durable K6 metrics invokes no provider/OpenCode, K6, indexing, embedding inference/persistence, retrieval, or raw attachment forwarding"
+        );
+    }
+
+    /// A process can stop after the real terminal lifecycle persists its
+    /// assistant result but before final accounting reaches the owning user
+    /// message. The narrow test-only failpoint interrupts exactly that final
+    /// durable write; the provider/assistant path itself is not simulated.
+    #[test]
+    fn assistant_before_metrics_crash_window_keeps_messages_and_leaves_metrics_unavailable() {
+        let _session_log_guard = crate::session_log::test_guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = FakeAgentEngine::new();
+        engine.set_message("durable assistant answer".into());
+        let state = AppState::with_components(
+            tmp.path().to_path_buf(),
+            engine.clone(),
+            FakeTunnel::new(),
+            connector(),
+            FakeRestarter::new(),
+        );
+        let project = state.create_project("crash window").unwrap();
+        state.fail_next_turn_metrics_persistence();
+        assert!(
+            state
+                .send_message(&project.id, "durable user prompt", &[])
+                .is_err(),
+            "only the final metrics write is interrupted"
+        );
+        assert_eq!(
+            engine
+                .calls()
+                .iter()
+                .filter(|call| **call == project_agent::FakeCall::Send)
+                .count(),
+            1,
+            "the original provider run occurred once"
+        );
+
+        let before = state.open_project(&project.id).unwrap();
+        assert_eq!(before.messages.len(), 2);
+        let user_turn_id = before.messages[0].id.clone();
+        assert_eq!(before.messages[0].turn_metrics, None);
+        assert_eq!(before.messages[1].role, "assistant");
+        drop(state);
+
+        let fresh_engine = FakeAgentEngine::new();
+        let fresh = AppState::with_components(
+            tmp.path().to_path_buf(),
+            fresh_engine.clone(),
+            FakeTunnel::new(),
+            connector(),
+            FakeRestarter::new(),
+        );
+        let reopened = fresh.open_project(&project.id).unwrap();
+        assert_eq!(reopened.messages.len(), 2, "no duplicate user or assistant");
+        assert_eq!(reopened.messages[0].id, user_turn_id);
+        assert_eq!(reopened.messages[0].text, "durable user prompt");
+        assert_eq!(reopened.messages[1].text, "durable assistant answer");
+        assert!(
+            fresh.last_turn_metrics(&project.id).unwrap().is_none(),
+            "unknown telemetry is unavailable, never fabricated as zero"
+        );
+        assert!(
+            fresh_engine.calls().is_empty(),
+            "reopen does not resend provider work solely to reconstruct telemetry"
+        );
+        assert_eq!(
+            fresh.test_activity(),
+            TestActivity::default(),
+            "the durable read performs no provider/K6/index/retrieval/embedding persistence or raw attachment forwarding"
+        );
+    }
 }
 
 /// Recursively copies a validated creation tree into an immutable snapshot.

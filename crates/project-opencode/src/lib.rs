@@ -151,6 +151,7 @@ mod tests {
         let env = build_env(config_dir);
         let keys: BTreeSet<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
 
+        #[allow(unused_mut)] // Windows adds SYSTEMROOT below.
         let mut expected: BTreeSet<&str> = [
             "PATH",
             "HOME",

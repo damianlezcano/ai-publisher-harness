@@ -128,7 +128,69 @@ pub struct PublicationView {
     pub public_url: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Turn metrics exposed to the UI. All numeric fields are Option so that
+/// absent provider data serializes as `null` (rendered "No disponible")
+/// rather than an invented zero.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnMetricsView {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub turn_duration_ms: Option<u64>,
+    pub source: Option<String>,
+    pub remote_calls: Option<usize>,
+    // Knowledge structural metrics
+    pub material_count: Option<usize>,
+    pub corpus_bytes: Option<u64>,
+    pub corpus_utf8_chars: Option<usize>,
+    pub corpus_est_tokens: Option<usize>,
+    pub retrieval_candidate_count: Option<usize>,
+    pub selected_evidence_count: Option<usize>,
+    pub selected_evidence_bytes: Option<usize>,
+    pub selected_evidence_utf8_chars: Option<usize>,
+    pub evidence_est_tokens: Option<usize>,
+    pub context_reduction_pct: Option<usize>,
+    pub semantic_provider_state: Option<String>,
+    pub request_preparation_ms: Option<u64>,
+}
+
+impl From<project_core::TurnMetrics> for TurnMetricsView {
+    fn from(m: project_core::TurnMetrics) -> Self {
+        Self {
+            provider: m.provider,
+            model: m.model,
+            input_tokens: m.input_tokens,
+            output_tokens: m.output_tokens,
+            cache_read_tokens: m.cache_read_tokens,
+            cache_write_tokens: m.cache_write_tokens,
+            total_tokens: m.total_tokens,
+            cost_usd: m.cost_usd,
+            turn_duration_ms: m.turn_duration_ms,
+            source: m.source,
+            remote_calls: m.remote_calls,
+            material_count: m.material_count,
+            corpus_bytes: m.corpus_bytes,
+            corpus_utf8_chars: m.corpus_utf8_chars,
+            corpus_est_tokens: m.corpus_est_tokens,
+            retrieval_candidate_count: m.retrieval_candidate_count,
+            selected_evidence_count: m.selected_evidence_count,
+            selected_evidence_bytes: m.selected_evidence_bytes,
+            selected_evidence_utf8_chars: m.selected_evidence_utf8_chars,
+            evidence_est_tokens: m.evidence_est_tokens,
+            context_reduction_pct: m.context_reduction_pct,
+            semantic_provider_state: m.semantic_provider_state,
+            request_preparation_ms: m.request_preparation_ms,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
     pub id: String,
@@ -138,9 +200,11 @@ pub struct MessageView {
     pub created_at: String,
     pub material_ids: Vec<String>,
     pub creation_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_metrics: Option<TurnMetricsView>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectView {
     pub id: String,

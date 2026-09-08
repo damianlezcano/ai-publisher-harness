@@ -21,7 +21,7 @@ pub use dtos::{
     MaterialImportResult, MaterialView, MaterialsImportReport, MessageView, PreviewData,
     ProjectSummary, ProjectSummaryAnswerView, ProjectView, PublicationView, SelectedModelView,
     StagedAttachmentView, StagedAttachmentsReport, SummarizationReportView, SummaryContentView,
-    SummaryItemView, SummaryNodeView, WebPreview,
+    SummaryItemView, SummaryNodeView, TurnMetricsView, WebPreview,
 };
 pub use error::{AppError, AppResult, ErrorCode};
 pub use session_log::SessionLogEntry;

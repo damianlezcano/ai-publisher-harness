@@ -214,16 +214,25 @@ pub fn clear() {
     buffer().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
+/// The diagnostics buffer is intentionally process-global.  Rust unit tests
+/// that inspect it therefore need one shared, test-only critical section;
+/// production callers never acquire this lock.
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn bounded_levels_and_clear_are_process_local() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _guard = test_guard();
         clear();
         configure_from_args(["--debug".to_owned()]);
         for index in 0..501 {
@@ -245,7 +254,7 @@ mod tests {
 
     #[test]
     fn configure_from_args_sets_level_ordering() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _guard = test_guard();
         clear();
         configure_from_args(["--log-level".to_owned(), "warn".to_owned()]);
         record("INFO", "hidden");
@@ -272,7 +281,7 @@ mod tests {
 
     #[test]
     fn knowledge_metrics_are_structural_and_do_not_need_content_fields() {
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _guard = test_guard();
         clear();
         configure_from_args(["--log-level".to_owned(), "info".to_owned()]);
         record_knowledge(
@@ -307,7 +316,7 @@ mod tests {
         // A K6 summary turn has no K4 retrieval/evidence set. Those per-turn
         // fields must serialize as `null` (rendered "No disponible"), never an
         // invented zero, while corpus/index facts remain concrete.
-        let _guard = TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _guard = test_guard();
         clear();
         configure_from_args(["--log-level".to_owned(), "info".to_owned()]);
         record_knowledge(

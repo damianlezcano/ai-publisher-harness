@@ -875,4 +875,46 @@ mod tests {
         assert!(reused_ids.contains(&doc_c.as_str()));
         assert!(!second.pending.is_empty());
     }
+
+    #[test]
+    fn multi_call_provider_accounting_aggregates_every_k6_node_not_last_call() {
+        let mut accounting = SummaryAccounting::default();
+        let calls = [
+            SummaryUsage {
+                input_tokens: Some(101),
+                output_tokens: Some(11),
+                cache_read_tokens: Some(1),
+                cache_write_tokens: Some(10),
+                cost_usd: Some(0.001),
+                provider_actual: true,
+            },
+            SummaryUsage {
+                input_tokens: Some(202),
+                output_tokens: Some(22),
+                cache_read_tokens: Some(2),
+                cache_write_tokens: Some(20),
+                cost_usd: Some(0.002),
+                provider_actual: true,
+            },
+            SummaryUsage {
+                input_tokens: Some(303),
+                output_tokens: Some(33),
+                cache_read_tokens: Some(3),
+                cache_write_tokens: Some(30),
+                cost_usd: Some(0.003),
+                provider_actual: true,
+            },
+        ];
+        for usage in &calls {
+            accounting.add_provider_usage(usage);
+            accounting.remote_calls += 1;
+        }
+        assert_eq!(accounting.remote_calls, 3);
+        assert_eq!(accounting.input_tokens, Some(606));
+        assert_eq!(accounting.output_tokens, Some(66));
+        assert_eq!(accounting.cache_read_tokens, Some(6));
+        assert_eq!(accounting.cache_write_tokens, Some(60));
+        assert_eq!(accounting.cost_usd, Some(0.006));
+        assert!(accounting.provider_usage_actual);
+    }
 }

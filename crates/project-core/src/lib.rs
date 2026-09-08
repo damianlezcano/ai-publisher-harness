@@ -339,7 +339,57 @@ pub enum MessageStatus {
     Failed,
     Cancelled,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Durable turn metrics attached to a persisted message.
+///
+/// Contains provider-actual telemetry and structural Knowledge estimates.
+/// All fields except conversation_id, material_count, corpus_bytes,
+/// corpus_utf8_chars, corpus_est_tokens, and semantic_provider_state are
+/// optional: absent provider data stays null (rendered "No disponible").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnMetrics {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub turn_duration_ms: Option<u64>,
+    pub source: Option<String>,
+    pub remote_calls: Option<usize>,
+    /// Structural Knowledge architecture metrics.
+    pub material_count: Option<usize>,
+    pub corpus_bytes: Option<u64>,
+    pub corpus_utf8_chars: Option<usize>,
+    pub corpus_est_tokens: Option<usize>,
+    pub retrieval_candidate_count: Option<usize>,
+    pub selected_evidence_count: Option<usize>,
+    pub selected_evidence_bytes: Option<usize>,
+    pub selected_evidence_utf8_chars: Option<usize>,
+    pub evidence_est_tokens: Option<usize>,
+    pub context_reduction_pct: Option<usize>,
+    pub semantic_provider_state: Option<String>,
+    pub request_preparation_ms: Option<u64>,
+}
+
+impl TurnMetrics {
+    /// Provider telemetry is untrusted input. JSON cannot faithfully encode
+    /// non-finite values, so reject them at the durable ingestion boundary
+    /// rather than normalising them into a legitimate cost or silently writing
+    /// a null value.
+    pub fn validate(&self) -> CoreResult<()> {
+        if self.cost_usd.is_some_and(|cost| !cost.is_finite()) {
+            return Err(ProjectCoreError::InvalidMessage(
+                "turn metrics contain a non-finite provider cost".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct Message {
@@ -354,6 +404,8 @@ pub struct Message {
     pub material_ids: Vec<MaterialId>,
     #[serde(rename = "creationIds")]
     pub creation_ids: Vec<CreationId>,
+    #[serde(rename = "turnMetrics", skip_serializing_if = "Option::is_none")]
+    pub turn_metrics: Option<TurnMetrics>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,7 +457,7 @@ pub struct ConversationModel {
     pub provider_id: String,
     pub model_id: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct Project {
@@ -1032,6 +1084,7 @@ where
             created_at: created_at.clone(),
             material_ids: material_ids.to_vec(),
             creation_ids: vec![],
+            turn_metrics: None,
         };
         p.messages.push(msg.clone());
         p.updated_at = created_at;
@@ -1075,11 +1128,41 @@ where
             created_at: created_at.clone(),
             material_ids: vec![],
             creation_ids: creation_ids.to_vec(),
+            turn_metrics: None,
         };
         p.messages.push(msg.clone());
         p.updated_at = created_at;
         self.repository.replace(&p, &e)?;
         Ok(msg)
+    }
+    /// Stores final accounting on the already-persisted user message that owns
+    /// a logical turn. This replaces exactly that message and never creates or
+    /// reorders messages; repeating the same terminal write is safe.
+    pub fn set_turn_metrics(
+        &mut self,
+        pid: &ProjectId,
+        message_id: &MessageId,
+        metrics: TurnMetrics,
+    ) -> CoreResult<Message> {
+        metrics.validate()?;
+        let mut project = self.repository.get(pid)?;
+        let expected_updated_at = project.updated_at.clone();
+        project.migrate_to_v3()?;
+        let index = project
+            .messages
+            .iter()
+            .position(|message| &message.id == message_id)
+            .ok_or_else(|| ProjectCoreError::InvalidMessage("turn message is absent".into()))?;
+        if project.messages[index].role != MessageRole::User {
+            return Err(ProjectCoreError::InvalidMessage(
+                "turn metrics must belong to a user message".into(),
+            ));
+        }
+        project.messages[index].turn_metrics = Some(metrics);
+        project.updated_at = self.clock.now();
+        let updated = project.messages[index].clone();
+        self.repository.replace(&project, &expected_updated_at)?;
+        Ok(updated)
     }
     pub fn messages(&self, pid: &ProjectId) -> CoreResult<Vec<Message>> {
         Ok(self.repository.get(pid)?.messages)
@@ -2019,6 +2102,7 @@ mod tests {
             created_at: time(),
             material_ids: vec![],
             creation_ids: vec![cid],
+            turn_metrics: None,
         });
         assert!(matches!(
             p.validate(),
@@ -2047,6 +2131,7 @@ mod tests {
             created_at: time(),
             material_ids: vec![mid],
             creation_ids: vec![],
+            turn_metrics: None,
         });
         assert!(matches!(
             p.validate(),
