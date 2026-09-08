@@ -39,6 +39,7 @@ pub struct Script {
     /// data (never shell-escaped, re-quoted, or stripped) across the OpenCode
     /// request boundary.
     pub last_prompt_text: Option<String>,
+    pub prompt_texts: Vec<String>,
     pub prompt_appends_response: bool,
     pub prompt_response_text: Option<String>,
     pub prompt_response_finish: Option<String>,
@@ -294,6 +295,7 @@ impl Default for Script {
             prompt_delay: Duration::ZERO,
             prompt_called: false,
             last_prompt_text: None,
+            prompt_texts: Vec::new(),
             prompt_appends_response: true,
             prompt_response_text: None,
             prompt_response_finish: None,
@@ -446,6 +448,10 @@ impl FakeServer {
     /// request body.
     pub fn last_prompt_text(&self) -> Option<String> {
         self.script().last_prompt_text.clone()
+    }
+
+    pub fn prompt_texts(&self) -> Vec<String> {
+        self.script().prompt_texts.clone()
     }
 
     pub fn set_prompt_status(&self, status: u16) {
@@ -860,6 +866,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
                 })
         {
             state.last_prompt_text = Some(text.to_owned());
+            state.prompt_texts.push(text.to_owned());
         }
         if state.prompt_appends_response {
             state.messages_body = append_assistant_response(
@@ -923,7 +930,15 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             body
         };
         drop(state);
-        write_response(&mut stream, 200, body.as_bytes());
+        // OpenCode 1.18.25 wraps `/session/{id}/message` like other list
+        // endpoints: `{"location":{...},"data":[...]}`. Keep the in-memory
+        // script as a bare array so prompt-append stays simple.
+        let payload = if body.trim_start().starts_with('[') {
+            enveloped(body.as_bytes())
+        } else {
+            body.into_bytes()
+        };
+        write_response(&mut stream, 200, &payload);
         return;
     }
 
