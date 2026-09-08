@@ -8,6 +8,7 @@
 //! `project_opencode::OpenCodeBackend` HTTP surface, not on any provider-
 //! specific API or the agent chat adapter.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -213,12 +214,25 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
         let value: Value =
             serde_json::from_str(&text).map_err(|_| SummaryFailure::ExecutionFailed)?;
         let session_id = session_id_from_value(&value).ok_or(SummaryFailure::ExecutionFailed)?;
+        crate::session_log::record(
+            "INFO",
+            format!(
+                "[knowledge][summary] node_kind={} session_id={} call=start",
+                summary_level_name(request.level),
+                session_id
+            ),
+        );
         let abort_path = with_directory_query(&format!("/session/{session_id}/abort"), &directory);
-        // OpenCode session metadata is local bookkeeping for this exact
-        // execution, not an additional provider/model request. The session may
-        // be reused by neither K6 nor any chat turn, but use a delta anyway to
-        // preserve the accounting contract.
         let usage_before = session_usage(&self.backend, &session_id, &directory);
+
+        let message_path = with_directory_query(
+            &format!("/session/{session_id}/message?limit={MESSAGE_LIMIT}"),
+            &directory,
+        );
+        let before_ids = match self.backend.get(&message_path) {
+            Ok((status, body)) if (200..300).contains(&status) => message_ids_from_body(&body),
+            _ => std::collections::HashSet::new(),
+        };
 
         let mut body = json!({ "parts": [{ "type": "text", "text": prompt }] });
         if let Some((provider_id, model_id)) = &self.model {
@@ -235,26 +249,43 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
             .map_err(|_| SummaryFailure::ExecutionFailed)?;
         if !(200..300).contains(&status) && status != 204 {
             let _ = self.backend.post(&abort_path, &json!({}));
+            crate::session_log::record(
+                "WARN",
+                format!(
+                    "[knowledge][summary] node_kind={} session_id={} error_class=execution_failed timeout_reason=prompt_http",
+                    summary_level_name(request.level),
+                    session_id
+                ),
+            );
             return Err(SummaryFailure::ExecutionFailed);
         }
 
-        // Poll the dedicated session for the newest terminal assistant text.
-        // OpenCode 1.18.25 `GET /session/{id}/message` returns a bare array of
-        // `{info, parts}` (not a `{data:[...]}` envelope). `info.finish` is
-        // omitted while streaming, `"tool-calls"` on intermediate tool turns,
-        // and `"stop"` when the turn is done. A trailing in-progress assistant
-        // (empty parts, no finish) must not hide an earlier `stop`.
-        let deadline = Instant::now() + self.task_timeout;
-        let message_path = with_directory_query(
-            &format!("/session/{session_id}/message?limit={MESSAGE_LIMIT}"),
-            &directory,
-        );
+        // Poll this scratch session for the assistant stop that belongs to the
+        // prompt just submitted. OpenCode 1.18.25 `GET /session/{id}/message`
+        // returns a bare array of `{info, parts}`. A reused session can still
+        // contain an earlier `finish:"stop"`; that stale row must not complete
+        // the current request.
+        let started = Instant::now();
+        let deadline = started + self.task_timeout;
+        let mut poll_count = 0usize;
+        let mut originating_user_id: Option<String> = None;
         loop {
+            poll_count += 1;
             let (status, body) = match self.backend.get(&message_path) {
                 Ok(response) => response,
                 Err(_) => {
                     if Instant::now() >= deadline {
                         let _ = self.backend.post(&abort_path, &json!({}));
+                        crate::session_log::record(
+                            "WARN",
+                            format!(
+                                "[knowledge][summary] node_kind={} session_id={} poll_count={} error_class=execution_failed timeout_reason=poll_transport elapsed_ms={}",
+                                summary_level_name(request.level),
+                                session_id,
+                                poll_count,
+                                started.elapsed().as_millis()
+                            ),
+                        );
                         return Err(SummaryFailure::ExecutionFailed);
                     }
                     thread::sleep(STATUS_POLL_INTERVAL);
@@ -263,23 +294,61 @@ impl RemoteSummarizer for OpenCodeRemoteSummarizer {
             };
             if (200..300).contains(&status)
                 && let Some(messages) = session_messages_from_body(&body)
-                && let Some(text) = terminal_assistant_text(&messages)
             {
-                return Ok(SummaryOutput {
-                    text,
-                    model_id: self.model.as_ref().map(|(_, model)| model.clone()),
-                    provider_id: self.model.as_ref().map(|(provider, _)| provider.clone()),
-                    usage: session_usage(&self.backend, &session_id, &directory)
+                if originating_user_id.is_none() {
+                    originating_user_id = newest_user_id_not_in(&messages, &before_ids);
+                }
+                let message_count = messages.len();
+                if let Some(text) =
+                    terminal_assistant_text(&messages, originating_user_id.as_deref(), &before_ids)
+                {
+                    crate::session_log::record(
+                        "INFO",
+                        format!(
+                            "[knowledge][summary] node_kind={} session_id={} poll_count={} message_count={} finish=stop elapsed_ms={} error_class=none",
+                            summary_level_name(request.level),
+                            session_id,
+                            poll_count,
+                            message_count,
+                            started.elapsed().as_millis()
+                        ),
+                    );
+                    let usage = session_usage(&self.backend, &session_id, &directory)
                         .map(|after| usage_delta(usage_before.as_ref(), &after))
-                        .unwrap_or_default(),
-                });
+                        .unwrap_or_default();
+                    let _ = self.backend.post(&abort_path, &json!({}));
+                    return Ok(SummaryOutput {
+                        text,
+                        model_id: self.model.as_ref().map(|(_, model)| model.clone()),
+                        provider_id: self.model.as_ref().map(|(provider, _)| provider.clone()),
+                        usage,
+                    });
+                }
             }
             if Instant::now() >= deadline {
                 let _ = self.backend.post(&abort_path, &json!({}));
+                crate::session_log::record(
+                    "WARN",
+                    format!(
+                        "[knowledge][summary] node_kind={} session_id={} poll_count={} error_class=execution_failed timeout_reason=finish_stop_missing elapsed_ms={}",
+                        summary_level_name(request.level),
+                        session_id,
+                        poll_count,
+                        started.elapsed().as_millis()
+                    ),
+                );
                 return Err(SummaryFailure::ExecutionFailed);
             }
             thread::sleep(STATUS_POLL_INTERVAL);
         }
+    }
+}
+
+fn summary_level_name(level: project_knowledge::SummaryLevel) -> &'static str {
+    match level {
+        project_knowledge::SummaryLevel::Document => "document",
+        project_knowledge::SummaryLevel::Batch => "batch",
+        project_knowledge::SummaryLevel::Global => "global",
     }
 }
 
@@ -394,7 +463,33 @@ fn session_messages_from_body(body: &str) -> Option<Vec<Value>> {
     })
 }
 
-fn terminal_assistant_text(messages: &[Value]) -> Option<String> {
+fn message_ids_from_body(body: &str) -> HashSet<String> {
+    session_messages_from_body(body)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(message_id)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn newest_user_id_not_in(messages: &[Value], before_ids: &HashSet<String>) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if message_role(message) != "user" {
+            return None;
+        }
+        let id = message_id(message)?;
+        if before_ids.contains(id) {
+            return None;
+        }
+        Some(id.to_owned())
+    })
+}
+
+fn terminal_assistant_text(
+    messages: &[Value],
+    originating_user_id: Option<&str>,
+    before_ids: &HashSet<String>,
+) -> Option<String> {
     messages.iter().rev().find_map(|message| {
         if message_role(message) != "assistant" {
             return None;
@@ -402,8 +497,47 @@ fn terminal_assistant_text(messages: &[Value]) -> Option<String> {
         if assistant_finish(message) != Some("stop") {
             return None;
         }
+        if let Some(id) = message_id(message)
+            && before_ids.contains(id)
+        {
+            return None;
+        }
+        if let Some(expected) = originating_user_id
+            && let Some(actual) = parent_message_id(message)
+            && actual != expected
+        {
+            return None;
+        }
         message_text(message).filter(|text| !text.trim().is_empty())
     })
+}
+
+fn message_id(message: &Value) -> Option<&str> {
+    message.get("id").and_then(Value::as_str).or_else(|| {
+        message
+            .get("info")
+            .and_then(|info| info.get("id"))
+            .and_then(Value::as_str)
+    })
+}
+
+fn parent_message_id(message: &Value) -> Option<&str> {
+    message
+        .get("parentID")
+        .and_then(Value::as_str)
+        .or_else(|| message.get("parentId").and_then(Value::as_str))
+        .or_else(|| {
+            message
+                .get("info")
+                .and_then(|info| info.get("parentID"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            message
+                .get("info")
+                .and_then(|info| info.get("parentId"))
+                .and_then(Value::as_str)
+        })
 }
 
 fn message_role(message: &Value) -> &str {
@@ -431,10 +565,24 @@ fn message_text(message: &Value) -> Option<String> {
     let parts = message.get("parts").and_then(Value::as_array);
     let mut chunks = Vec::new();
     for part in parts.into_iter().flatten() {
-        if part.get("type").and_then(Value::as_str) == Some("text")
-            && let Some(text) = part.get("text").and_then(Value::as_str)
-        {
-            chunks.push(text);
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = part.get("text").and_then(Value::as_str)
+                    && !text.trim().is_empty()
+                {
+                    chunks.push(text.to_owned());
+                }
+            }
+            Some("json") => {
+                if let Some(text) = part.get("text").and_then(Value::as_str)
+                    && !text.trim().is_empty()
+                {
+                    chunks.push(text.to_owned());
+                } else if let Some(value) = part.get("value") {
+                    chunks.push(value.to_string());
+                }
+            }
+            _ => {}
         }
     }
     if !chunks.is_empty() {
@@ -471,35 +619,54 @@ mod tests {
         assert!(prompt.contains("Se definió el presupuesto."));
     }
 
+    fn completed_text(body: &str) -> Option<String> {
+        terminal_assistant_text(
+            &session_messages_from_body(body).unwrap(),
+            None,
+            &HashSet::new(),
+        )
+    }
+
     #[test]
     fn session_messages_unwrap_opencode_1_18_25_list_envelope() {
         let body = r#"{"location":{"directory":"/tmp/scratch"},"data":[{"info":{"id":"a1","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"ok\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"questions\":[]}"}]}]}"#;
         let messages = session_messages_from_body(body).expect("enveloped list");
-        let text = terminal_assistant_text(&messages).expect("completed assistant");
+        let text =
+            terminal_assistant_text(&messages, None, &HashSet::new()).expect("completed assistant");
         assert!(text.contains("\"summary\":\"ok\""));
         let bare = r#"[{"info":{"role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"bare"}]}]"#;
-        assert_eq!(
-            terminal_assistant_text(&session_messages_from_body(bare).unwrap()).as_deref(),
-            Some("bare")
-        );
+        assert_eq!(completed_text(bare).as_deref(), Some("bare"));
     }
 
     #[test]
     fn terminal_text_uses_newest_stop_even_if_a_later_assistant_is_still_open() {
         let body = r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"x"}]},{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"tool","tool":"read"}]},{"info":{"id":"a2","role":"assistant","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"ok\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"questions\":[]}"}]},{"info":{"id":"a3","role":"assistant"},"parts":[]}]"#;
-        let text = terminal_assistant_text(&session_messages_from_body(body).unwrap())
+        let text = completed_text(body)
             .expect("stop must not be hidden by a trailing in-progress assistant");
         assert!(text.contains("\"summary\":\"ok\""));
         let streaming_only = r#"[{"info":{"id":"a1","role":"assistant"},"parts":[]}]"#;
-        assert_eq!(
-            terminal_assistant_text(&session_messages_from_body(streaming_only).unwrap()),
-            None
-        );
+        assert_eq!(completed_text(streaming_only), None);
         let tool_calls_only = r#"[{"info":{"id":"a1","role":"assistant","finish":"tool-calls"},"parts":[{"type":"text","text":"not yet"}]}]"#;
+        assert_eq!(completed_text(tool_calls_only), None);
+    }
+
+    #[test]
+    fn terminal_text_ignores_stale_stop_from_a_previous_user_turn() {
+        let body = r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"old"}]},{"info":{"id":"a1","role":"assistant","parentID":"u1","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"stale\"}"}]},{"info":{"id":"u2","role":"user"},"parts":[{"type":"text","text":"new"}]},{"info":{"id":"a2","role":"assistant","parentID":"u2"},"parts":[]}]"#;
+        let messages = session_messages_from_body(body).unwrap();
+        let mut before = HashSet::new();
+        before.insert("u1".to_owned());
+        before.insert("a1".to_owned());
         assert_eq!(
-            terminal_assistant_text(&session_messages_from_body(tool_calls_only).unwrap()),
-            None
+            terminal_assistant_text(&messages, Some("u2"), &before),
+            None,
+            "an earlier stop must not complete the current prompt"
         );
+        let done = r#"[{"info":{"id":"u1","role":"user"},"parts":[{"type":"text","text":"old"}]},{"info":{"id":"a1","role":"assistant","parentID":"u1","finish":"stop"},"parts":[{"type":"text","text":"{\"summary\":\"stale\"}"}]},{"info":{"id":"u2","role":"user"},"parts":[{"type":"text","text":"new"}]},{"info":{"id":"a2","role":"assistant","parentID":"u2","finish":"stop"},"parts":[{"type":"json","value":{"summary":"fresh","topics":[],"decisions":[],"action_items":[],"questions":[]}}]}]"#;
+        let messages = session_messages_from_body(done).unwrap();
+        let text = terminal_assistant_text(&messages, Some("u2"), &before).expect("current stop");
+        assert!(text.contains("fresh"));
+        assert!(!text.contains("stale"));
     }
 
     #[test]
@@ -539,7 +706,10 @@ mod tests {
             "poll must not fall through to the 120s timeout: {:?}",
             started.elapsed()
         );
-        assert!(!server.abort_called());
+        assert!(
+            server.abort_called(),
+            "completed scratch session must be aborted so it cannot leak into the next node"
+        );
     }
 
     #[test]
@@ -579,6 +749,50 @@ mod tests {
             server.abort_called(),
             "timed-out scratch session must abort"
         );
+    }
+
+    #[test]
+    fn summarize_does_not_complete_from_a_stale_stop_when_the_session_is_reused() {
+        let server = fake_opencode_server::FakeServer::start();
+        server.set_session_id("ses-reused");
+        server.set_prompt_appends_response(true);
+        server.set_k6_echo_from_prompt(true);
+        let tmp = tempfile::tempdir().unwrap();
+        let backend =
+            OpenCodeBackend::new(PathBuf::from("/usr/bin/true"), tmp.path().join("cfg"), 0);
+        backend.set_base_url(server.base_url());
+        backend.ensure_ready().expect("ready");
+        let summarizer = OpenCodeRemoteSummarizer::new(Arc::new(backend), tmp.path().to_path_buf())
+            .with_task_timeout(Duration::from_millis(400));
+        let first = SummaryRequest {
+            level: project_knowledge::SummaryLevel::Document,
+            labels: vec![project_knowledge::SummaryEvidenceRef {
+                label: "E1".to_owned(),
+                source_label: "a.md".to_owned(),
+                source_name: "a.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+            }],
+            evidence_texts: vec!["SELECTED_0_BODY_SENTINEL first".to_owned()],
+            instruction: "Resumí el documento.\nDocumento: a.md.".to_owned(),
+            estimated_input_units: 10,
+        };
+        let second = SummaryRequest {
+            level: project_knowledge::SummaryLevel::Document,
+            labels: vec![project_knowledge::SummaryEvidenceRef {
+                label: "E1".to_owned(),
+                source_label: "b.md".to_owned(),
+                source_name: "b.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+            }],
+            evidence_texts: vec!["SELECTED_1_BODY_SENTINEL second".to_owned()],
+            instruction: "Resumí el documento.\nDocumento: b.md.".to_owned(),
+            estimated_input_units: 10,
+        };
+        let one = summarizer.summarize(&first).expect("first node");
+        let two = summarizer.summarize(&second).expect("second node");
+        assert!(one.text.contains("Resumen de a.md"));
+        assert!(two.text.contains("Resumen de b.md"));
+        assert!(!two.text.contains("Resumen de a.md"));
     }
 
     #[test]

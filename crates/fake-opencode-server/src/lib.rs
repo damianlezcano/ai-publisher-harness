@@ -31,6 +31,11 @@ pub struct Script {
     pub last_directory: Option<String>,
     pub last_permission: Option<Value>,
     pub last_session_id: String,
+    pub created_session_ids: Vec<String>,
+    pub session_auto_ids: bool,
+    pub next_session: u64,
+    pub session_messages: HashMap<String, String>,
+    pub k6_echo_from_prompt: bool,
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
@@ -218,6 +223,31 @@ fn default_messages() -> String {
 
 /// Append a synthetic assistant response to the message list so that watermark
 /// checks (assistant message count before vs. after prompt_async) see progress.
+fn k6_echo_json(prompt: &str) -> Option<String> {
+    const MARKER: &str = "Documento: ";
+    let start = prompt.rfind(MARKER)? + MARKER.len();
+    let name = prompt[start..]
+        .split('\n')
+        .next()?
+        .trim()
+        .trim_end_matches('.')
+        .trim();
+    if name.is_empty() {
+        return None;
+    }
+    let summary = format!("Resumen de {name}");
+    Some(
+        serde_json::json!({
+            "summary": summary,
+            "topics": [],
+            "decisions": [],
+            "action_items": [],
+            "questions": []
+        })
+        .to_string(),
+    )
+}
+
 fn append_assistant_response(
     current: &str,
     response_text: Option<&str>,
@@ -272,7 +302,7 @@ fn append_assistant_response(
             .to_owned()
     });
     messages.push(json!({
-        "info": { "id": "msg-appended", "role": "assistant", "parentID": user_id, "finish": response_finish.unwrap_or("stop") },
+        "info": { "id": format!("msg-appended-{}", messages.len()), "role": "assistant", "parentID": user_id, "finish": response_finish.unwrap_or("stop") },
         "parts": [{ "type": "text", "text": text }]
     }));
     serde_json::to_string(&messages).unwrap_or_else(|_| current.to_owned())
@@ -291,6 +321,11 @@ impl Default for Script {
             last_directory: None,
             last_permission: None,
             last_session_id: "ses-1".into(),
+            created_session_ids: Vec::new(),
+            session_auto_ids: true,
+            next_session: 0,
+            session_messages: HashMap::new(),
+            k6_echo_from_prompt: false,
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
             prompt_called: false,
@@ -377,8 +412,18 @@ impl FakeServer {
     }
 
     pub fn set_session_id(&self, id: &str) {
-        self.script().session_body = format!(r#"{{"id":"{id}"}}"#);
-        self.script().last_session_id = id.to_owned();
+        let mut script = self.script();
+        script.session_auto_ids = false;
+        script.session_body = format!(r#"{{"id":"{id}"}}"#);
+        script.last_session_id = id.to_owned();
+    }
+
+    pub fn created_session_ids(&self) -> Vec<String> {
+        self.script().created_session_ids.clone()
+    }
+
+    pub fn set_k6_echo_from_prompt(&self, enabled: bool) {
+        self.script().k6_echo_from_prompt = enabled;
     }
 
     /// Configure successive `GET /session/{id}` metadata responses. This
@@ -391,6 +436,7 @@ impl FakeServer {
 
     pub fn fail_session(&self) {
         let mut script = self.script();
+        script.session_auto_ids = false;
         script.session_status = 500;
         script.session_body = r#"{"error":"nope"}"#.into();
     }
@@ -415,7 +461,11 @@ impl FakeServer {
     }
 
     pub fn set_messages_body(&self, body: &str) {
-        self.script().messages_body = body.to_owned();
+        let mut script = self.script();
+        script.messages_body = body.to_owned();
+        for stored in script.session_messages.values_mut() {
+            *stored = body.to_owned();
+        }
     }
 
     pub fn set_messages_sequence(&self, bodies: &[&str]) {
@@ -838,7 +888,27 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             state.last_permission = value.get("permission").cloned();
         }
         let status = state.session_status;
-        let body = state.session_body.clone();
+        let body = if !(200..300).contains(&status) {
+            state.session_body.clone()
+        } else if state.session_auto_ids {
+            state.next_session += 1;
+            let id = format!("ses-{}", state.next_session);
+            state.last_session_id = id.clone();
+            state.created_session_ids.push(id.clone());
+            let initial = state.messages_body.clone();
+            state.session_messages.entry(id.clone()).or_insert(initial);
+            format!(r#"{{"id":"{id}"}}"#)
+        } else {
+            if let Some(id) = serde_json::from_str::<Value>(&state.session_body)
+                .ok()
+                .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_owned))
+            {
+                state.last_session_id = id.clone();
+                let initial = state.messages_body.clone();
+                state.session_messages.entry(id).or_insert(initial);
+            }
+            state.session_body.clone()
+        };
         drop(state);
         write_response(&mut stream, status, body.as_bytes());
         return;
@@ -869,11 +939,21 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
             state.prompt_texts.push(text.to_owned());
         }
         if state.prompt_appends_response {
-            state.messages_body = append_assistant_response(
-                &state.messages_body,
-                state.prompt_response_text.as_deref(),
-                state.prompt_response_finish.as_deref(),
-            );
+            let response_text = if state.k6_echo_from_prompt {
+                k6_echo_json(state.last_prompt_text.as_deref().unwrap_or(""))
+                    .or_else(|| state.prompt_response_text.clone())
+            } else {
+                state.prompt_response_text.clone()
+            };
+            let finish = state.prompt_response_finish.clone();
+            let current = state
+                .session_messages
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| state.messages_body.clone());
+            let updated =
+                append_assistant_response(&current, response_text.as_deref(), finish.as_deref());
+            state.session_messages.insert(id.to_owned(), updated);
         }
         let delay = state.prompt_delay;
         let status = state.prompt_status;
@@ -918,7 +998,11 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     {
         state.last_session_id = id.to_owned();
         let body = if state.messages_sequence.is_empty() {
-            state.messages_body.clone()
+            state
+                .session_messages
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| state.messages_body.clone())
         } else {
             let index = state
                 .messages_sequence_index
