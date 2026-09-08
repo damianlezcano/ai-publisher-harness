@@ -84,6 +84,10 @@ An unsupported or unindexed selected source remains an explicit labelled
 failure entry rather than silently disappearing. Supported indexed text stays
 on the Knowledge/K6 path and is never raw-forwarded solely for coverage.
 
+K6 remote synthesis uses a dedicated OpenCode scratch session. Completing a
+node requires the same `/session/{id}/message` list envelope as the chat
+adapter (`{"data":[...]}` on OpenCode 1.18.25, or a bare array).
+
 ## Dependency rules
 - UI does not invoke OpenCode/cloudflared directly.
 - Core does not import Tauri APIs.
