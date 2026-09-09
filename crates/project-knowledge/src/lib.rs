@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod context;
+mod exhaustive;
 mod model;
 mod ort_provider;
 mod summary;
@@ -14,6 +15,7 @@ pub use context::{
     BudgetEstimator, ConservativeCharBudgetEstimator, ContextAssembler, ContextAssemblyOptions,
     EvidenceEntry, EvidencePackage, EvidenceQueryMetadata, EvidenceTotals, ExcerptKind,
 };
+pub use exhaustive::{ExhaustiveCoverage, ExhaustiveSearchReport, RetrievalMode};
 pub use model::{
     ModelArtifact, ModelGeneration, ModelInstallState, ModelManager, ModelManifest,
     semantic_safe_subdivide, token_count, verify_artifact,
