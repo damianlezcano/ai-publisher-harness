@@ -135,8 +135,7 @@ fn a_normal_semantic_retrieval_stays_compact_and_non_exhaustive() {
     assert!(!prompt.contains(tmp.path().to_str().unwrap()));
     assert!(!prompt.contains("materials/"));
     let assistant = run.message.unwrap();
-    assert!(assistant.contains("Fuentes:"));
-    assert!(assistant.contains("2026-07-30-Notas-de-Gemini.md"));
+    assert!(assistant.contains("Fuentes:\n- 2026-07-30 … 2026-07-30-Notas-de-Gemini.md\n"));
 }
 
 #[test]
@@ -186,7 +185,7 @@ fn b_multi_source_semantic_keeps_identifiable_sources() {
     assert!(prompt.contains("2026-07-31-Notas-de-Gemini.md"));
     assert!(metrics.evidence_est_tokens.unwrap() < metrics.corpus_est_tokens.unwrap());
     let assistant = run.message.unwrap();
-    assert!(assistant.contains("Fuentes:"));
+    assert!(assistant.contains("Fuentes:\n- 2026-07-30 … 2026-07-30-Notas-de-Gemini.md\n- 2026-07-31 … 2026-07-31-Notas-de-Gemini.md\n"));
 }
 
 #[test]
@@ -231,7 +230,8 @@ fn c_exact_exhaustive_positive_is_compact() {
     assert!(!prompt.contains("Solo se habló de precios de las clases.\nSolo se habló"));
     assert!(!prompt.contains("materials/"));
     let assistant = run.message.unwrap();
-    assert!(assistant.contains("2026-07-30-Notas-de-Gemini.md"));
+    assert!(assistant.contains("Fuentes:\n- 2026-07-30 … 2026-07-30-Notas-de-Gemini.md\n"));
+    assert!(!assistant.contains("otros.md"));
 }
 
 #[test]
@@ -262,6 +262,7 @@ fn alternative_exhaustive_terms_do_not_require_a_contiguous_phrase() {
     assert!(metrics.lexical_hits.unwrap() > 0);
     let text = run.message.unwrap();
     assert!(!text.contains("No encontré menciones"));
+    assert!(text.contains("Fuentes:\n- k.md\n"));
 }
 
 #[test]
@@ -309,6 +310,9 @@ fn d_exhaustive_negative_is_local_complete_and_does_not_forward_corpus() {
     assert!(text.contains("No encontré menciones"));
     assert!(text.contains("2 materiales"));
     assert!(!text.contains("esto no debe enviarse"));
+    assert!(!text.contains("Fuentes:"));
+    assert!(!text.contains("a.md"));
+    assert!(!text.contains("b.md"));
 }
 
 #[test]
@@ -349,6 +353,9 @@ fn e_exhaustive_incomplete_must_not_claim_global_absence() {
     assert!(text.contains("no pude verificar exhaustivamente todo el corpus"));
     assert!(!text.to_lowercase().contains("no se mencionó"));
     assert!(!text.contains("No encontré menciones de kubernetes"));
+    assert!(!text.contains("Fuentes:"));
+    assert!(!text.contains("notas.md"));
+    assert!(!text.contains("manual.pdf"));
 }
 
 #[test]
@@ -388,6 +395,7 @@ fn f_historical_project_isolation() {
     let text = run.message.unwrap();
     assert!(text.contains("No encontré menciones"));
     assert!(!text.contains("viejo.md"));
+    assert!(!text.contains("Fuentes:"));
 }
 
 #[test]
@@ -413,8 +421,7 @@ fn g_source_traceability_has_filename_without_absolute_path() {
         )
         .unwrap();
     let assistant = run.message.unwrap();
-    assert!(assistant.contains("Fuentes:"));
-    assert!(assistant.contains("2026-07-31-Notas-de-Gemini.md"));
+    assert!(assistant.contains("Fuentes:\n- 2026-07-31 … 2026-07-31-Notas-de-Gemini.md\n"));
     assert!(!assistant.contains("/home/"));
     assert!(!assistant.contains(tmp.path().to_str().unwrap()));
 }
@@ -580,4 +587,132 @@ fn k_and_l_restart_durability_and_zero_work_reopen() {
     let _ = fresh.open_project(&project.id).unwrap();
     assert_eq!(fresh_calls.lock().unwrap().len(), 0);
     assert_eq!(calls.lock().unwrap().len(), remote_before);
+}
+
+fn fuentes_names(text: &str) -> Vec<String> {
+    let Some(block) = text.split("Fuentes:\n").nth(1) else {
+        return Vec::new();
+    };
+    block
+        .lines()
+        .filter_map(|line| line.strip_prefix("- ").map(str::to_owned))
+        .take_while(|line| !line.is_empty())
+        .collect()
+}
+
+#[test]
+fn five_document_corpus_does_not_emit_five_fuentes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = FakeAgentEngine::new();
+    inner.set_message("Sí, se habló de Kubernetes.".into());
+    let state = recording_app(tmp.path(), RecordingEngine(inner, calls.clone()));
+    let project = state.create_project("Five").unwrap();
+    for i in 0..4 {
+        add_file(
+            &state,
+            tmp.path(),
+            &project.id,
+            &format!("filler-{i}.md"),
+            &format!("Documento {i} de gramatica, precios y la agenda semanal.\n"),
+        );
+    }
+    add_file(
+        &state,
+        tmp.path(),
+        &project.id,
+        "hit.md",
+        "En esta reunion se hablo de Kubernetes y el cluster de produccion.\n",
+    );
+    let run = state
+        .send_message(
+            &project.id,
+            "¿Se habló en alguna reunión de Kubernetes u OpenShift?",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(run.status, "completed");
+    let metrics = state.last_turn_metrics(&project.id).unwrap().unwrap();
+    assert_eq!(metrics.retrieval_mode.as_deref(), Some("exhaustive"));
+    assert_eq!(metrics.materials_inspected, Some(5));
+    assert_eq!(metrics.eligible_materials, Some(5));
+    assert_eq!(metrics.lexical_hits, Some(1));
+    let assistant = run.message.unwrap();
+    assert_eq!(fuentes_names(&assistant), vec!["hit.md".to_owned()]);
+    assert!(!assistant.contains("filler-"));
+    let prompt = calls.lock().unwrap()[0].clone();
+    assert!(prompt.contains("hit.md"));
+    assert!(!prompt.contains("filler-0.md"));
+}
+
+#[test]
+fn budget_dropped_exhaustive_sources_are_not_fuentes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let inner = FakeAgentEngine::new();
+    inner.set_message("Sí, se habló de Kubernetes en varios documentos.".into());
+    let state = recording_app(tmp.path(), RecordingEngine(inner, calls.clone()));
+    let project = state.create_project("Budget").unwrap();
+    for i in 0..9 {
+        add_file(
+            &state,
+            tmp.path(),
+            &project.id,
+            &format!("hit-{i:02}.md"),
+            &format!(
+                "En esta reunion {i} se hablo de Kubernetes como plataforma de contenedores.\n"
+            ),
+        );
+    }
+    let run = state
+        .send_message(
+            &project.id,
+            "¿Se habló en alguna reunión de Kubernetes u OpenShift?",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(run.status, "completed");
+    let metrics = state.last_turn_metrics(&project.id).unwrap().unwrap();
+    assert_eq!(metrics.lexical_hits, Some(9));
+    assert_eq!(metrics.materials_inspected, Some(9));
+    assert!(metrics.selected_evidence_count.unwrap() <= 8);
+    assert!(metrics.selected_evidence_count.unwrap() < metrics.lexical_hits.unwrap());
+    let assistant = run.message.unwrap();
+    let names = fuentes_names(&assistant);
+    assert_eq!(names.len(), metrics.selected_evidence_count.unwrap());
+    assert!(!names.iter().any(|name| name == "hit-08.md"));
+    assert!(!assistant.contains("hit-08.md"));
+    let prompt = calls.lock().unwrap()[0].clone();
+    assert!(!prompt.contains("hit-08.md"));
+    assert!(prompt.contains("hit-00.md"));
+}
+
+#[test]
+fn duplicate_chunks_from_one_source_emit_one_fuente() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = FakeAgentEngine::new();
+    inner.set_message("Sí.".into());
+    let state = recording_app(
+        tmp.path(),
+        RecordingEngine(inner, Arc::new(Mutex::new(Vec::new()))),
+    );
+    let project = state.create_project("Dup").unwrap();
+    add_file(
+        &state,
+        tmp.path(),
+        &project.id,
+        "notas.md",
+        "Se hablo de Kubernetes en la manana.\n\nMas tarde se volvio a mencionar Kubernetes.\n",
+    );
+    let run = state
+        .send_message(
+            &project.id,
+            "¿Se habló en alguna reunión de Kubernetes u OpenShift?",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        fuentes_names(&run.message.unwrap()),
+        vec!["notas.md".to_owned()]
+    );
 }

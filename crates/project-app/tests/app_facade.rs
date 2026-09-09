@@ -133,7 +133,11 @@ fn completed_turn_logs_sanitized_actual_usage_without_prompt_content() {
         .expect("send");
     let usage = project_app::session_log::list()
         .into_iter()
-        .find_map(|entry| entry.usage)
+        .find_map(|entry| {
+            entry
+                .usage
+                .filter(|usage| usage.conversation_id == project.id)
+        })
         .expect("usage record");
     assert_eq!(usage.conversation_id, project.id);
     assert_eq!(usage.input_tokens, Some(1834));

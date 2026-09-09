@@ -1754,6 +1754,7 @@ where
                 chunk_label: entry.chunk_label.clone(),
             })
             .collect();
+        let citation_source_names = citation_names_from_selected_evidence(&entries, false);
         Ok((
             Some(AgentKnowledgeContext {
                 indexed_source_names,
@@ -1766,7 +1767,7 @@ where
                 structural_note: None,
                 local_answer: None,
                 authorize_negative: false,
-                citation_source_names: Vec::new(),
+                citation_source_names,
             }),
             Some(knowledge_metrics),
         ))
@@ -1795,10 +1796,14 @@ where
                     )
                 })?,
         };
+        // Fuentes and the remote evidence package may only contain selected
+        // supporting chunks. Semantic expansion stays in inspection metrics
+        // (`semantic_hits`) and must not become citations or fake evidence.
+        let evidence_candidates = lexical_exhaustive_candidates(&report.candidates);
         let package = store
             .assemble_context(
                 user_query,
-                &report.candidates,
+                &evidence_candidates,
                 ContextAssemblyOptions::default(),
             )
             .map_err(|_| {
@@ -1912,15 +1917,16 @@ where
                 chunk_label: entry.chunk_label.clone(),
             })
             .collect();
+        let citation_source_names = citation_names_from_selected_evidence(&entries, true);
         let structural_note = Some(format!(
-            "exhaustive_coverage={} eligible_materials={} materials_inspected={} chunks_inspected={} lexical_hits={} semantic_hits={} matching_sources={}",
+            "exhaustive_coverage={} eligible_materials={} materials_inspected={} chunks_inspected={} lexical_hits={} semantic_hits={} selected_evidence_sources={}",
             report.coverage.as_str(),
             report.eligible_materials,
             report.materials_inspected,
             report.chunks_inspected,
             report.lexical_hits,
             report.semantic_hits,
-            report.matching_source_names.len()
+            citation_source_names.len()
         ));
         let local_answer = exhaustive_local_answer(&report, &terms);
         if indexed_source_names.is_empty() && entries.is_empty() && local_answer.is_none() {
@@ -1940,7 +1946,7 @@ where
                 authorize_negative: report.coverage == ExhaustiveCoverage::Complete
                     && report.lexical_hits == 0
                     && !terms.is_empty(),
-                citation_source_names: report.matching_source_names.clone(),
+                citation_source_names,
             }),
             Some(knowledge_metrics),
         ))
@@ -4925,6 +4931,43 @@ fn evidence_kind_label(signals: &HybridMatchSignals) -> Option<String> {
     }
 }
 
+fn lexical_exhaustive_candidates(
+    candidates: &[project_knowledge::HybridSearchResult],
+) -> Vec<project_knowledge::HybridSearchResult> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.signals.lexical_match)
+        .cloned()
+        .collect()
+}
+
+fn citation_names_from_selected_evidence(
+    entries: &[AgentKnowledgeEntry],
+    exhaustive: bool,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    entries
+        .iter()
+        .filter(|entry| {
+            if !exhaustive {
+                return true;
+            }
+            matches!(
+                entry.evidence_kind.as_deref(),
+                Some("lexical") | Some("both")
+            )
+        })
+        .filter_map(|entry| {
+            let name = project_core::safe_file_name(&entry.source_name);
+            if name.contains('/') || name.contains('\\') || !seen.insert(name.clone()) {
+                None
+            } else {
+                Some(name)
+            }
+        })
+        .collect()
+}
+
 fn exhaustive_local_answer(
     report: &project_knowledge::ExhaustiveSearchReport,
     terms: &[String],
@@ -4956,27 +4999,17 @@ fn append_source_traceability(text: &str, knowledge: Option<&AgentKnowledgeConte
     let Some(knowledge) = knowledge else {
         return text.to_owned();
     };
+    let exhaustive = knowledge.retrieval_mode.as_deref() == Some("exhaustive");
     let names: Vec<String> = if !knowledge.citation_source_names.is_empty() {
+        let mut seen = HashSet::new();
         knowledge
             .citation_source_names
             .iter()
             .map(|name| project_core::safe_file_name(name))
-            .filter(|name| !name.contains('/') && !name.contains('\\'))
+            .filter(|name| !name.contains('/') && !name.contains('\\') && seen.insert(name.clone()))
             .collect()
     } else {
-        let mut seen = HashSet::new();
-        knowledge
-            .entries
-            .iter()
-            .filter_map(|entry| {
-                let name = project_core::safe_file_name(&entry.source_name);
-                if name.contains('/') || name.contains('\\') || !seen.insert(name.clone()) {
-                    None
-                } else {
-                    Some(name)
-                }
-            })
-            .collect()
+        citation_names_from_selected_evidence(&knowledge.entries, exhaustive)
     };
     if names.is_empty() || text.contains("Fuentes:") {
         return text.to_owned();
@@ -4997,6 +5030,101 @@ fn append_source_traceability(text: &str, knowledge: Option<&AgentKnowledgeConte
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod source_provenance_tests {
+    use super::*;
+
+    fn entry(name: &str, kind: Option<&str>) -> AgentKnowledgeEntry {
+        AgentKnowledgeEntry {
+            label: "E1".to_owned(),
+            source_label: "S1".to_owned(),
+            source_name: name.to_owned(),
+            chunk_label: "C1".to_owned(),
+            line_start: Some(1),
+            line_end: Some(2),
+            heading_path: Vec::new(),
+            text: "excerpt".to_owned(),
+            source_id: None,
+            evidence_kind: kind.map(str::to_owned),
+        }
+    }
+
+    fn context(
+        mode: &str,
+        entries: Vec<AgentKnowledgeEntry>,
+        citation_source_names: Vec<String>,
+    ) -> AgentKnowledgeContext {
+        AgentKnowledgeContext {
+            entries,
+            evidence_budget_used: 1,
+            evidence_budget_limit: 2700,
+            indexed_source_names: vec!["inspected.md".to_owned()],
+            citation_map: Vec::new(),
+            retrieval_mode: Some(mode.to_owned()),
+            exhaustive_coverage: Some("complete".to_owned()),
+            structural_note: Some("materials_inspected=5".to_owned()),
+            local_answer: None,
+            authorize_negative: false,
+            citation_source_names,
+        }
+    }
+
+    #[test]
+    fn exhaustive_fuentes_omit_semantic_only_and_inspection_inventory() {
+        let knowledge = context(
+            "exhaustive",
+            vec![
+                entry("hit.md", Some("lexical")),
+                entry("near.md", Some("semantic")),
+                entry("hit.md", Some("lexical")),
+            ],
+            Vec::new(),
+        );
+        let text = append_source_traceability("Sí, se habló de Kubernetes.", Some(&knowledge));
+        assert!(text.contains("Fuentes:\n- hit.md\n"));
+        assert!(!text.contains("near.md"));
+        assert!(!text.contains("inspected.md"));
+        assert_eq!(text.matches("- hit.md").count(), 1);
+    }
+
+    #[test]
+    fn exhaustive_explicit_citation_names_win_over_unselected_entries() {
+        let knowledge = context(
+            "exhaustive",
+            vec![entry("dropped.md", Some("lexical"))],
+            vec!["kept.md".to_owned()],
+        );
+        let text = append_source_traceability("Sí.", Some(&knowledge));
+        assert!(text.contains("Fuentes:\n- kept.md\n"));
+        assert!(!text.contains("dropped.md"));
+    }
+
+    #[test]
+    fn normal_rag_may_cite_semantic_selected_evidence() {
+        let knowledge = context(
+            "normal",
+            vec![entry("semantic-only.md", Some("semantic"))],
+            Vec::new(),
+        );
+        let text = append_source_traceability("Respuesta.", Some(&knowledge));
+        assert!(text.contains("Fuentes:\n- semantic-only.md\n"));
+    }
+
+    #[test]
+    fn sanitized_names_never_keep_path_separators() {
+        let knowledge = context(
+            "normal",
+            vec![entry("/home/damian/secret.md", Some("lexical"))],
+            Vec::new(),
+        );
+        let text = append_source_traceability("Respuesta.", Some(&knowledge));
+        assert!(!text.contains("/home/"));
+        assert!(!text.contains('\\'));
+        assert!(text.contains("Fuentes:\n- home-damian-secret.md\n"));
+    }
 }
 
 /// SVG is validated for the `svg` root element only: the bytes are text and must

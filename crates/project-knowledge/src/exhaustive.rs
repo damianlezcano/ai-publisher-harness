@@ -396,4 +396,79 @@ mod tests {
         assert_eq!(report.materials_inspected, 1);
         assert_eq!(report.lexical_hits, 0);
     }
+
+    struct RelatedEmbeddings {
+        generation: crate::EmbeddingGeneration,
+    }
+
+    impl crate::EmbeddingProvider for RelatedEmbeddings {
+        fn generation(&self) -> &crate::EmbeddingGeneration {
+            &self.generation
+        }
+        fn embed_query(&mut self, _query: &str) -> crate::Result<Vec<f32>> {
+            let mut vector = vec![0.0; 384];
+            vector[0] = 1.0;
+            Ok(vector)
+        }
+        fn embed_passages(&mut self, passages: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+            Ok(passages
+                .iter()
+                .map(|_| {
+                    let mut vector = vec![0.0; 384];
+                    vector[0] = 1.0;
+                    vector
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn semantic_near_misses_are_not_lexical_matches() {
+        let (_temp, mut store) = store();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db15", "k.md"),
+                b"En esta reunion solo se hablo de Kubernetes.",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db16", "grammar.md"),
+                b"Delfina explico pasado simple y pasado continuo con ejemplos de clase.",
+            )
+            .unwrap();
+        let mut provider = RelatedEmbeddings {
+            generation: crate::EmbeddingGeneration::from(
+                crate::ModelManifest::embedded().unwrap().active(),
+            ),
+        };
+        assert_eq!(
+            store.index_embeddings(&mut provider, 8).unwrap().embedded,
+            2
+        );
+        let report = store
+            .exhaustive_presence_search(
+                "Kubernetes u OpenShift",
+                &["kubernetes".into(), "openshift".into()],
+                Some(&mut provider),
+            )
+            .unwrap();
+        assert_eq!(report.lexical_hits, 1);
+        assert!(report.semantic_hits >= 1);
+        assert!(
+            report
+                .candidates
+                .iter()
+                .any(|candidate| candidate.source_name == "k.md" && candidate.signals.lexical_match)
+        );
+        assert!(
+            report.candidates.iter().any(|candidate| {
+                candidate.source_name == "grammar.md"
+                    && candidate.signals.semantic_match
+                    && !candidate.signals.lexical_match
+            }),
+            "semantic near-miss must remain distinct from lexical evidence: {:?}",
+            report.candidates
+        );
+    }
 }
