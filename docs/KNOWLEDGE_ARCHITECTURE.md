@@ -92,7 +92,7 @@ The FTS query builder must escape/tokenize raw user text rather than interpolate
 
 ## 11. Question answering vs corpus summarization
 
-**Question answering:** user question → hybrid retrieval → ranked evidence → bounded context → remote LLM answer (with citations).
+**Question answering:** user question → intent detection (`NormalSemantic` vs `CorpusExhaustive`) → either bounded K3/K4 top-k hybrid retrieval **or** a local exhaustive presence scan of every READY chunk → ranked/compact evidence → remote LLM answer (with locally appended source filenames). A corpus-wide negative answer is produced locally only when `exhaustive_coverage=complete` after inspecting the full eligible READY inventory; top-k emptiness is never treated as global absence.
 
 **Corpus summarization:** local extraction/chunking → cached per-document summaries or structured facts → topic/cluster summaries → hierarchical collection summary → optional remote synthesis of only intermediate summaries. Embeddings alone cannot produce faithful prose. V1 should use extractive/structured local aggregation and cache boundaries; a small local generative model is a later opt-in due to packaging and CPU cost. Remote synthesis is optional and auditable.
 
