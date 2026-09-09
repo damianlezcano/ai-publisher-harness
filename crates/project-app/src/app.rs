@@ -27,9 +27,9 @@ use project_fs::{
     PublicationSnapshotStore,
 };
 use project_knowledge::{
-    ContextAssemblyOptions, EmbeddingProvider, HybridSearchOptions, KnowledgeStore, MaterialSource,
-    ModelInstallState, ModelManager, OrtEmbeddingProvider, SemanticProviderState,
-    runtime_library_from_executable,
+    ContextAssemblyOptions, EmbeddingProvider, ExhaustiveCoverage, HybridMatchSignals,
+    HybridSearchOptions, KnowledgeStore, MaterialSource, ModelInstallState, ModelManager,
+    OrtEmbeddingProvider, RetrievalMode, SemanticProviderState, runtime_library_from_executable,
 };
 use project_opencode::OpenCodeBackend;
 use project_preview::PreviewServer;
@@ -247,6 +247,13 @@ struct TurnKnowledgeMetrics {
     context_reduction_pct: Option<usize>,
     semantic_provider_state: String,
     request_preparation_ms: Option<u64>,
+    retrieval_mode: Option<String>,
+    eligible_materials: Option<usize>,
+    materials_inspected: Option<usize>,
+    chunks_inspected: Option<usize>,
+    exhaustive_coverage: Option<String>,
+    lexical_hits: Option<usize>,
+    semantic_hits: Option<usize>,
 }
 
 /// One source explicitly selected in the current composer turn. This is kept
@@ -1549,6 +1556,14 @@ where
             .corpus_stats()
             .unwrap_or_else(|_| project_knowledge::KnowledgeCorpusStats::default());
 
+        if crate::retrieval_intent::detect_retrieval_intent(user_query)
+            == crate::RetrievalIntent::CorpusExhaustive
+        {
+            return self.prepare_exhaustive_knowledge_context(
+                project_id, user_query, &store, &corpus, started,
+            );
+        }
+
         let (search, mut semantic_state) = self.with_local_embedding_provider(|provider| {
             store.hybrid_search_metrics(user_query, Some(provider), HybridSearchOptions::default())
         });
@@ -1613,6 +1628,13 @@ where
             context_reduction_pct: Some(context_reduction_pct_vs_naive_corpus),
             semantic_provider_state: semantic_state.as_str().to_owned(),
             request_preparation_ms: u64::try_from(started.elapsed().as_millis()).ok(),
+            retrieval_mode: Some(RetrievalMode::Normal.as_str().to_owned()),
+            eligible_materials: None,
+            materials_inspected: None,
+            chunks_inspected: None,
+            exhaustive_coverage: Some(ExhaustiveCoverage::NotRequested.as_str().to_owned()),
+            lexical_hits: None,
+            semantic_hits: None,
         };
         crate::session_log::record_knowledge(
             crate::session_log::SessionKnowledgeMetrics {
@@ -1629,6 +1651,13 @@ where
                 context_reduction_pct: knowledge_metrics.context_reduction_pct,
                 semantic_provider_state: knowledge_metrics.semantic_provider_state.clone(),
                 request_preparation_ms: knowledge_metrics.request_preparation_ms.map(u128::from),
+                retrieval_mode: knowledge_metrics.retrieval_mode.clone(),
+                eligible_materials: knowledge_metrics.eligible_materials,
+                materials_inspected: knowledge_metrics.materials_inspected,
+                chunks_inspected: knowledge_metrics.chunks_inspected,
+                exhaustive_coverage: knowledge_metrics.exhaustive_coverage.clone(),
+                lexical_hits: knowledge_metrics.lexical_hits,
+                semantic_hits: knowledge_metrics.semantic_hits,
             },
             format!(
                 "[knowledge] retrieval mode={} candidates={} evidence={} budget_used={} budget_limit={} semantic={} semantic_state={} lexical_candidates={} semantic_candidates={} fused_candidates={} evidence_bytes={} evidence_utf8_chars={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} knowledge_materials={} knowledge_ready={} knowledge_failed={} knowledge_unsupported={} knowledge_pending={} chunks_total={} embeddings_ready={} corpus_bytes={} corpus_utf8_chars={} request_preparation_ms={}",
@@ -1690,6 +1719,12 @@ where
                     evidence_budget_used: 0,
                     evidence_budget_limit: package.totals.estimated_budget_limit,
                     citation_map: Vec::new(),
+                    retrieval_mode: Some(RetrievalMode::Normal.as_str().to_owned()),
+                    exhaustive_coverage: Some(ExhaustiveCoverage::NotRequested.as_str().to_owned()),
+                    structural_note: None,
+                    local_answer: None,
+                    authorize_negative: false,
+                    citation_source_names: Vec::new(),
                 }),
                 Some(knowledge_metrics),
             ));
@@ -1707,6 +1742,8 @@ where
                 line_end: Some(entry.provenance.end_line),
                 heading_path: entry.heading_path.clone(),
                 text: entry.text.clone(),
+                source_id: Some(entry.source_id.clone()),
+                evidence_kind: evidence_kind_label(&entry.signals),
             })
             .collect();
         let citation_map = entries
@@ -1724,6 +1761,186 @@ where
                 evidence_budget_used: package.totals.estimated_budget_used,
                 evidence_budget_limit: package.totals.estimated_budget_limit,
                 citation_map,
+                retrieval_mode: Some(RetrievalMode::Normal.as_str().to_owned()),
+                exhaustive_coverage: Some(ExhaustiveCoverage::NotRequested.as_str().to_owned()),
+                structural_note: None,
+                local_answer: None,
+                authorize_negative: false,
+                citation_source_names: Vec::new(),
+            }),
+            Some(knowledge_metrics),
+        ))
+    }
+
+    fn prepare_exhaustive_knowledge_context(
+        &self,
+        project_id: &ProjectId,
+        user_query: &str,
+        store: &KnowledgeStore,
+        corpus: &project_knowledge::KnowledgeCorpusStats,
+        started: std::time::Instant,
+    ) -> AppResult<(Option<AgentKnowledgeContext>, Option<TurnKnowledgeMetrics>)> {
+        let terms = crate::extract_presence_terms(user_query);
+        let (search, semantic_state) = self.with_local_embedding_provider(|provider| {
+            store.exhaustive_presence_search(user_query, &terms, Some(provider))
+        });
+        let report = match search {
+            Some(Ok(report)) => report,
+            Some(Err(_)) | None => store
+                .exhaustive_presence_search(user_query, &terms, None)
+                .map_err(|_| {
+                    AppError::new(
+                        ErrorCode::Internal,
+                        "No pudimos buscar el material de apoyo.",
+                    )
+                })?,
+        };
+        let package = store
+            .assemble_context(
+                user_query,
+                &report.candidates,
+                ContextAssemblyOptions::default(),
+            )
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::Internal,
+                    "No pudimos preparar el material de apoyo.",
+                )
+            })?;
+        let evidence_bytes: usize = package.entries.iter().map(|entry| entry.text.len()).sum();
+        let evidence_utf8_chars: usize = package
+            .entries
+            .iter()
+            .map(|entry| entry.text.chars().count())
+            .sum();
+        let evidence_est_tokens = package.totals.estimated_budget_used;
+        let naive_corpus_est_tokens = corpus.naive_corpus_est_tokens;
+        let context_reduction_pct_vs_naive_corpus = if naive_corpus_est_tokens == 0 {
+            100
+        } else {
+            let saved = naive_corpus_est_tokens.saturating_sub(evidence_est_tokens);
+            saved * 100 / naive_corpus_est_tokens
+        };
+        let knowledge_metrics = TurnKnowledgeMetrics {
+            material_count: corpus.material_count,
+            corpus_bytes: corpus.corpus_bytes,
+            corpus_utf8_chars: corpus.corpus_utf8_chars,
+            corpus_est_tokens: naive_corpus_est_tokens,
+            retrieval_candidate_count: Some(report.candidates.len()),
+            selected_evidence_count: Some(package.entries.len()),
+            selected_evidence_bytes: Some(evidence_bytes),
+            selected_evidence_utf8_chars: Some(evidence_utf8_chars),
+            evidence_est_tokens: Some(evidence_est_tokens),
+            context_reduction_pct: Some(context_reduction_pct_vs_naive_corpus),
+            semantic_provider_state: semantic_state.as_str().to_owned(),
+            request_preparation_ms: u64::try_from(started.elapsed().as_millis()).ok(),
+            retrieval_mode: Some(RetrievalMode::Exhaustive.as_str().to_owned()),
+            eligible_materials: Some(report.eligible_materials),
+            materials_inspected: Some(report.materials_inspected),
+            chunks_inspected: Some(report.chunks_inspected),
+            exhaustive_coverage: Some(report.coverage.as_str().to_owned()),
+            lexical_hits: Some(report.lexical_hits),
+            semantic_hits: Some(report.semantic_hits),
+        };
+        crate::session_log::record_knowledge(
+            crate::session_log::SessionKnowledgeMetrics {
+                conversation_id: project_id.as_str().to_owned(),
+                material_count: knowledge_metrics.material_count,
+                corpus_bytes: knowledge_metrics.corpus_bytes,
+                corpus_utf8_chars: knowledge_metrics.corpus_utf8_chars,
+                corpus_est_tokens: knowledge_metrics.corpus_est_tokens,
+                retrieval_candidate_count: knowledge_metrics.retrieval_candidate_count,
+                selected_evidence_count: knowledge_metrics.selected_evidence_count,
+                selected_evidence_bytes: knowledge_metrics.selected_evidence_bytes,
+                selected_evidence_utf8_chars: knowledge_metrics.selected_evidence_utf8_chars,
+                evidence_est_tokens: knowledge_metrics.evidence_est_tokens,
+                context_reduction_pct: knowledge_metrics.context_reduction_pct,
+                semantic_provider_state: knowledge_metrics.semantic_provider_state.clone(),
+                request_preparation_ms: knowledge_metrics.request_preparation_ms.map(u128::from),
+                retrieval_mode: knowledge_metrics.retrieval_mode.clone(),
+                eligible_materials: knowledge_metrics.eligible_materials,
+                materials_inspected: knowledge_metrics.materials_inspected,
+                chunks_inspected: knowledge_metrics.chunks_inspected,
+                exhaustive_coverage: knowledge_metrics.exhaustive_coverage.clone(),
+                lexical_hits: knowledge_metrics.lexical_hits,
+                semantic_hits: knowledge_metrics.semantic_hits,
+            },
+            format!(
+                "[knowledge] retrieval mode=exhaustive coverage={} eligible_materials={} materials_inspected={} chunks_inspected={} lexical_hits={} semantic_hits={} candidates={} evidence={} evidence_est_tokens={} naive_corpus_est_tokens={} context_reduction_pct_vs_naive_corpus={} semantic_state={}",
+                report.coverage.as_str(),
+                report.eligible_materials,
+                report.materials_inspected,
+                report.chunks_inspected,
+                report.lexical_hits,
+                report.semantic_hits,
+                report.candidates.len(),
+                package.entries.len(),
+                evidence_est_tokens,
+                naive_corpus_est_tokens,
+                context_reduction_pct_vs_naive_corpus,
+                semantic_state.as_str()
+            ),
+        );
+        let indexed_source_names: Vec<String> = store
+            .ready_source_names()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|name| project_core::safe_file_name(&name))
+            .collect();
+        let entries: Vec<AgentKnowledgeEntry> = package
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| AgentKnowledgeEntry {
+                label: format!("E{}", index + 1),
+                source_label: format!("S{}", index + 1),
+                source_name: project_core::safe_file_name(&entry.source_name),
+                chunk_label: format!("C{}", index + 1),
+                line_start: Some(entry.provenance.start_line),
+                line_end: Some(entry.provenance.end_line),
+                heading_path: entry.heading_path.clone(),
+                text: entry.text.clone(),
+                source_id: Some(entry.source_id.clone()),
+                evidence_kind: evidence_kind_label(&entry.signals),
+            })
+            .collect();
+        let citation_map = entries
+            .iter()
+            .map(|entry| AgentEvidenceProvenance {
+                label: entry.label.clone(),
+                source_label: entry.source_label.clone(),
+                chunk_label: entry.chunk_label.clone(),
+            })
+            .collect();
+        let structural_note = Some(format!(
+            "exhaustive_coverage={} eligible_materials={} materials_inspected={} chunks_inspected={} lexical_hits={} semantic_hits={} matching_sources={}",
+            report.coverage.as_str(),
+            report.eligible_materials,
+            report.materials_inspected,
+            report.chunks_inspected,
+            report.lexical_hits,
+            report.semantic_hits,
+            report.matching_source_names.len()
+        ));
+        let local_answer = exhaustive_local_answer(&report, &terms);
+        if indexed_source_names.is_empty() && entries.is_empty() && local_answer.is_none() {
+            return Ok((None, Some(knowledge_metrics)));
+        }
+        Ok((
+            Some(AgentKnowledgeContext {
+                indexed_source_names,
+                entries,
+                evidence_budget_used: package.totals.estimated_budget_used,
+                evidence_budget_limit: package.totals.estimated_budget_limit,
+                citation_map,
+                retrieval_mode: Some(RetrievalMode::Exhaustive.as_str().to_owned()),
+                exhaustive_coverage: Some(report.coverage.as_str().to_owned()),
+                structural_note,
+                local_answer,
+                authorize_negative: report.coverage == ExhaustiveCoverage::Complete
+                    && report.lexical_hits == 0
+                    && !terms.is_empty(),
+                citation_source_names: report.matching_source_names.clone(),
             }),
             Some(knowledge_metrics),
         ))
@@ -2687,6 +2904,13 @@ where
     /// Runs the agent using the prepared inputs and appends an assistant
     /// message reflecting the outcome (`ok`, `failed`, or `cancelled`).
     pub fn send_message_run(&self, inputs: AgentRunInputs) -> AppResult<AgentRunView> {
+        if let Some(local) = inputs
+            .knowledge
+            .as_ref()
+            .and_then(|context| context.local_answer.clone())
+        {
+            return self.complete_local_knowledge_turn(inputs, local);
+        }
         #[cfg(test)]
         {
             self.test_activity
@@ -2699,6 +2923,7 @@ where
         let durable_turn_id = inputs.turn_id.clone();
         let model_ref = inputs.model.clone();
         let knowledge_metrics = inputs.knowledge_metrics.clone();
+        let knowledge_for_citations = inputs.knowledge.clone();
         let model = model_ref
             .as_ref()
             .map(|model| format!("{}/{}", model.provider_id, model.model_id))
@@ -2752,6 +2977,7 @@ where
                     result.task.message.as_deref(),
                     !result.registered.is_empty(),
                 );
+                text = append_source_traceability(&text, knowledge_for_citations.as_ref());
                 let missing_response = result
                     .task
                     .message
@@ -2862,6 +3088,50 @@ where
                 })
             }
         }
+    }
+
+    fn complete_local_knowledge_turn(
+        &self,
+        inputs: AgentRunInputs,
+        local: String,
+    ) -> AppResult<AgentRunView> {
+        let project_id = inputs.project_id.clone();
+        let turn_id = inputs.turn_id.as_ref().map(ToString::to_string);
+        let durable_turn_id = inputs.turn_id.clone();
+        let model_ref = inputs.model.clone();
+        let knowledge_metrics = inputs.knowledge_metrics.clone();
+        let text = append_source_traceability(&local, inputs.knowledge.as_ref());
+        let started = std::time::Instant::now();
+        let usage = RemoteUsage::default();
+        record_turn_usage(
+            project_id.as_str(),
+            turn_id.as_deref(),
+            model_ref.as_ref(),
+            &usage,
+            started.elapsed().as_millis(),
+            "normal_chat",
+            false,
+        );
+        self.projects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_assistant_message(&project_id, &text, MessageStatus::Ok, &[])
+            .map_err(AppError::from_core)?;
+        let mut metrics = completed_normal_turn_metrics(
+            model_ref.as_ref(),
+            &usage,
+            started.elapsed().as_millis(),
+            knowledge_metrics.as_ref(),
+        );
+        metrics.remote_calls = Some(0);
+        metrics.source = Some("unavailable".to_owned());
+        self.persist_completed_turn_metrics(&project_id, durable_turn_id.as_ref(), metrics)?;
+        Ok(AgentRunView {
+            status: "completed".to_owned(),
+            turn_id,
+            registered_creation_ids: Vec::new(),
+            message: Some(text),
+        })
     }
 
     /// Whole-project hierarchical summary (K6) through the shared OpenCode
@@ -4646,6 +4916,89 @@ fn safe_filename_date(name: &str) -> Option<(i32, u32, u32)> {
     None
 }
 
+fn evidence_kind_label(signals: &HybridMatchSignals) -> Option<String> {
+    match (signals.lexical_match, signals.semantic_match) {
+        (true, true) => Some("both".to_owned()),
+        (true, false) => Some("lexical".to_owned()),
+        (false, true) => Some("semantic".to_owned()),
+        (false, false) => None,
+    }
+}
+
+fn exhaustive_local_answer(
+    report: &project_knowledge::ExhaustiveSearchReport,
+    terms: &[String],
+) -> Option<String> {
+    if terms.is_empty() || report.lexical_hits > 0 {
+        return None;
+    }
+    match report.coverage {
+        ExhaustiveCoverage::Incomplete => Some(
+            "No encontré evidencia suficiente en la búsqueda realizada, pero no pude verificar exhaustivamente todo el corpus."
+                .to_owned(),
+        ),
+        ExhaustiveCoverage::Complete => {
+            let inspected = report.materials_inspected;
+            let topic = if terms.is_empty() {
+                "ese tema".to_owned()
+            } else {
+                terms.join(" ni ")
+            };
+            Some(format!(
+                "No encontré menciones de {topic} en los {inspected} materiales inspeccionados.\nInspeccioné los {inspected} materiales disponibles del corpus."
+            ))
+        }
+        ExhaustiveCoverage::NotRequested => None,
+    }
+}
+
+fn append_source_traceability(text: &str, knowledge: Option<&AgentKnowledgeContext>) -> String {
+    let Some(knowledge) = knowledge else {
+        return text.to_owned();
+    };
+    let names: Vec<String> = if !knowledge.citation_source_names.is_empty() {
+        knowledge
+            .citation_source_names
+            .iter()
+            .map(|name| project_core::safe_file_name(name))
+            .filter(|name| !name.contains('/') && !name.contains('\\'))
+            .collect()
+    } else {
+        let mut seen = HashSet::new();
+        knowledge
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                let name = project_core::safe_file_name(&entry.source_name);
+                if name.contains('/') || name.contains('\\') || !seen.insert(name.clone()) {
+                    None
+                } else {
+                    Some(name)
+                }
+            })
+            .collect()
+    };
+    if names.is_empty() || text.contains("Fuentes:") {
+        return text.to_owned();
+    }
+    let mut rows: Vec<String> = names
+        .into_iter()
+        .map(|name| match safe_filename_date(&name) {
+            Some((year, month, day)) => format!("{year:04}-{month:02}-{day:02} … {name}"),
+            None => name,
+        })
+        .collect();
+    rows.sort();
+    let mut out = text.trim_end().to_owned();
+    out.push_str("\n\nFuentes:\n");
+    for row in rows {
+        out.push_str("- ");
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}
+
 /// SVG is validated for the `svg` root element only: the bytes are text and must
 /// contain an `<svg` opening tag within a small leading window (after an optional
 /// XML prolog, BOM, and whitespace). The renderer never executes it (rendered via
@@ -4703,6 +5056,13 @@ fn record_summary_knowledge_metrics(
             context_reduction_pct: None,
             semantic_provider_state: "unavailable".to_owned(),
             request_preparation_ms: None,
+            retrieval_mode: None,
+            eligible_materials: None,
+            materials_inspected: None,
+            chunks_inspected: None,
+            exhaustive_coverage: None,
+            lexical_hits: None,
+            semantic_hits: None,
         },
         format!(
             "[knowledge] summary_corpus materials={} corpus_bytes={} corpus_chars={} corpus_est_tokens={} sources={}",
@@ -4802,6 +5162,13 @@ fn completed_normal_turn_metrics(
         context_reduction_pct: knowledge.and_then(|metrics| metrics.context_reduction_pct),
         semantic_provider_state: knowledge.map(|metrics| metrics.semantic_provider_state.clone()),
         request_preparation_ms: knowledge.and_then(|metrics| metrics.request_preparation_ms),
+        retrieval_mode: knowledge.and_then(|metrics| metrics.retrieval_mode.clone()),
+        eligible_materials: knowledge.and_then(|metrics| metrics.eligible_materials),
+        materials_inspected: knowledge.and_then(|metrics| metrics.materials_inspected),
+        chunks_inspected: knowledge.and_then(|metrics| metrics.chunks_inspected),
+        exhaustive_coverage: knowledge.and_then(|metrics| metrics.exhaustive_coverage.clone()),
+        lexical_hits: knowledge.and_then(|metrics| metrics.lexical_hits),
+        semantic_hits: knowledge.and_then(|metrics| metrics.semantic_hits),
     }
 }
 
@@ -4858,6 +5225,13 @@ fn completed_summary_turn_metrics_without_corpus(
         context_reduction_pct: None,
         semantic_provider_state: None,
         request_preparation_ms: None,
+        retrieval_mode: None,
+        eligible_materials: None,
+        materials_inspected: None,
+        chunks_inspected: None,
+        exhaustive_coverage: None,
+        lexical_hits: None,
+        semantic_hits: None,
     }
 }
 
@@ -5128,6 +5502,13 @@ mod durable_k6_tests {
             "contextReductionPct",
             "semanticProviderState",
             "requestPreparationMs",
+            "retrievalMode",
+            "eligibleMaterials",
+            "materialsInspected",
+            "chunksInspected",
+            "exhaustiveCoverage",
+            "lexicalHits",
+            "semanticHits",
         ];
         for key in metrics.as_object().unwrap().keys() {
             assert!(

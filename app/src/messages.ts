@@ -143,6 +143,13 @@ export const messages = {
       contextReduction: "Reducción estimada de contexto",
       semanticState: "Estado del proveedor semántico",
       preparationDuration: "Preparación de la solicitud",
+      retrievalMode: "Modo de recuperación",
+      exhaustiveCoverage: "Cobertura exhaustiva",
+      eligibleMaterials: "Materiales elegibles",
+      materialsInspected: "Materiales inspeccionados",
+      chunksInspected: "Fragmentos inspeccionados",
+      lexicalHits: "Coincidencias léxicas",
+      semanticHits: "Coincidencias semánticas",
       estimateNotice:
         "Estas son estimaciones locales de contexto de Knowledge, no tokens facturados ni un ahorro exacto.",
     },

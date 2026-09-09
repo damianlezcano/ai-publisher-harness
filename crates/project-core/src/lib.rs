@@ -372,6 +372,20 @@ pub struct TurnMetrics {
     pub context_reduction_pct: Option<usize>,
     pub semantic_provider_state: Option<String>,
     pub request_preparation_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eligible_materials: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materials_inspected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_inspected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhaustive_coverage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lexical_hits: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_hits: Option<usize>,
 }
 
 impl TurnMetrics {

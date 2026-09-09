@@ -98,6 +98,13 @@ pub struct SessionKnowledgeMetrics {
     pub context_reduction_pct: Option<usize>,
     pub semantic_provider_state: String,
     pub request_preparation_ms: Option<u128>,
+    pub retrieval_mode: Option<String>,
+    pub eligible_materials: Option<usize>,
+    pub materials_inspected: Option<usize>,
+    pub chunks_inspected: Option<usize>,
+    pub exhaustive_coverage: Option<String>,
+    pub lexical_hits: Option<usize>,
+    pub semantic_hits: Option<usize>,
 }
 
 fn buffer() -> &'static Mutex<VecDeque<SessionLogEntry>> {
@@ -299,6 +306,13 @@ mod tests {
                 context_reduction_pct: Some(70),
                 semantic_provider_state: "available".to_owned(),
                 request_preparation_ms: Some(12),
+                retrieval_mode: Some("normal".to_owned()),
+                eligible_materials: None,
+                materials_inspected: None,
+                chunks_inspected: None,
+                exhaustive_coverage: Some("not_requested".to_owned()),
+                lexical_hits: None,
+                semantic_hits: None,
             },
             "[knowledge] structural counts only".to_owned(),
         );
@@ -334,6 +348,13 @@ mod tests {
                 context_reduction_pct: None,
                 semantic_provider_state: "available".to_owned(),
                 request_preparation_ms: None,
+                retrieval_mode: None,
+                eligible_materials: None,
+                materials_inspected: None,
+                chunks_inspected: None,
+                exhaustive_coverage: None,
+                lexical_hits: None,
+                semantic_hits: None,
             },
             "[knowledge] summary_corpus only".to_owned(),
         );

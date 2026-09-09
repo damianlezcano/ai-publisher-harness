@@ -163,6 +163,38 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
           label={messages.conversationDetails.metrics.preparationDuration}
           value={duration(knowledge?.requestPreparationMs)}
         />
+        <Metric
+          label={messages.conversationDetails.metrics.retrievalMode}
+          value={knowledge?.retrievalMode || unavailableText}
+        />
+        <Metric
+          label={messages.conversationDetails.metrics.exhaustiveCoverage}
+          value={knowledge?.exhaustiveCoverage || unavailableText}
+        />
+        {knowledge?.retrievalMode === "exhaustive" && (
+          <>
+            <Metric
+              label={messages.conversationDetails.metrics.eligibleMaterials}
+              value={unavailable(knowledge.eligibleMaterials ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.materialsInspected}
+              value={unavailable(knowledge.materialsInspected ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.chunksInspected}
+              value={unavailable(knowledge.chunksInspected ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.lexicalHits}
+              value={unavailable(knowledge.lexicalHits ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.semanticHits}
+              value={unavailable(knowledge.semanticHits ?? null)}
+            />
+          </>
+        )}
       </dl>
       <p className="muted">{messages.conversationDetails.metrics.estimateNotice}</p>
     </section>
@@ -251,6 +283,13 @@ function durableKnowledge(
       contextReductionPct: durable.contextReductionPct ?? null,
       semanticProviderState: durable.semanticProviderState || "",
       requestPreparationMs: durable.requestPreparationMs ?? null,
+      retrievalMode: durable.retrievalMode ?? null,
+      eligibleMaterials: durable.eligibleMaterials ?? null,
+      materialsInspected: durable.materialsInspected ?? null,
+      chunksInspected: durable.chunksInspected ?? null,
+      exhaustiveCoverage: durable.exhaustiveCoverage ?? null,
+      lexicalHits: durable.lexicalHits ?? null,
+      semanticHits: durable.semanticHits ?? null,
     };
   }
   // A partial durable record is authoritative but incomplete. Never fill it

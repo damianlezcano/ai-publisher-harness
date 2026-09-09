@@ -747,6 +747,13 @@ fn h_privacy_no_prompt_or_body_in_metrics() {
         context_reduction_pct: Some(75),
         semantic_provider_state: Some("ready".into()),
         request_preparation_ms: Some(10),
+        retrieval_mode: Some("normal".into()),
+        eligible_materials: None,
+        materials_inspected: None,
+        chunks_inspected: None,
+        exhaustive_coverage: Some("not_requested".into()),
+        lexical_hits: None,
+        semantic_hits: None,
     };
     let json = serde_json::to_value(&metrics).unwrap();
     let text = serde_json::to_string(&json).unwrap();
@@ -784,6 +791,13 @@ fn h_privacy_no_prompt_or_body_in_metrics() {
         "contextReductionPct",
         "semanticProviderState",
         "requestPreparationMs",
+        "retrievalMode",
+        "eligibleMaterials",
+        "materialsInspected",
+        "chunksInspected",
+        "exhaustiveCoverage",
+        "lexicalHits",
+        "semanticHits",
     ];
     let keys: Vec<&str> = json
         .as_object()

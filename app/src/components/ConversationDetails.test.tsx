@@ -48,6 +48,8 @@ const knowledge = {
   contextReductionPct: 97.4,
   semanticProviderState: "available",
   requestPreparationMs: 84,
+  retrievalMode: "normal",
+  exhaustiveCoverage: "not_requested",
 };
 
 const detailProject: ProjectView = {
@@ -122,6 +124,8 @@ describe("ConversationDetails metrics", () => {
           contextReductionPct: 95,
           semanticProviderState: "available",
           requestPreparationMs: 12,
+          retrievalMode: "normal",
+          exhaustiveCoverage: "not_requested",
         });
       if (command === "session_logs")
         return Promise.resolve([

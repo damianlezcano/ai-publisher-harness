@@ -158,6 +158,20 @@ pub struct TurnMetricsView {
     pub context_reduction_pct: Option<usize>,
     pub semantic_provider_state: Option<String>,
     pub request_preparation_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eligible_materials: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materials_inspected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_inspected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhaustive_coverage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lexical_hits: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_hits: Option<usize>,
 }
 
 impl From<project_core::TurnMetrics> for TurnMetricsView {
@@ -186,6 +200,13 @@ impl From<project_core::TurnMetrics> for TurnMetricsView {
             context_reduction_pct: m.context_reduction_pct,
             semantic_provider_state: m.semantic_provider_state,
             request_preparation_ms: m.request_preparation_ms,
+            retrieval_mode: m.retrieval_mode,
+            eligible_materials: m.eligible_materials,
+            materials_inspected: m.materials_inspected,
+            chunks_inspected: m.chunks_inspected,
+            exhaustive_coverage: m.exhaustive_coverage,
+            lexical_hits: m.lexical_hits,
+            semantic_hits: m.semantic_hits,
         }
     }
 }

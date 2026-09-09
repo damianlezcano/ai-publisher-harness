@@ -38,6 +38,19 @@ pub struct AgentKnowledgeContext {
     pub indexed_source_names: Vec<String>,
     /// Local citation-ready mapping; no database lookup is needed for E1.
     pub citation_map: Vec<AgentEvidenceProvenance>,
+    /// `normal` or `exhaustive`. Never a prompt body.
+    pub retrieval_mode: Option<String>,
+    /// `not_requested`, `complete`, or `incomplete`.
+    pub exhaustive_coverage: Option<String>,
+    /// Compact structural coverage statement. No document text.
+    pub structural_note: Option<String>,
+    /// Deterministic local answer that must not cross the remote boundary.
+    pub local_answer: Option<String>,
+    /// When true, the remote may state global absence. False for incomplete
+    /// coverage and for inventory questions with no extracted presence term.
+    pub authorize_negative: bool,
+    /// Display filenames for locally appended Fuentes. Never filesystem paths.
+    pub citation_source_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +64,10 @@ pub struct AgentKnowledgeEntry {
     pub heading_path: Vec<String>,
     /// Exactly the bounded K4 excerpt.
     pub text: String,
+    /// Opaque material identity for local traceability. Never a filesystem path.
+    pub source_id: Option<String>,
+    /// `lexical`, `semantic`, or `both`.
+    pub evidence_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

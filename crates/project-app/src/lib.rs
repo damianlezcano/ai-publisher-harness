@@ -9,6 +9,7 @@
 pub mod app;
 pub mod dtos;
 pub mod error;
+pub mod retrieval_intent;
 pub mod session_log;
 pub mod sidecar;
 pub mod summarize;
@@ -24,6 +25,9 @@ pub use dtos::{
     SummaryItemView, SummaryNodeView, TurnMetricsView, WebPreview,
 };
 pub use error::{AppError, AppResult, ErrorCode};
+pub use retrieval_intent::{
+    RetrievalIntent, detect_retrieval_intent, extract_presence_terms, retrieval_mode_for,
+};
 pub use session_log::SessionLogEntry;
 pub use summarize::OpenCodeRemoteSummarizer;
 pub use summarize::{SummaryIntent, detect_summarize_intent, detect_summary_intent};

@@ -82,6 +82,13 @@ export interface TurnMetrics {
   contextReductionPct: number | null;
   semanticProviderState: string | null;
   requestPreparationMs: number | null;
+  retrievalMode: string | null;
+  eligibleMaterials: number | null;
+  materialsInspected: number | null;
+  chunksInspected: number | null;
+  exhaustiveCoverage: string | null;
+  lexicalHits: number | null;
+  semanticHits: number | null;
 }
 
 export interface MessageView {
@@ -264,6 +271,13 @@ export interface SessionKnowledgeMetrics {
   contextReductionPct: number | null;
   semanticProviderState: string;
   requestPreparationMs: number | null;
+  retrievalMode?: string | null;
+  eligibleMaterials?: number | null;
+  materialsInspected?: number | null;
+  chunksInspected?: number | null;
+  exhaustiveCoverage?: string | null;
+  lexicalHits?: number | null;
+  semanticHits?: number | null;
 }
 
 export interface SummarizationReportView {
