@@ -2,7 +2,8 @@
 
 - Status: `IN_REVIEW`
 - Integration base (current `main`): `0585c4ea97ab0ca8b2ac46771f5eb5b166a81122`
-- Review SHA: `4f53811` on `req-docs-001/d1-inventory`
+- Review SHA: `d9603b399ab8471a274c2bf5da2feb3e88dc58b9` on `req-docs-001/d1-inventory`
+- Independent Reviewer verdict: `PASS` (re-review after `REWORK`). Human gate remaining: owner approval of the documentation map and entry-point wording (`TARGETED_HUMAN`)
 - Author worktree: `../ai-publisher-req-docs-001-d1`
 - Review checkout: `../ai-publisher-req-docs-001-review`
 - Reviewer must not be the author of this worktree or this Orchestrator session

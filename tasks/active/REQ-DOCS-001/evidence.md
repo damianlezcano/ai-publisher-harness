@@ -2,10 +2,9 @@
 
 - Requirement status: `IN_REVIEW` (not Done). Human gate: `TARGETED_HUMAN`.
 - Planning baseline SHA: `5664e4495891c495ef9e5b3f40bd7b828c40e312`
-- Integrated review SHA: `4f53811` (`merge origin/main into REQ-DOCS-001 taxonomy branch`) on `req-docs-001/d1-inventory`
-- Author worktree: `../ai-publisher-req-docs-001-d1`
-- Review worktree: `../ai-publisher-req-docs-001-review` (read-only / detached at the integrated SHA)
-- This Orchestrator does **not** claim `PASS`, `DONE`, or architectural approval.
+- Integrated review SHA: `d9603b399ab8471a274c2bf5da2feb3e88dc58b9` on `req-docs-001/d1-inventory`
+- Independent Reviewer: `req-docs-001-reviewer` (`review` / `opencode`). First verdict `REWORK` at `c50e189`; same-task re-review `PASS` at `d9603b3`.
+- This Orchestrator does **not** claim `DONE` or architectural approval. Requirement stays Active until targeted human approval.
 
 ## Delegation
 
