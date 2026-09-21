@@ -37,7 +37,7 @@
 
 ## Handoff
 
-- Implementation result: integration/evidence/review package only.
-- Verification evidence: real terminal results, not projected outcomes.
-- Reviewer verdict: exactly `PASS` or `REWORK`, supplied by an independent Reviewer.
-- Rework history: chronological factual entries retained until closure.
+- Implementation result: merged `origin/main` (`0585c4e`) into the taxonomy branch; resolved path conflicts in AGENTS, README, START_CODEX, `scripts/verify`, and remaining prompt/script references. Gates re-run after merge. Independent Reviewer launch is the remaining D6 step.
+- Verification evidence: see `evidence.md` (`git diff --check`, `cargo fmt --all -- --check`, `./scripts/architecture-verify`, `CI=true ./scripts/verify` all passed on `4f53811`).
+- Reviewer verdict: pending independent `review`/`opencode`.
+- Rework history: none after this merge.

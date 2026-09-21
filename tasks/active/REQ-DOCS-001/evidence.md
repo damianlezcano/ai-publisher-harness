@@ -1,38 +1,40 @@
 # REQ-DOCS-001 evidence
 
 - Requirement status: `IN_REVIEW` (not Done). Human gate: `TARGETED_HUMAN`.
-- Base SHA: `5664e4495891c495ef9e5b3f40bd7b828c40e312`
-- Author worktree: `../ai-publisher-req-docs-001-d1` branch `req-docs-001/d1-inventory`
+- Planning baseline SHA: `5664e4495891c495ef9e5b3f40bd7b828c40e312`
+- Integrated review SHA: `4f53811` (`merge origin/main into REQ-DOCS-001 taxonomy branch`) on `req-docs-001/d1-inventory`
+- Author worktree: `../ai-publisher-req-docs-001-d1`
+- Review worktree: `../ai-publisher-req-docs-001-review` (read-only / detached at the integrated SHA)
 - This Orchestrator does **not** claim `PASS`, `DONE`, or architectural approval.
 
 ## Delegation
 
-- `HERDR_ENV=1`. Worker routing: `./scripts/agent-class-resolve --class worker --tier cheap` → `low` / `opencode`.
-- `./scripts/agent-launch --role low --provider opencode --launch` failed: `check-session-budget` exit 4 (`SESSION_BUDGET: UNKNOWN` on this Cursor session) → launcher exit 12.
-- Recorded: `DELEGATION_UNAVAILABLE` for Worker and Reviewer panes. Direct `herdr agent start` was not used.
-- Implementation therefore ran in the author worktree as Orchestrator fallback. Independent Reviewer must still be a different agent.
+- `HERDR_ENV=1`.
+- Worker `cheap`: implementation of D1–D5 ran as Orchestrator fallback in the author worktree after an earlier `agent-launch` failure. Direct `herdr agent start` was not used.
+- Reviewer: `./scripts/agent-class-resolve --class reviewer` → `review` / `opencode`. Launch is D6 of this continuation; the Reviewer must not be this Orchestrator.
 
 ## Concurrent checkout
 
-- Lead/integration checkout still holds uncommitted `REQ-HARNESS-002` work. REQ-DOCS-001 taxonomy changes live in the worktree and were **not** merged into the dirty integration tree.
+- Lead `main` is `0585c4e` (`origin/main`). REQ-HARNESS-002/003 are already on `main`. The docs branch merged that history and retargeted paths. Taxonomy changes remain on `req-docs-001/d1-inventory` until Reviewer `PASS` plus targeted human approval.
 
-## Commands
+## Commands (author worktree after merge)
 
 ```text
-git ls-files docs                     # 318 tracked docs files at D1
-./scripts/architecture-verify         # PASS, 14 contracts
-cargo fmt --all -- --check            # pass
 git diff --check                      # pass
-CI=true ./scripts/verify              # pass (exit 0) in worktree with components/ symlink for gitignored sidecars
+cargo fmt --all -- --check            # pass
+./scripts/architecture-verify         # PASS, 14 contracts
+CI=true ./scripts/verify              # pass (exit 0); local components/ symlink to lead gitignored sidecars
 ```
+
+Integrated commits: `ebc2079` (taxonomy) then `4f53811` (merge `origin/main`).
 
 ## Artifacts
 
 - `migration-ledger.md` — 343 rows; no DELETE; 0 uncovered docs paths
 - `reference-inventory-before.md`
-- `reference-integrity-report.md` — 0 unresolved Markdown targets after D5
+- `reference-integrity-report.md` — 0 unresolved Markdown targets after D5 (pre-merge); merge repaired remaining harness-script/prompt paths
 - Taxonomy: `docs/product|architecture|engineering|distribution|history|checkpoints` plus kept `architecture-contracts/` and `decisions/`
 
 ## Reviewer package
 
-Give an independent Reviewer (`scripts/agent-class-resolve --class reviewer` → `review` / `opencode`) this requirement, all TASK-D* contracts, the ledger, both inventories/reports, exact diff from `5664e44` on branch `req-docs-001/d1-inventory`, and the gate output above. Return only `PASS` or `REWORK`. Do not patch.
+Give an independent Reviewer `prompts/reviewer.md`, this requirement, all TASK-D* contracts, the ledger, both inventories/reports, exact diff `0585c4e...4f53811` (or `git log --oneline 0585c4e..HEAD` plus `git diff --find-renames 0585c4e`), and the gate output above. Return only `PASS` or `REWORK`. Do not patch.
