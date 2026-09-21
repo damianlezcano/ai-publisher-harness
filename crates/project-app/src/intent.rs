@@ -1911,13 +1911,17 @@ mod tests {
 
     #[test]
     fn low_confidence_uses_exclusive_fallback_once() {
-        struct LowConfidenceThematic;
+        struct LowConfidenceThematic {
+            calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
         impl IntentClassifier for LowConfidenceThematic {
             fn classify(
                 &self,
                 _input: &crate::classifier::ClassifierInput,
             ) -> Result<ClassifierDecision, crate::classifier::IntentClassificationError>
             {
+                self.calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(ClassifierDecision {
                     intent: Intent::CorpusThematic,
                     modifiers: Vec::new(),
@@ -1927,8 +1931,16 @@ mod tests {
                 })
             }
         }
-        let composite = crate::classifier::SemanticIntentClassifier::new(LowConfidenceThematic);
+        let classifier_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let composite = crate::classifier::SemanticIntentClassifier::new(LowConfidenceThematic {
+            calls: std::sync::Arc::clone(&classifier_calls),
+        });
         let route = resolve_intent_with("Hola", &context(), &[], &composite);
+        assert_eq!(
+            classifier_calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "low-confidence classifier calls"
+        );
         assert_eq!(route.decision.intent, Intent::OrdinaryChat);
         assert_eq!(
             route.decision.provenance,

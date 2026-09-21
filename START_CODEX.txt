@@ -1,14 +1,37 @@
-Actuá como Lead Agent de este proyecto.
+Actuá como agente de ingeniería de EducAI.
 
-Antes de escribir código de producto:
-1. Leé `CODEX_HANDOFF.md` completo.
-2. Leé `AGENTS.md` y toda la documentación bajo `docs/`.
-3. Tomá esos documentos como contexto persistente y fuente de verdad del proyecto.
-4. No implementes todavía la aplicación.
-5. Ejecutá únicamente el trabajo de Milestone M0 (Harness): criticá el harness existente, completá convenciones, Definition of Done, scripts/verify contract, estrategia de worktrees, workflow multi-agente y las skills mínimas necesarias.
-6. Diseñá cómo vas a usar herdr para delegar tareas independientes entre Codex, Cursor Agent, OpenCode y Antigravity CLI, sin obligar a usar todos en cada tarea.
-7. Autor y reviewer deben ser agentes diferentes siempre que sea razonable.
-8. No permitas que dos agentes modifiquen el mismo checkout simultáneamente; proponé worktrees independientes.
-9. Al terminar M0, frená. Mostrame qué cambiaste, qué ADRs proponés y el plan ejecutable M1-M4 antes de comenzar implementación.
+Antes de modificar archivos:
 
-Prioridad: mantener la experiencia extremadamente simple para usuarios no técnicos y preservar estrictamente los límites de seguridad definidos en `docs/SECURITY.md`.
+Usá este único orden de autoridad. Distingue restricciones de producto,
+operación del Harness, contexto local de tarea y configuración runtime;
+un grupo posterior nunca reemplaza a uno anterior.
+
+1. **Restricciones y arquitectura de producto:** `CODEX_HANDOFF.md`,
+   `docs/PRODUCT.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
+   `docs/UX.md`, y luego los ADRs en `docs/decisions/`.
+2. **Reglas operativas del Harness:** `AGENTS.md`,
+   `docs/HARNESS_ENGINEERING.md`, `docs/AGENT_POLICY.md`,
+   `docs/MULTI_AGENT_WORKFLOW.md`, `docs/WORKTREES.md`, `docs/TESTING.md`,
+   `docs/VERIFY.md`, `docs/DEFINITION_OF_DONE.md`,
+   `docs/PLATFORM_POLICY.md` y `docs/DISTRIBUTION.md`.
+3. **Contexto de requirement y tarea:** `docs/REQUIREMENTS.md`, el
+   requirement seleccionado y su contrato de tarea acotado bajo `tasks/`, los
+   Architecture Contracts afectados y `docs/CURRENT_CHECKPOINT.md`.
+4. **Configuración runtime:** `RUNTIME.md`, y después
+   `config/agent-models.env` si el rol asignado necesita routing de ejecución.
+   Son insumos operativos; nunca autoridad de producto ni de metodología.
+
+Para trabajo de Harness, `docs/HARNESS_ENGINEERING.md` es la metodología
+canónica vigente. `examples/README.md` es sólo trazabilidad histórica.
+5. Confirmá el baseline y el estado del árbol con Git. No toques archivos
+   locales/untracked fuera del scope.
+6. Antes de editar, declarar el requirement/milestone, paths propios, criterios de
+   aceptación, comandos de verificación y autor/reviewer.
+7. No rediseñes arquitectura protegida. Si un cambio requiere violar un
+   invariante, detenete y reportá `ARCHITECTURE_CHANGE_REQUIRED`.
+8. Ejecutá los checks relevantes y cerrá con `CI=true ./scripts/verify`.
+9. No declares `PASS`, `DONE` ni aprobación arquitectónica desde el rol Worker;
+   la revisión debe ser independiente.
+
+El baseline funcional actual es `015d466`. Seleccioná trabajo nuevo sólo desde
+el backlog/requirement vigente y respetá los gates humanos cuando correspondan.

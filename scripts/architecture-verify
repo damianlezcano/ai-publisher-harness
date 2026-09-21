@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+contracts_dir="docs/architecture-contracts"
+manifest="$contracts_dir/manifest.tsv"
+[[ -f "$manifest" ]] || { echo "architecture-verify: missing manifest" >&2; exit 1; }
+
+contract_count=0
+
+while IFS='|' read -r id document crate target selectors; do
+  [[ -z "$id" || "$id" == \#* ]] && continue
+  contract_count=$((contract_count + 1))
+  [[ -n "$document" && -n "$crate" && -n "$target" && -n "$selectors" ]] || {
+    echo "architecture-verify: $id has an empty required manifest field" >&2
+    exit 1
+  }
+  [[ "$id" =~ ^AC-[0-9]{3}$ ]] || {
+    echo "architecture-verify: invalid AC id: $id" >&2
+    exit 1
+  }
+  [[ "$crate" =~ ^[a-z0-9_-]+$ ]] || {
+    echo "architecture-verify: $id invalid crate target: $crate" >&2
+    exit 1
+  }
+  [[ "$target" == "lib" || "$target" =~ ^[a-z0-9_-]+$ ]] || {
+    echo "architecture-verify: $id invalid test target: $target" >&2
+    exit 1
+  }
+  file="$contracts_dir/$document"
+  [[ -f "$file" ]] || { echo "architecture-verify: $id missing $document" >&2; exit 1; }
+
+  for field in 'Status:' 'Invariant:' 'Rationale:' 'Required observables:' \
+    'Prohibited observables:' 'Canonical test cases:' 'Gate:' \
+    'Protected/change-sensitive areas:' 'Approval requirement:' 'Change process:'; do
+    rg -Fq -- "$field" "$file" || {
+      echo "architecture-verify: $id missing '$field'" >&2
+      exit 1
+    }
+  done
+
+  if [[ "$target" == "lib" ]]; then
+    source="crates/$crate/src"
+    [[ -d "$source" ]] || { echo "architecture-verify: $id missing $source" >&2; exit 1; }
+  else
+    source="crates/$crate/tests/$target.rs"
+    [[ -f "$source" ]] || { echo "architecture-verify: $id missing $source" >&2; exit 1; }
+  fi
+
+  IFS=';' read -r -a selector_list <<< "$selectors"
+  for selector in "${selector_list[@]}"; do
+    [[ -n "$selector" && "$selector" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || {
+      echo "architecture-verify: $id has an invalid selector: $selector" >&2
+      exit 1
+    }
+    rg -q -- "fn[[:space:]]+$selector\\(" "$source" || {
+      echo "architecture-verify: $id selector not found: $crate/$target::$selector" >&2
+      exit 1
+    }
+    rg -Fq -- "$selector" "$file" || {
+      echo "architecture-verify: $id document does not name its selector" >&2
+      exit 1
+    }
+    echo "architecture-verify: $id mapped test: $crate/$target::$selector"
+    if [[ "$target" == "lib" ]]; then
+      cargo test --locked -p "$crate" --lib "$selector"
+    else
+      cargo test --locked -p "$crate" --test "$target" "$selector"
+    fi
+  done
+done < "$manifest"
+
+[[ "$contract_count" -eq 14 ]] || {
+  echo "architecture-verify: expected 14 contracts, got $contract_count" >&2
+  exit 1
+}
+
+echo "architecture-verify: PASS ($contract_count contracts; mapped tests executed)"

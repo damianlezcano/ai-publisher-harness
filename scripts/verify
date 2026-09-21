@@ -24,15 +24,16 @@ require_heading() {
 for file in \
   CODEX_HANDOFF.md AGENTS.md README.md \
   docs/PRODUCT.md docs/ARCHITECTURE.md docs/SECURITY.md docs/UX.md \
-  docs/DEFINITION_OF_DONE.md docs/TESTING.md docs/VERIFY.md \
+  docs/DEFINITION_OF_DONE.md docs/TESTING.md docs/VERIFY.md docs/REQUIREMENTS.md \
   docs/WORKTREES.md docs/MULTI_AGENT_WORKFLOW.md docs/HARNESS_REVIEW.md \
+  docs/HARNESS_ENGINEERING.md docs/architecture-contracts/README.md \
   docs/decisions/README.md \
   skills/implement-feature/SKILL.md skills/review-feature/SKILL.md \
   skills/review-architecture/SKILL.md skills/verify-ui/SKILL.md; do
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
+for script in scripts/bootstrap scripts/verify scripts/architecture-verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -48,6 +49,9 @@ printf 'verify: scripts/test-agent-launch\n'
 
 printf 'verify: scripts/test-session-budget\n'
 ./scripts/test-session-budget
+
+printf 'verify: scripts/architecture-verify\n'
+./scripts/architecture-verify
 
 if rg -n -i 'place[h]older|to[d]o|tb[d]' scripts/verify skills/*/SKILL.md; then
   fail 'M0 verification and skills must not contain unresolved markers'

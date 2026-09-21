@@ -16755,6 +16755,20 @@ mod contextual_followup_tests {
         }
     }
 
+    struct CountingErroringClassifier(Arc<Mutex<usize>>);
+    impl crate::classifier::IntentClassifier for CountingErroringClassifier {
+        fn classify(
+            &self,
+            _input: &crate::classifier::ClassifierInput,
+        ) -> Result<crate::intent::ClassifierDecision, crate::classifier::IntentClassificationError>
+        {
+            *self.0.lock().unwrap() += 1;
+            Err(crate::classifier::IntentClassificationError::new(
+                crate::classifier::ClassifierFallbackReason::Unavailable,
+            ))
+        }
+    }
+
     /// A Knowledge-relevant turn must invoke the semantic classifier exactly
     /// once, and the classifier result must control the normalized intent (the
     /// deterministic presence detector would have chosen CorpusExhaustive here).
@@ -16813,7 +16827,8 @@ mod contextual_followup_tests {
         let _session_log_guard = crate::session_log::test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let state = staged_theme_state(tmp.path());
-        state.set_test_classifier(ErroringClassifier);
+        let calls = Arc::new(Mutex::new(0));
+        state.set_test_classifier(CountingErroringClassifier(calls.clone()));
         let project = state.create_project("ClassSeamD").unwrap();
         add_file(&state, tmp.path(), &project.id, "a.md", "contenido A.\n");
         add_file(&state, tmp.path(), &project.id, "b.md", "contenido B.\n");
@@ -16823,12 +16838,24 @@ mod contextual_followup_tests {
         assert_eq!(run.status, "completed");
         let decision = state.last_routing_decision().expect("route");
         assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "classifier failure must use one fallback decision, never a second classifier"
+        );
+        assert_eq!(
             decision.decision.intent,
             crate::intent::Intent::CorpusThematic
         );
         assert_eq!(
             decision.decision.reason_code,
             crate::intent::ReasonCode::ThematicQuery
+        );
+        assert_eq!(
+            decision.decision.provenance,
+            crate::classifier::ClassifierProvenance::SemanticFallback {
+                reason: crate::classifier::ClassifierFallbackReason::Unavailable,
+            },
+            "the fallback route replaces the failed semantic result"
         );
     }
 
@@ -19247,6 +19274,14 @@ mod contextual_followup_tests {
             !prompt.contains("SENTINEL_DOCUMENT_BODY"),
             "classifier must never receive a document body"
         );
+        let visible = state.open_project(&project.id).unwrap();
+        assert!(
+            visible.messages.iter().all(|message| {
+                !message.text.contains("SENTINEL_DOCUMENT_BODY")
+                    && !message.text.contains("corpus_thematic")
+            }),
+            "classifier scratch content must not enter the visible conversation"
+        );
     }
 
     /// Builds an AppState whose classifier backend points at a fake OpenCode
@@ -20052,12 +20087,19 @@ mod contextual_followup_tests {
         assert_eq!(
             server.created_session_ids().len(),
             1,
-            "one bounded provider execution, no retry"
+            "PerItem has one disposable scratch session, no conversational-session reuse, and no retry"
         );
         assert_eq!(
             server.prompt_async_paths().len(),
             1,
             "exactly one prompt_async per operation, no resend"
+        );
+        let visible = state.open_project(&project.id).unwrap();
+        assert!(
+            visible.messages.iter().all(|message| !message
+                .text
+                .contains("Contenido del material 0 de la clase sobre gramática.")),
+            "PerItem internal evidence must not contaminate visible conversation messages"
         );
     }
 
@@ -20119,6 +20161,18 @@ mod contextual_followup_tests {
             logs.iter()
                 .any(|entry| entry.message.contains("finish=stop")),
             "document node must emit a finish=stop telemetry line"
+        );
+        assert_eq!(
+            server.created_session_ids().len(),
+            1,
+            "K6 has one disposable scratch session and no conversational-session reuse"
+        );
+        let visible = state.open_project(&project.id).unwrap();
+        assert!(
+            visible.messages.iter().all(|message| !message
+                .text
+                .contains("Contenido del material 0 de la clase sobre gramática.")),
+            "K6 internal evidence must not contaminate visible conversation messages"
         );
     }
 

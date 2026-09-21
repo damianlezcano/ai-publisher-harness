@@ -1,47 +1,72 @@
 # Agent Operating Rules
 
-## Source of truth order
-1. `CODEX_HANDOFF.md`
-2. `docs/PRODUCT.md`
-3. `docs/ARCHITECTURE.md`
-4. `docs/SECURITY.md`
-5. `docs/UX.md`
-6. ADRs under `docs/decisions/`
+## Entry point and authority
 
-If implementation conflicts with these documents, stop and resolve the discrepancy instead of silently changing product behavior.
+Read `CODEX_HANDOFF.md`, then these sources in order:
 
-## Working model
-- Prefer scoped tasks with explicit acceptance criteria.
-- Prefer one worktree per independent implementation task.
-- Do not have multiple agents edit the same files concurrently.
-- Author and reviewer should differ when practical.
-- Avoid speculative abstractions beyond the next milestone.
-- Update docs when architectural or product behavior changes.
-- Apply the role, cost, retry, and Herdr delegation policy in
-  `docs/AGENT_POLICY.md` and `docs/MULTI_AGENT_WORKFLOW.md`.
-- Use the active model matrix rather than a fixed provider: Antigravity is
-  optional, OpenCode Go never uses GPT/Grok, and Codex Tierra is not the
-  default builder.
-- Apply the primary-platform and portability policy in `docs/PLATFORM_POLICY.md`.
-- Follow `docs/WORKTREES.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
-  `docs/TESTING.md` for execution details.
-- Before editing, state the milestone, exact file ownership, acceptance
-  criteria, and the planned author/reviewer. An agent owns a checkout for the
-  duration of its task; reviewers inspect a committed diff from another
-  checkout and do not edit the author's checkout.
-- Treat a security-invariant change as a security-review task, not a routine
-  implementation task. Resolve any conflict with the source-of-truth order
-  before writing code.
+1. `docs/PRODUCT.md`
+2. `docs/ARCHITECTURE.md`
+3. `docs/SECURITY.md`
+4. `docs/UX.md`
+5. ADRs in `docs/decisions/`
 
-## Mandatory completion checks
-Before claiming a task is complete:
-- run formatting
-- run lint/type checks
-- run relevant tests
-- run integration checks where applicable
-- run `./scripts/verify` once implemented
-- ensure no security invariant regressed
-- record the commands and their result in the task handoff or pull request
+If code, a task, or a request conflicts with this order, stop and resolve the
+conflict. `docs/HARNESS_ENGINEERING.md` is the canonical methodology; detailed operating
+policy lives in `docs/AGENT_POLICY.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
+`docs/WORKTREES.md`.
 
-## User-facing philosophy
-The user is non-technical. Internal technical power must not leak into default UX.
+## Roles and context
+
+| Role | Read | May decide | Must not do |
+| --- | --- | --- | --- |
+| Orchestrator | authority sources, `RUNTIME.md`, requirement/backlog, task and affected contracts | scope, task decomposition, routing, closure after gates | bypass a contract, reviewer, or required human gate |
+| Worker | this file, `prompts/worker.md`, assigned task, requirement excerpt, affected contracts, owned code | implementation inside task scope | change architecture, claim PASS/DONE/approval, edit outside ownership |
+| Reviewer | this file, `prompts/reviewer.md`, requirement/task, affected contracts, exact base/diff and evidence | PASS or REWORK | author the fix or review their own work |
+
+Prompts define the persistent role contracts. `RUNTIME.md` and
+`config/agent-models.env` describe changeable execution routing; no permanent
+prompt may hardcode a provider or model.
+
+## Protected architecture
+
+Protected paths include `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, ADRs,
+`docs/architecture-contracts/`, and their gates/tests. Protected behavior
+includes publication isolation and the conversation/Knowledge invariants named
+in `CODEX_HANDOFF.md`.
+
+If ordinary work needs to violate a protected contract, stop and report:
+
+```text
+ARCHITECTURE_CHANGE_REQUIRED: AC-XXX
+```
+
+It requires an ADR, affected IDs, updated observables/tests and architecture
+gate, independent review, and explicit human approval before integration.
+
+## Requirement and task lifecycle
+
+Requirements enter `tasks/backlog/`. The Orchestrator moves a selected
+requirement to `tasks/active/<REQ-ID>/`, creates bounded task contracts there,
+and moves it to `tasks/done/<REQ-ID>/` only after verification, independent
+review, and its declared human gate. Non-committed ideas stay in `tasks/future/`.
+See `docs/REQUIREMENTS.md` and `tasks/TASK_CONTRACT_TEMPLATE.md`.
+
+Before editing, state milestone/requirement, exact owned paths, acceptance
+criteria, verification commands, and planned author/reviewer. One implementation
+task has one author checkout; reviewers inspect a separate read-only checkout
+or exact diff and do not silently fix it.
+
+## Required evidence
+
+Run formatting, lint/type checks, relevant tests, applicable integration and
+security checks, then `CI=true ./scripts/verify`. Record commands and results
+in the task handoff. A Worker reports `IMPLEMENTATION_COMPLETE`; only the
+Orchestrator may close a requirement after an independent `PASS` and any human
+gate.
+
+## Safety
+
+Do not reset, clean, restore, rebase, delete, stage, or overwrite unrelated
+work. Do not access credentials, tokens, account files, or private agent
+configuration. Do not remove tests to make a migration pass. Product behavior
+must not be redesigned to accommodate Harness structure.
