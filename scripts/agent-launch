@@ -115,11 +115,15 @@ fi
   exit 5
 }
 
-# Orchestrator context-budget gate: fail closed before launching any new
-# worker/reviewer when the orchestrator session must rotate. This never kills
-# an active worker; it only prevents starting a new one.
-budget_output="$( "$repo_root/scripts/check-session-budget" 2>/dev/null )" || budget_exit=$?
+# Orchestrator context-budget gate: refuse launch only when a *measured*
+# OpenCode orchestrator must rotate, or an identified OpenCode session cannot
+# be read. UNKNOWN on Codex/Cursor/Herdr is telemetry absence, not over-budget.
+# Never substitute another OpenCode session's tokens. This never kills an
+# active worker; it only decides whether to start a new one.
+budget_cmd="${EDUCAI_CHECK_SESSION_BUDGET:-$repo_root/scripts/check-session-budget}"
+budget_output="$( "$budget_cmd" 2>/dev/null )" || budget_exit=$?
 budget_exit=${budget_exit:-0}
+budget_platform="$(printf '%s\n' "$budget_output" | awk -F': ' '/^PLATFORM: / { print $2; exit }')"
 case "$budget_exit" in
   0) ;;
   1)
@@ -135,6 +139,21 @@ case "$budget_exit" in
     echo "agent-launch: FAIL CLOSED: ROTATE_SESSION_REQUIRED_HARD — no new milestone work may begin" >&2
     echo "agent-launch:   rotate the orchestrator at the next safe checkpoint." >&2
     exit 11
+    ;;
+  4)
+    case "$budget_platform" in
+      OPENCODE)
+        echo "agent-launch: FAIL CLOSED: identified OpenCode session budget unreadable (check-session-budget exit 4)" >&2
+        exit 12
+        ;;
+      CODEX|CURSOR|HERDR|UNKNOWN)
+        echo "agent-launch: WARNING: orchestrator session budget UNKNOWN (PLATFORM: ${budget_platform:-empty}); launching worker" >&2
+        ;;
+      *)
+        echo "agent-launch: FAIL CLOSED: orchestrator session budget unknown (check-session-budget exit 4, PLATFORM: ${budget_platform:-empty})" >&2
+        exit 12
+        ;;
+    esac
     ;;
   *)
     echo "agent-launch: FAIL CLOSED: orchestrator session budget unknown (check-session-budget exit $budget_exit)" >&2

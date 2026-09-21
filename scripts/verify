@@ -29,11 +29,13 @@ for file in \
   docs/engineering/HARNESS_ENGINEERING.md docs/architecture-contracts/README.md \
   docs/decisions/README.md \
   skills/implement-feature/SKILL.md skills/review-feature/SKILL.md \
-  skills/review-architecture/SKILL.md skills/verify-ui/SKILL.md; do
+  skills/review-architecture/SKILL.md skills/verify-ui/SKILL.md \
+  prompts/orchestrator.md prompts/worker.md prompts/reviewer.md \
+  START_CODEX.txt RUNTIME.md; do
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/architecture-verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
+for script in scripts/bootstrap scripts/verify scripts/architecture-verify scripts/agent-launch scripts/test-agent-launch scripts/test-agent-launch-budget scripts/check-session-budget scripts/test-session-budget scripts/requirement-status scripts/test-requirement-status scripts/agent-class-resolve scripts/test-agent-class-resolve scripts/test-short-intent-orchestration scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -42,10 +44,24 @@ require_heading docs/engineering/TESTING.md '## Required test levels'
 require_heading docs/engineering/VERIFY.md '## Contract by milestone'
 require_heading docs/engineering/WORKTREES.md '## Checkout ownership'
 require_heading docs/engineering/MULTI_AGENT_WORKFLOW.md '## Herdr delegation'
+require_heading docs/engineering/MULTI_AGENT_WORKFLOW.md '## Confirming delegated workers'
 require_heading docs/history/reviews/harness-m0-review.md '## Resolved gaps'
+require_heading prompts/orchestrator.md '## Short intent'
 
 printf 'verify: scripts/test-agent-launch\n'
 ./scripts/test-agent-launch
+
+printf 'verify: scripts/test-agent-launch-budget\n'
+./scripts/test-agent-launch-budget
+
+printf 'verify: scripts/test-requirement-status\n'
+./scripts/test-requirement-status
+
+printf 'verify: scripts/test-agent-class-resolve\n'
+./scripts/test-agent-class-resolve
+
+printf 'verify: scripts/test-short-intent-orchestration\n'
+./scripts/test-short-intent-orchestration
 
 printf 'verify: scripts/test-session-budget\n'
 ./scripts/test-session-budget

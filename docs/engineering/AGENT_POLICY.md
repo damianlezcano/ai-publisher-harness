@@ -32,7 +32,8 @@ builder.
 | Coding — normal / complex | OpenCode Go Kimi K2.7 Code (`opencode-go/kimi-k2.7-code`) | Primary coding worker. Used aggressively for Rust, TypeScript/React, state management, migrations, adapters, significant tests, refactors. |
 | Independent review — default | OpenCode Go Qwen3.8 Flash (`opencode-go/qwen3.8-flash`) | Code/contract/regression/security/implementation/frontend review. The default Qwen reviewer. |
 | Independent review — escalation | OpenCode Go Qwen3.8 Max (`opencode-go/qwen3.8-max`) | ESCALATION-ONLY. Launched only when the orchestrator records an explicit `ESCALATION_REASON` (security-critical cross-module finding, subtle concurrency issue, schema/data-loss risk, repeated author/reviewer disagreement, or a difficult architectural invariant). |
-| LOW / visual / CSS / copy | Cursor Composer 2.5 (`composer-2.5`); fallback OpenCode Go MiMo V2.5 (`opencode-go/mimo-v2.5`) | Simple test, boilerplate, docs, repetitive corrections, CSS/copy. |
+| LOW (Worker `cheap`) | OpenCode Go MiMo V2.5 (`opencode-go/mimo-v2.5`); last-resort fallback Cursor Composer 2.5 (`composer-2.5`) | Simple test, boilerplate, docs, repetitive corrections. Executable class mapping is `low`/`opencode` then `low`/`cursor`. |
+| HIGH visual / CSS / copy | Cursor Grok 4.6 High (`cursor-grok-4.6-high`) via Worker `visual` | Interaction/visual work assigned through `high-visual`/`cursor` only. |
 | HIGH_CODING fallback | Cursor Grok 4.6 medium (`cursor-grok-4.6-medium`) | Only after Kimi K2.7 Code fails twice on the SAME bounded task. Never used through OpenCode Go. |
 | HIGH_ARCHITECTURE | fresh OpenCode Go DeepSeek V4 Pro (`opencode-go/deepseek-v4-pro`) | ESCALATION-ONLY. Fresh session for genuine architecture/security decisions; closed after the design is persisted. Never used for orchestration, routine review, coding, tests, integration, or housekeeping. |
 
@@ -84,10 +85,14 @@ session into another task.
 `scripts/check-session-budget` is the executable, deterministic gate. It reads
 the exact OpenCode session (`opencode export <session-id>`, latest message part
 `tokens.total`) only when `--session` or `OPENCODE_SESSION_ID` identifies it.
-It never selects a latest/first-known session. Codex has no supported local
-token source in this tool and must report `SESSION_BUDGET: UNKNOWN`; cross-
-provider fallback is forbidden. It fails closed when identity or telemetry is
-unavailable:
+It never selects a latest/first-known session. Codex, Cursor, and a Herdr
+pane that is not an identified OpenCode session have no supported local token
+source here and must report `SESSION_BUDGET: UNKNOWN` (exit 4). Cross-provider
+fallback (using another OpenCode session's tokens) is forbidden.
+`scripts/agent-launch --launch` treats that UNKNOWN as telemetry absence: it
+warns and may start a worker. It still fail-closes when an *identified*
+OpenCode orchestrator session is unreadable, and when a measured OpenCode
+session is in a rotate band:
 
 - `< 80K` → **CONTINUE** (exit 0).
 - `80K-99,999` → **CHECKPOINT_WARNING** (exit 1): avoid unnecessary repository

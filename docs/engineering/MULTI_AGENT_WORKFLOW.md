@@ -31,7 +31,11 @@ Before controlling Herdr, confirm `HERDR_ENV=1` and inspect the installed
 commands. Resolve the worker through `scripts/agent-launch --dry-run` first;
 only its `--launch` path may start a Cursor/OpenCode worker, because it injects
 the exact model ID, rejects unavailable mappings, and waits for the provider UI
-to confirm the active model before returning success. Before a product prompt,
+to confirm the active model before returning success. An Orchestrator whose
+budget is `SESSION_BUDGET: UNKNOWN` (Codex, Cursor, or Herdr without an
+identified OpenCode session) is not a launch prohibition; `--launch` warns and
+may start the worker. Measured OpenCode rotate bands and an unreadable
+identified OpenCode session still fail closed. Before a product prompt,
 require `MODEL_ACTUAL == MODEL_REQUESTED`; a mismatch fails closed and may use
 only the documented fallback. Keep the lead in the current pane. For a bounded task, create a
 sibling pane with `--current`, the current working directory, and `--no-focus`;
@@ -57,6 +61,26 @@ edit, and inspect `blocked` state before responding to approvals or questions.
 After the author commits, a different agent receives the commit/diff in its own
 review checkout and returns only actionable findings and a decision. The lead
 owns integration and runs `./scripts/verify` after every integration batch.
+
+When to delegate, what context a Worker receives, and when to stop for review
+are defined in `prompts/orchestrator.md`. This section is only the Herdr launch
+mechanism.
+
+## Confirming delegated workers
+
+After `scripts/agent-launch --launch` succeeds, confirm secondary agents from
+inside the same Herdr session (`HERDR_ENV=1`). Inspect `herdr --help` and the
+`agent` / `pane` groups rather than guessing flags. Expect:
+
+- the Orchestrator pane still occupied by the lead;
+- one additional pane/agent per launched Worker or Reviewer, with the `--name`
+  passed to `agent-launch`;
+- `MODEL_REQUESTED == MODEL_ACTUAL` on the launcher stdout from that launch.
+
+A later audit can list live agents/panes with the installed `herdr agent` and
+`herdr pane` commands and match names/pane IDs recorded in the task handoff.
+Absence of a secondary pane means delegation did not occur (including
+`DELEGATION_UNAVAILABLE` when `HERDR_ENV` is not set).
 
 ## Example task sequence
 

@@ -16,8 +16,11 @@ non-goals, affected architecture contracts, acceptance criteria, verification,
 and human gate. It describes *what* is needed, not implementation file lists.
 
 The Orchestrator alone selects it, moves it to Active, and creates task
-contracts. No requirement becomes Done from an agent narrative: it needs the
-declared gates, independent review PASS, and any required human result.
+contracts. A short assignment such as `Implementar REQ-XXXX.` is a valid
+selection signal; the execution sequence is `prompts/orchestrator.md`, and
+`scripts/requirement-status` reports the current state. No requirement becomes
+Done from an agent narrative: it needs the declared gates, independent review
+PASS, and any required human result.
 
 ## Task contract
 

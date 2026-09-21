@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+
+# Historical launcher decision (pre-REQ-HARNESS-003): any budget exit other
+# than 0/1/2/3, including UNKNOWN exit 4, refused --launch with exit 12.
+legacy_budget_gate() {
+  local budget_exit=$1
+  case "$budget_exit" in
+    0|1) echo 0 ;;
+    2) echo 10 ;;
+    3) echo 11 ;;
+    *) echo 12 ;;
+  esac
+}
+
+cat > "$tmp/bin/opencode" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [[ ${1:-} == models ]]; then
+  printf '%s\n' 'opencode-go/mimo-v2.5'
+  exit 0
+fi
+echo "opencode: unexpected: $*" >&2
+exit 1
+EOF
+chmod +x "$tmp/bin/opencode"
+
+cat > "$tmp/bin/herdr" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "${FAKE_HERDR_LOG:?}"
+case "${1:-} ${2:-}" in
+  "agent start"|"pane wait-output")
+    exit 0
+    ;;
+esac
+echo "herdr: unexpected: $*" >&2
+exit 1
+EOF
+chmod +x "$tmp/bin/herdr"
+
+write_budget() {
+  local exit_code=$1
+  local platform=$2
+  cat > "$tmp/check-session-budget" <<EOF
+#!/usr/bin/env bash
+echo "SESSION_BUDGET: FIXTURE"
+echo "PLATFORM: ${platform}"
+echo "SESSION_SOURCE: fixture"
+echo "SESSION_ID: fixture"
+echo "TOKENS: unknown"
+exit ${exit_code}
+EOF
+  chmod +x "$tmp/check-session-budget"
+}
+
+launch() {
+  : > "$tmp/herdr.log"
+  HERDR_ENV=1 \
+    EDUCAI_CHECK_SESSION_BUDGET="$tmp/check-session-budget" \
+    FAKE_HERDR_LOG="$tmp/herdr.log" \
+    PATH="$tmp/bin:$PATH" \
+    "$repo_root/scripts/agent-launch" \
+    --role low --provider opencode \
+    --worktree "$repo_root" \
+    --pane w1:p9 \
+    --name harness003-budget \
+    --launch
+}
+
+expect_launch() {
+  local expected=$1
+  local should_start=$2
+  shift 2
+  local output code
+  set +e
+  output="$(launch "$@" 2>&1)"
+  code=$?
+  set -e
+  if [[ $code -ne $expected ]]; then
+    echo "FAIL: expected launcher exit $expected, got $code ($*)" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+  if [[ $should_start == yes ]]; then
+    grep -q 'agent start harness003-budget' "$tmp/herdr.log" || {
+      echo "FAIL: expected herdr agent start ($*)" >&2
+      cat "$tmp/herdr.log" >&2
+      echo "$output" >&2
+      exit 1
+    }
+    grep -Fxq 'MODEL_REQUESTED: opencode-go/mimo-v2.5' <<<"$output"
+    grep -Fxq 'MODEL_ACTUAL: opencode-go/mimo-v2.5' <<<"$output"
+  else
+    if [[ -s $tmp/herdr.log ]]; then
+      echo "FAIL: herdr must not start when launch is refused ($*)" >&2
+      cat "$tmp/herdr.log" >&2
+      exit 1
+    fi
+  fi
+  echo "PASS: launcher exit $code ($*)"
+}
+
+# Reproduce the smoke-test failure table: HERDR UNKNOWN used to be exit 12.
+legacy=$(legacy_budget_gate 4)
+if [[ $legacy -ne 12 ]]; then
+  echo "FAIL: legacy table must map budget exit 4 to launcher 12" >&2
+  exit 1
+fi
+echo "PASS: legacy table maps UNKNOWN (4) to launcher exit 12"
+
+write_budget 4 HERDR
+expect_launch 0 yes "HERDR UNKNOWN proceeds"
+
+write_budget 4 CURSOR
+expect_launch 0 yes "CURSOR UNKNOWN proceeds"
+
+write_budget 4 CODEX
+expect_launch 0 yes "CODEX UNKNOWN proceeds"
+
+write_budget 4 UNKNOWN
+expect_launch 0 yes "generic UNKNOWN proceeds"
+
+write_budget 4 OPENCODE
+expect_launch 12 no "identified OpenCode unreadable stays fail-closed"
+
+write_budget 2 OPENCODE
+expect_launch 10 no "ROTATE_SESSION_REQUIRED refuses launch"
+
+write_budget 3 OPENCODE
+expect_launch 11 no "ROTATE_SESSION_REQUIRED_HARD refuses launch"
+
+write_budget 0 OPENCODE
+expect_launch 0 yes "CONTINUE launches"
+
+write_budget 1 OPENCODE
+expect_launch 0 yes "CHECKPOINT_WARNING launches"
+
+echo "agent-launch budget gate: all checks passed"

@@ -12,6 +12,24 @@ the governing routing/cost policy is `docs/engineering/AGENT_POLICY.md`.
   worktree process.
 - Reviewer: is independent from the Worker and reviews the exact diff/evidence.
 
+Harness role classes are resolved by `scripts/agent-class-resolve`. That helper
+prints `LAUNCH_ROLE` and `LAUNCH_PROVIDER`, and for Worker `cheap` also prints
+`FALLBACK_LAUNCH_ROLE` and `FALLBACK_LAUNCH_PROVIDER`. Concrete CLI model IDs
+live in `config/agent-models.env` and are applied solely by
+`scripts/agent-launch`.
+
+| Class | Default tier | Primary `agent-launch` role / provider | Last-resort fallback |
+| --- | --- | --- | --- |
+| Orchestrator | `strong` | `medium` / `opencode` | — |
+| Worker | `cheap` | `low` / `opencode` | `low` / `cursor` |
+| Reviewer | `independent` | `review` / `opencode` | — |
+
+Worker `cheap` must resolve OpenCode Go first. Cursor is only the last-resort
+fallback for that tier (`FALLBACK_LAUNCH_*`), never the primary cheap provider.
+Other worker tiers (`coding`, `fallback`, `visual`) and reviewer tiers
+(`escalation`, `architecture`) follow `docs/engineering/AGENT_POLICY.md`. Never put a model
+ID in a user prompt, requirement, or role prompt.
+
 Use `scripts/agent-launch` where the policy requires it. Verify
 `MODEL_REQUESTED == MODEL_ACTUAL` before sending a worker product work. Do not
 make architecture or product behavior depend on a particular provider/model.

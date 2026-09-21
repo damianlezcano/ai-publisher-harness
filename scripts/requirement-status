@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/requirement-status REQ-ID
+
+Resolve a requirement's lifecycle from the repository. Prints KEY: value
+fields for Orchestrator short-intent bootstrap. Does not move files.
+EOF
+}
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+  usage
+  exit 0
+fi
+
+req_id=${1:-}
+if [[ -z $req_id ]]; then
+  usage >&2
+  exit 2
+fi
+if [[ ! $req_id =~ ^REQ-[A-Z0-9][A-Z0-9_-]*$ ]]; then
+  echo "requirement-status: invalid REQ-ID: $req_id" >&2
+  exit 2
+fi
+
+hits=()
+record_hit() {
+  local state=$1 path=$2
+  hits+=("$state|$path")
+}
+
+[[ -f tasks/future/${req_id}.md ]] && record_hit FUTURE "tasks/future/${req_id}.md"
+[[ -d tasks/future/${req_id} ]] && record_hit FUTURE "tasks/future/${req_id}"
+[[ -f tasks/backlog/${req_id}.md ]] && record_hit BACKLOG "tasks/backlog/${req_id}.md"
+[[ -d tasks/backlog/${req_id} ]] && record_hit BACKLOG "tasks/backlog/${req_id}"
+[[ -d tasks/active/${req_id} ]] && record_hit ACTIVE "tasks/active/${req_id}"
+[[ -d tasks/done/${req_id} ]] && record_hit DONE "tasks/done/${req_id}"
+
+if ((${#hits[@]} == 0)); then
+  printf 'REQ_ID: %s\nSTATE: UNKNOWN\nPATH:\nEXECUTABLE: no\nACTION: REJECT\nREASON: requirement not found under tasks/\n' "$req_id"
+  exit 1
+fi
+
+if ((${#hits[@]} > 1)); then
+  printf 'REQ_ID: %s\nSTATE: AMBIGUOUS\nPATH:\nEXECUTABLE: no\nACTION: REJECT\nREASON: requirement found in multiple lifecycle locations:\n' "$req_id"
+  for hit in "${hits[@]}"; do
+    printf '  - %s\n' "${hit/|/: }"
+  done
+  exit 1
+fi
+
+state=${hits[0]%%|*}
+path=${hits[0]#*|}
+
+requirement=""
+if [[ -d $path && -f $path/requirement.md ]]; then
+  requirement="$path/requirement.md"
+elif [[ -f $path ]]; then
+  requirement=$path
+fi
+
+action=""
+executable=""
+reason=""
+case "$state" in
+  BACKLOG)
+    executable=yes
+    action=MOVE_TO_ACTIVE
+    reason='approved backlog item; Orchestrator must move to tasks/active/ before work'
+    ;;
+  ACTIVE)
+    executable=yes
+    action=CONTINUE
+    reason='already active; load existing task contracts and continue'
+    ;;
+  FUTURE)
+    executable=no
+    action=REJECT
+    reason='future idea; not a committed requirement'
+    ;;
+  DONE)
+    executable=no
+    action=REJECT
+    reason='already closed; do not re-execute unless an explicit rework assignment names this ID'
+    ;;
+  *)
+    executable=no
+    action=REJECT
+    reason='unhandled state'
+    ;;
+esac
+
+printf 'REQ_ID: %s\nSTATE: %s\nPATH: %s\nREQUIREMENT: %s\nEXECUTABLE: %s\nACTION: %s\nREASON: %s\n' \
+  "$req_id" "$state" "$path" "${requirement:-}" "$executable" "$action" "$reason"
+
+if [[ -d $path ]]; then
+  printf 'TASKS:\n'
+  shopt -s nullglob
+  tasks=("$path"/TASK-*.md)
+  if ((${#tasks[@]} == 0)); then
+    printf '  (none)\n'
+  else
+    for task in "${tasks[@]}"; do
+      printf '  %s\n' "$(basename "$task")"
+    done
+  fi
+fi

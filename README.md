@@ -28,7 +28,8 @@ CI=true ./scripts/verify
 
 Do not weaken the gate or alter protected product architecture merely to
 accommodate harness work. See `CODEX_HANDOFF.md` for the protected boundaries
-and continuation rules.
+and continuation rules. A short intent such as `Implementar REQ-XXXX.` is a
+complete Orchestrator assignment; the procedure is `prompts/orchestrator.md`.
 
 ## Repository structure
 
