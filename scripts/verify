@@ -35,7 +35,7 @@ for file in \
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/architecture-verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/requirement-status scripts/test-requirement-status scripts/agent-class-resolve scripts/test-agent-class-resolve scripts/test-short-intent-orchestration scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
+for script in scripts/bootstrap scripts/verify scripts/architecture-verify scripts/agent-launch scripts/test-agent-launch scripts/test-agent-launch-budget scripts/check-session-budget scripts/test-session-budget scripts/requirement-status scripts/test-requirement-status scripts/agent-class-resolve scripts/test-agent-class-resolve scripts/test-short-intent-orchestration scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -50,6 +50,9 @@ require_heading prompts/orchestrator.md '## Short intent'
 
 printf 'verify: scripts/test-agent-launch\n'
 ./scripts/test-agent-launch
+
+printf 'verify: scripts/test-agent-launch-budget\n'
+./scripts/test-agent-launch-budget
 
 printf 'verify: scripts/test-requirement-status\n'
 ./scripts/test-requirement-status

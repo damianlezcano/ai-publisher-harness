@@ -27,7 +27,11 @@ Before controlling Herdr, confirm `HERDR_ENV=1` and inspect the installed
 commands. Resolve the worker through `scripts/agent-launch --dry-run` first;
 only its `--launch` path may start a Cursor/OpenCode worker, because it injects
 the exact model ID, rejects unavailable mappings, and waits for the provider UI
-to confirm the active model before returning success. Before a product prompt,
+to confirm the active model before returning success. An Orchestrator whose
+budget is `SESSION_BUDGET: UNKNOWN` (Codex, Cursor, or Herdr without an
+identified OpenCode session) is not a launch prohibition; `--launch` warns and
+may start the worker. Measured OpenCode rotate bands and an unreadable
+identified OpenCode session still fail closed. Before a product prompt,
 require `MODEL_ACTUAL == MODEL_REQUESTED`; a mismatch fails closed and may use
 only the documented fallback. Keep the lead in the current pane. For a bounded task, create a
 sibling pane with `--current`, the current working directory, and `--no-focus`;

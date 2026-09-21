@@ -13,12 +13,14 @@ latest message part tokens.total, which is the current running context size.
 It never treats the latest/first-known session as the current session. Codex
 has no supported local token source here and therefore reports UNKNOWN.
 
-Exit codes (fail-closed):
-  0  CONTINUE                    < 80K
+Exit codes:
+  0  CONTINUE                    < 80K (identified OpenCode session)
   1  CHECKPOINT_WARNING          80K-99,999  (prepare checkpoint)
   2  ROTATE_SESSION_REQUIRED     100K-129,999 (no new bounded task)
   3  ROTATE_SESSION_REQUIRED_HARD >=130K      (no new milestone work)
-  4  UNKNOWN / FAIL CLOSED       current identity or budget unavailable
+  4  UNKNOWN                     token count unavailable for this identity
+                                 (Codex/Cursor/Herdr/non-OpenCode, or an
+                                 identified OpenCode session that cannot be read)
 
 Options:
   --session SESSION_ID  Explicit OpenCode session id.
@@ -52,18 +54,22 @@ fail_closed() {
 platform=""
 session_source=""
 
-ancestor_is_codex() {
+ancestor_matches() {
   local pid=${PPID:-}
   local comm
   while [[ $pid =~ ^[0-9]+$ ]] && (( pid > 1 )); do
     comm="$(ps -o comm= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
     case "$comm" in
-      codex|codex-cli) return 0 ;;
+      $1) return 0 ;;
     esac
     pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
   done
   return 1
 }
+
+ancestor_is_codex() { ancestor_matches 'codex|codex-cli'; }
+ancestor_is_opencode() { ancestor_matches 'opencode|opencode-cli'; }
+ancestor_is_cursor() { ancestor_matches 'cursor|cursor-agent|Cursor'; }
 
 if [[ -n $session_id ]]; then
   platform=OPENCODE
@@ -75,9 +81,22 @@ elif [[ -n ${OPENCODE_SESSION_ID:-} ]]; then
   session_id=$OPENCODE_SESSION_ID
   platform=OPENCODE
   session_source="OPENCODE_SESSION_ID"
+elif ancestor_is_opencode; then
+  platform=OPENCODE
+  session_source="OpenCode process/identity"
+  fail_closed "OPENCODE_SESSION_ID is required; refusing latest-session fallback"
+elif ancestor_is_cursor; then
+  platform=CURSOR
+  session_source="Cursor process/identity"
+  fail_closed "current session token count is not available through supported local telemetry"
+elif [[ ${HERDR_ENV:-} == 1 ]]; then
+  platform=HERDR
+  session_source="HERDR_ENV"
+  fail_closed "orchestrator is not an identified OpenCode session; token count unavailable"
 else
   platform=UNKNOWN
   session_source="unavailable"
+  fail_closed "current session token count is not available through supported local telemetry"
 fi
 
 [[ $platform == OPENCODE ]] || fail_closed "current session token count is not available through supported local telemetry"

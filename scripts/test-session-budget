@@ -61,7 +61,7 @@ EOF
 chmod +x "$tmp/bin/opencode"
 
 run() {
-  env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+  env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID -u HERDR_ENV \
     PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" \
     "$repo_root/scripts/check-session-budget" "$@"
 }
@@ -125,7 +125,7 @@ grep -q 'SESSION_ID: ses_under' "$tmp/current.out"
 echo "PASS: explicit current OpenCode identity resolution"
 
 # A historical session in the list is never selected implicitly.
-env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID -u HERDR_ENV \
   PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="ses_hard  old" \
   "$repo_root/scripts/check-session-budget" >"$tmp/no-current.out" 2>&1 && {
   echo "FAIL: stale session list must not become current" >&2
@@ -157,6 +157,19 @@ grep -q 'PLATFORM: CODEX' "$tmp/codex-stale-env.out"
 grep -q 'SESSION_ID: unavailable' "$tmp/codex-stale-env.out"
 echo "PASS: Codex ignores stale OpenCode identity"
 
+# Herdr without an identified OpenCode session is UNKNOWN, never a latest session.
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+  PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="ses_hard  old" \
+  HERDR_ENV=1 \
+  "$repo_root/scripts/check-session-budget" >"$tmp/herdr.out" 2>&1 && {
+  echo "FAIL: Herdr without OpenCode identity must be unknown" >&2
+  exit 1
+}
+grep -q 'PLATFORM: HERDR' "$tmp/herdr.out"
+grep -q 'SESSION_BUDGET: UNKNOWN' "$tmp/herdr.out"
+grep -q 'SESSION_ID: unavailable' "$tmp/herdr.out"
+echo "PASS: Herdr does not inherit OpenCode budget"
+
 # Malformed export -> FAIL CLOSED.
 expect 4 --session ses_malformed
 
@@ -167,7 +180,7 @@ expect 4 --session ses_missing_tokens
 expect 4 --session ses_does_not_exist
 
 # No resolvable session -> FAIL CLOSED.
-env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
+env -u OPENCODE_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID -u HERDR_ENV \
   PATH="$tmp/bin:$PATH" FAKE_EXPORT_DIR="$tmp/exports" FAKE_SESSION_LIST="" \
   "$repo_root/scripts/check-session-budget" >/dev/null 2>&1 && {
   echo "FAIL: empty session list must fail closed" >&2

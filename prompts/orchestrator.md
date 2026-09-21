@@ -111,7 +111,9 @@ When `HERDR_ENV=1`:
 8. Close completed secondary panes.
 
 When `HERDR_ENV` is not `1`: do not invent another launcher. Record
-`DELEGATION_UNAVAILABLE`. Independent review and human-gate stop still apply;
+`DELEGATION_UNAVAILABLE`. `check-session-budget` exit 4 (`UNKNOWN`) on a
+non-OpenCode Orchestrator is not `DELEGATION_UNAVAILABLE`; continue through
+`scripts/agent-launch --launch`. Independent review and human-gate stop still apply;
 missing Herdr is not permission to self-review or to close the requirement.
 
 To confirm later that secondary Workers actually opened, see **Confirming

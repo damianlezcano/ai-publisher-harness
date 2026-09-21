@@ -84,10 +84,14 @@ session into another task.
 `scripts/check-session-budget` is the executable, deterministic gate. It reads
 the exact OpenCode session (`opencode export <session-id>`, latest message part
 `tokens.total`) only when `--session` or `OPENCODE_SESSION_ID` identifies it.
-It never selects a latest/first-known session. Codex has no supported local
-token source in this tool and must report `SESSION_BUDGET: UNKNOWN`; cross-
-provider fallback is forbidden. It fails closed when identity or telemetry is
-unavailable:
+It never selects a latest/first-known session. Codex, Cursor, and a Herdr
+pane that is not an identified OpenCode session have no supported local token
+source here and must report `SESSION_BUDGET: UNKNOWN` (exit 4). Cross-provider
+fallback (using another OpenCode session's tokens) is forbidden.
+`scripts/agent-launch --launch` treats that UNKNOWN as telemetry absence: it
+warns and may start a worker. It still fail-closes when an *identified*
+OpenCode orchestrator session is unreadable, and when a measured OpenCode
+session is in a rotate band:
 
 - `< 80K` → **CONTINUE** (exit 0).
 - `80K-99,999` → **CHECKPOINT_WARNING** (exit 1): avoid unnecessary repository
