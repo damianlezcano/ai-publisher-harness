@@ -36,6 +36,41 @@ pub struct SessionLogEntry {
     pub usage: Option<SessionUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub knowledge: Option<SessionKnowledgeMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_context: Option<PromptContextMetrics>,
+}
+
+/// Local request-shape estimates. These are never provider billing telemetry
+/// and never include prompt, attachment, or document bodies.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptContextMetrics {
+    pub conversation_id: String,
+    pub turn_id: String,
+    pub user_prompt_est_tokens: usize,
+    pub conversation_history_est_tokens: usize,
+    pub knowledge_context_est_tokens: usize,
+    pub system_context_est_tokens: usize,
+    /// Count of bounded Knowledge evidence entries serialized to the provider.
+    /// It is not the raw attachment count and never contains content.
+    pub rag_attachment_count: usize,
+    pub raw_attachment_count: usize,
+    pub serialized_request_est_tokens: usize,
+    pub fresh_session: bool,
+    #[serde(default)]
+    pub session_role: String,
+    #[serde(default)]
+    pub session_reused: bool,
+    #[serde(default)]
+    pub session_rotated: bool,
+    #[serde(default)]
+    pub rotation_reason: String,
+    #[serde(default)]
+    pub cache_invalidated: bool,
+    #[serde(default)]
+    pub conversation_context_messages: usize,
+    #[serde(default)]
+    pub conversation_context_chars: usize,
 }
 
 /// Sanitized, per-turn remote-provider accounting for the session viewer.
@@ -129,6 +164,7 @@ pub fn record(level: &str, message: impl Into<String>) {
         message,
         usage: None,
         knowledge: None,
+        prompt_context: None,
     });
 }
 
@@ -153,11 +189,35 @@ pub fn record_usage(usage: SessionUsage) {
         usage.reason,
         usage.additional_attachment_route,
     );
-    record_structured("INFO", message, Some(usage), None);
+    record_structured("INFO", message, Some(usage), None, None);
 }
 
 pub fn record_knowledge(metrics: SessionKnowledgeMetrics, message: String) {
-    record_structured("INFO", message, None, Some(metrics));
+    record_structured("INFO", message, None, Some(metrics), None);
+}
+
+pub fn record_prompt_context(metrics: PromptContextMetrics) {
+    let message = format!(
+        "[prompt_context] conversation_id={} turn_id={} user_prompt_est_tokens={} conversation_history_est_tokens={} knowledge_context_est_tokens={} system_context_est_tokens={} rag_attachment_count={} raw_attachment_count={} serialized_request_est_tokens={} fresh_session={} session_role={} session_reused={} session_rotated={} rotation_reason={} cache_invalidated={} conversation_context_messages={} conversation_context_chars={}",
+        metrics.conversation_id,
+        metrics.turn_id,
+        metrics.user_prompt_est_tokens,
+        metrics.conversation_history_est_tokens,
+        metrics.knowledge_context_est_tokens,
+        metrics.system_context_est_tokens,
+        metrics.rag_attachment_count,
+        metrics.raw_attachment_count,
+        metrics.serialized_request_est_tokens,
+        metrics.fresh_session,
+        metrics.session_role,
+        metrics.session_reused,
+        metrics.session_rotated,
+        metrics.rotation_reason,
+        metrics.cache_invalidated,
+        metrics.conversation_context_messages,
+        metrics.conversation_context_chars,
+    );
+    record_structured("INFO", message, None, None, Some(metrics));
 }
 
 fn record_structured(
@@ -165,6 +225,7 @@ fn record_structured(
     message: String,
     usage: Option<SessionUsage>,
     knowledge: Option<SessionKnowledgeMetrics>,
+    prompt_context: Option<PromptContextMetrics>,
 ) {
     if LogLevel::from_entry(level) < *min_level().lock().unwrap_or_else(|e| e.into_inner()) {
         return;
@@ -179,6 +240,7 @@ fn record_structured(
         message,
         usage,
         knowledge,
+        prompt_context,
     });
 }
 

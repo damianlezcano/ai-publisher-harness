@@ -206,4 +206,35 @@ describe("ShareControl", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: projectName })).toBeInTheDocument();
   });
+
+  it("copies and QRs the exact immutable current-version URL", async () => {
+    const user = userEvent.setup();
+    const versionId = "0198e4a6-86d6-7c16-b4c4-000000000003";
+    const versionUrl = `https://fake.trycloudflare.com/fotosintesis-a7k2m9/${versionId}/`;
+    const versioned: PublicationView = {
+      state: "published",
+      publicUrl: versionUrl,
+      rootUrl: "https://fake.trycloudflare.com/fotosintesis-a7k2m9/",
+      latestUrl: "https://fake.trycloudflare.com/fotosintesis-a7k2m9/latest/",
+      currentVersionId: versionId,
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderControl(versioned);
+
+    await user.click(screen.getByRole("button", { name: messages.sharing.shared }));
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.copyLink }));
+    expect(writeText).toHaveBeenCalledWith(versionUrl);
+
+    // QR consumes the exact same immutable URL, never the root or latest.
+    await user.click(screen.getByRole("menuitem", { name: messages.sharing.showQr }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("img", { name: messages.qr.altForProject(projectName, versionUrl) }),
+      ).toBeInTheDocument(),
+    );
+  });
 });

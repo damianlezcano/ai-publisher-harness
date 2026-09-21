@@ -74,6 +74,10 @@ const detailProject: ProjectView = {
       byteSize: 20,
       createdAt: "2026-08-28T15:00:00Z",
       revision: 1,
+      lineageId: "c1",
+      versionNumber: 1,
+      isCurrent: true,
+      availableVersionIds: ["c1"],
     },
   ],
 };
@@ -145,6 +149,46 @@ describe("ConversationDetails metrics", () => {
     expect(screen.getByText("USD 0.123")).toBeVisible();
     expect(screen.getByText("2.222 tokens estimados")).toBeVisible();
     expect(screen.queryByText("999.999 tokens")).not.toBeInTheDocument();
+  });
+
+  it("shows corpus-wide thematic synthesis metrics as a distinct retrieval mode", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "conversation_last_turn_metrics")
+        return Promise.resolve({
+          materialCount: 15,
+          corpusBytes: 500000,
+          corpusUtf8Chars: 480000,
+          corpusEstTokens: 166666,
+          retrievalCandidateCount: 54,
+          selectedEvidenceCount: 14,
+          evidenceEstTokens: 2172,
+          contextReductionPct: 91,
+          semanticProviderState: "not_requested",
+          requestPreparationMs: 9,
+          retrievalMode: "thematic",
+          exhaustiveCoverage: "not_requested",
+          eligibleMaterials: 15,
+          materialsInspected: 14,
+          chunksInspected: 57,
+        });
+      if (command === "session_logs") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    expect(await screen.findByText("thematic")).toBeVisible();
+    expect(screen.getByText("Materiales que aportan temas")).toBeVisible();
+    expect(screen.getAllByText("14").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Candidatos de temas recurrentes")).toBeVisible();
+    expect(screen.getAllByText("54").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("2.172")).toBeVisible();
   });
 
   it("preserves name, model, resource rows, folder actions, and close behavior", async () => {

@@ -15,9 +15,13 @@ pub use fake::{FakeAgentEngine, FakeCall};
 pub use model::{
     AgentBackendInfo, AgentEvidenceProvenance, AgentKnowledgeContext, AgentKnowledgeEntry,
     AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact, ArtifactKind,
-    ModelRef, RemoteUsage, TaskStatus, UsageSource,
+    ModelRef, PromptContextTelemetry, RemoteUsage, TaskStatus, UsageSource,
 };
 pub use opencode::OpenCodeAgentEngine;
 pub use port::AgentEngine;
-pub use registrar::{CreationRegistrar, FilesystemCreationRegistrar};
-pub use service::{AgentAttachment, AgentRequest, AgentRunResult, AgentService};
+pub use registrar::{CreationRegistrar, FilesystemCreationRegistrar, RegisteredArtifact};
+pub use service::{
+    AgentAttachment, AgentRequest, AgentRunResult, AgentService,
+    knowledge_answer_grounding_instruction, knowledge_taints_conversational_session,
+    knowledge_uses_ephemeral_session,
+};

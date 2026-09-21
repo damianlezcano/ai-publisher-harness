@@ -362,8 +362,9 @@ fn production_turn_injects_bounded_evidence_into_the_backend_request() {
         .unwrap();
     let _ = fs::remove_file(&source_path);
 
-    // No attachments: the indexed material alone drives evidence injection.
-    let run = state.run_agent(&project.id, "INC-12345", &[]).unwrap();
+    let run = state
+        .run_agent(&project.id, "¿En qué archivos se mencionó INC-12345?", &[])
+        .unwrap();
     assert_eq!(run.status, "completed");
 
     let first_prompt = calls.lock().unwrap()[0].clone();
@@ -382,7 +383,9 @@ fn production_turn_injects_bounded_evidence_into_the_backend_request() {
 
     // Deterministic serialization: a second identical turn produces the same
     // evidence block.
-    let _ = state.run_agent(&project.id, "INC-12345", &[]).unwrap();
+    let _ = state
+        .run_agent(&project.id, "¿En qué archivos se mencionó INC-12345?", &[])
+        .unwrap();
     let second_prompt = calls.lock().unwrap()[1].clone();
     let evidence_first = first_prompt
         .split_once("INC-12345")
@@ -468,7 +471,11 @@ fn send_message_with_indexed_and_attached_dedups_duplicate_corpus() {
         b"OpenShift despliega aplicaciones",
     );
     let run = state
-        .run_agent(&p.id, "OpenShift", std::slice::from_ref(&mid))
+        .run_agent(
+            &p.id,
+            "¿En qué archivos se mencionó OpenShift?",
+            std::slice::from_ref(&mid),
+        )
         .unwrap();
     assert_eq!(run.status, "completed");
 

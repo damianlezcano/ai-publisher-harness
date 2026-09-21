@@ -161,7 +161,11 @@ fn indexed_knowledge_crosses_the_backend_boundary_only_as_bounded_untrusted_evid
     drop(store);
 
     state
-        .send_message(&project.id, "OpenShift", &[material_id])
+        .send_message(
+            &project.id,
+            "¿En qué archivos se mencionó OpenShift?",
+            &[material_id],
+        )
         .unwrap();
     let prompt = calls.lock().unwrap().pop().unwrap();
     assert!(prompt.contains("OpenShift"));

@@ -7,6 +7,7 @@ pub struct AgentProject {
     pub directory: std::path::PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSession {
     pub id: String,
     pub project_id: String,
@@ -24,6 +25,42 @@ pub struct AgentPrompt {
     pub text: String,
     pub model: Option<ModelRef>,
     pub knowledge: Option<AgentKnowledgeContext>,
+    /// Bounded visible EducAI turns restated into an ephemeral Knowledge
+    /// session. Never raw chunks, never the full transcript, never OrdinaryChat.
+    pub conversation_context: Option<String>,
+}
+
+/// Structural, local-only accounting for the prompt that crossed the agent
+/// boundary. These estimates are intentionally not provider billing values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptContextTelemetry {
+    pub user_prompt_est_tokens: usize,
+    pub conversation_history_est_tokens: usize,
+    pub knowledge_context_est_tokens: usize,
+    pub system_context_est_tokens: usize,
+    /// Number of bounded Knowledge evidence entries serialized into this
+    /// provider request. This is distinct from raw workspace attachments.
+    pub rag_attachment_count: usize,
+    pub raw_attachment_count: usize,
+    pub serialized_request_est_tokens: usize,
+    /// Knowledge synthesis with serialized evidence uses an ephemeral OpenCode
+    /// session so RAG markup cannot accumulate on the conversational transcript.
+    pub fresh_session: bool,
+    /// `conversational` or `ephemeral_knowledge`. Structural only.
+    pub session_role: &'static str,
+    /// True when this OrdinaryChat/creation turn reused the same OpenCode
+    /// session id already in the cancel map.
+    pub session_reused: bool,
+    /// True when this conversational turn serialized Knowledge evidence and
+    /// the OpenCode session was marked non-reusable for later chat.
+    pub session_rotated: bool,
+    /// Structural reason only, e.g. `creation_knowledge_evidence`.
+    pub rotation_reason: Option<&'static str>,
+    /// True when the engine conversational cache was dropped for this project.
+    pub cache_invalidated: bool,
+    /// Visible EducAI turns restated into this request (0 unless ephemeral Knowledge).
+    pub conversation_context_messages: usize,
+    pub conversation_context_chars: usize,
 }
 
 /// Bounded, provider-neutral reference material. No SQLite, embeddings, or
@@ -51,6 +88,11 @@ pub struct AgentKnowledgeContext {
     pub authorize_negative: bool,
     /// Display filenames for locally appended Fuentes. Never filesystem paths.
     pub citation_source_names: Vec<String>,
+    /// True when this context grounds a creation-from-material turn: the
+    /// target material exists and is READY in Knowledge, and the artifact must
+    /// be created from it (the empty filesystem does not mean there is no
+    /// source material).
+    pub creation_from_material: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -264,6 +264,24 @@ fn is_valid_publication_route(s: &str) -> bool {
     }
     true
 }
+
+/// Validate a workspace-relative bundle root directory. Empty (`""`) is the
+/// workspace root; otherwise a forward-slash list of safe, non-hidden, non-dot
+/// segments with no trailing slash, traversal, control bytes, or backslashes.
+fn is_valid_bundle_root(s: &str) -> bool {
+    if s.is_empty() {
+        return true;
+    }
+    if s.starts_with('/')
+        || s.ends_with('/')
+        || s.contains('\\')
+        || s.bytes().any(|b| b == 0 || b.is_ascii_control())
+    {
+        return false;
+    }
+    s.split('/')
+        .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && !seg.starts_with('.'))
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ContentType(String);
@@ -386,6 +404,40 @@ pub struct TurnMetrics {
     pub lexical_hits: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_hits: Option<usize>,
+    /// Truthful local-mode label for turns that never used a RAG retrieval
+    /// mode (e.g. `inventory`). `None` for semantic/exhaustive/thematic turns.
+    /// Kept `skip_serializing_if` so older persisted records stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_mode: Option<String>,
+    /// True when this turn resolved a contextual referent from a previous turn.
+    /// Structural telemetry only; never content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contextual_followup: Option<bool>,
+    /// `material_set` or `theme_set` for a resolved follow-up turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referent_type: Option<String>,
+    /// Exact cardinality of the resolved referent set (no top-K shrink).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referent_count: Option<usize>,
+    /// Durable id of the turn that produced the resolved referent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_turn_id: Option<String>,
+    /// The retrieval intent this follow-up's content behavior is built on:
+    /// `normal`, `exhaustive`, or `thematic`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_intent: Option<String>,
+    /// The concrete follow-up action: `per_item_summary`, `per_theme_detail`,
+    /// or `scoped_exhaustive`. Never a retrieval mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_kind: Option<String>,
+    /// Exact grounded source display names that actually contributed to this
+    /// turn's answer (sanitized filenames only, never filesystem paths). This
+    /// replaces the formerly text-appended `Fuentes:` block and is presentation
+    /// provenance: a non-empty list is never inferred from prose and an empty
+    /// list means no grounded source contributed. Kept `skip_serializing_if`
+    /// so older persisted records stay byte-stable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_names: Vec<String>,
 }
 
 impl TurnMetrics {
@@ -401,6 +453,53 @@ impl TurnMetrics {
         }
         Ok(())
     }
+}
+
+/// A durable, structured referent produced by one turn and reused by a later
+/// contextual follow-up ("resumí cada uno", "de esos archivos, cuáles
+/// mencionan...", "para cada tema..."). This is NOT rendered assistant prose:
+/// it preserves only stable identities and display provenance, so a later turn
+/// can resolve the exact previous set without re-running discovery, re-embedding,
+/// or parsing prose. It never stores raw document content, vectors, or paths.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum TurnReferent {
+    /// An explicit set of Knowledge materials (e.g. a full inventory list).
+    #[serde(rename = "materialSet")]
+    MaterialSet(MaterialSetReferent),
+    /// An explicit set of recurring themes (e.g. a CorpusThematic result).
+    #[serde(rename = "themeSet")]
+    ThemeSet(ThemeSetReferent),
+}
+
+/// Exact persisted material set produced by a previous turn. `material_ids` is
+/// the opaque stable identity; `source_names` is the display provenance; both
+/// keep the same relative order the originating answer used.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialSetReferent {
+    pub material_ids: Vec<String>,
+    pub source_names: Vec<String>,
+    #[serde(rename = "originTurnId")]
+    pub origin_turn_id: String,
+    /// What produced the set, e.g. `inventory`. Structural label, never prose.
+    #[serde(rename = "producedBy")]
+    pub produced_by: String,
+}
+
+/// Exact recurring-theme set produced by a previous turn. `theme_keys` is the
+/// stable identity a later turn must reuse; `display_labels` is the same text
+/// for rendering; `source_names` records the sources that evidenced the themes
+/// (display provenance, never paths). A follow-up must never silently re-run
+/// theme discovery and replace these keys.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeSetReferent {
+    pub theme_keys: Vec<String>,
+    pub display_labels: Vec<String>,
+    #[serde(rename = "originTurnId")]
+    pub origin_turn_id: String,
+    pub source_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -420,6 +519,22 @@ pub struct Message {
     pub creation_ids: Vec<CreationId>,
     #[serde(rename = "turnMetrics", skip_serializing_if = "Option::is_none")]
     pub turn_metrics: Option<TurnMetrics>,
+    /// Optional structured referent a later turn may resolve. Absent in older
+    /// projects; `None` keeps legacy project.json files byte-stable.
+    #[serde(
+        rename = "turnReferent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub turn_referent: Option<TurnReferent>,
+    /// Durable id of the owning user turn. On an assistant message this equals
+    /// the id of the user message whose `turn_metrics` describe the response
+    /// (the user message id is the turn id). This is the identity a render uses
+    /// to bind an assistant answer to its exact per-turn metrics without
+    /// positional guessing across fail→recover sequences. `None` on user
+    /// messages and on legacy records written before this field existed.
+    #[serde(rename = "turnId", default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<MessageId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -462,6 +577,56 @@ pub struct Creation {
     pub parent_creation_id: Option<CreationId>,
     #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
+    /// Stable lineage identity shared by every version of one logical
+    /// interactive resource. Two independent resources that happen to share a
+    /// display name never collide because this is a real identity. `None` on
+    /// legacy single-version records, where the creation id itself is the
+    /// lineage (see [`Creation::lineage`]).
+    #[serde(rename = "lineageId", default, skip_serializing_if = "Option::is_none")]
+    pub lineage_id: Option<CreationId>,
+    /// 1-based, monotonically increasing version number inside the lineage.
+    /// `None` on legacy records, read as version 1.
+    #[serde(
+        rename = "versionNumber",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub version_number: Option<u32>,
+    /// True for the authoritative current version of the lineage. `None` on
+    /// legacy records, read as current. Validation guarantees exactly one
+    /// current version per lineage.
+    #[serde(rename = "isCurrent", default, skip_serializing_if = "Option::is_none")]
+    pub is_current: Option<bool>,
+    /// Workspace-relative forward-slash directory of the web bundle this
+    /// creation belongs to (`""` for a bundle at the workspace root). This is
+    /// the stable ownership key the registrar uses to attach CSS/JS/image
+    /// sidecars to the correct lineage, independent of display name. `None` on
+    /// legacy records, where ownership falls back to display-name matching.
+    #[serde(
+        rename = "bundleRoot",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bundle_root: Option<String>,
+}
+
+impl Creation {
+    /// Stable lineage identity: the explicit `lineage_id` when present, else the
+    /// creation's own id (legacy single-version lineage).
+    pub fn lineage(&self) -> &CreationId {
+        self.lineage_id.as_ref().unwrap_or(&self.id)
+    }
+
+    /// 1-based version number, defaulting to 1 for legacy records.
+    pub fn version(&self) -> u32 {
+        self.version_number.unwrap_or(1)
+    }
+
+    /// Whether this is the current version of its lineage, defaulting to true
+    /// for legacy records.
+    pub fn current(&self) -> bool {
+        self.is_current.unwrap_or(true)
+    }
 }
 /// The optional model explicitly chosen for one conversation. It deliberately
 /// stores only provider/model identifiers, never credentials or provider data.
@@ -588,6 +753,18 @@ impl Project {
             if c.display_name.trim().is_empty() || c.revision != 1 {
                 return Err(ProjectCoreError::InvalidCreation(c.display_name.clone()));
             }
+            if c.version_number.is_some_and(|v| v < 1) {
+                return Err(ProjectCoreError::InvalidCreation(
+                    "version number must be >= 1".into(),
+                ));
+            }
+            if let Some(root) = &c.bundle_root
+                && !is_valid_bundle_root(root)
+            {
+                return Err(ProjectCoreError::InvalidCreation(
+                    "invalid bundle root".into(),
+                ));
+            }
             validate_file_metadata(
                 &c.display_name,
                 &c.display_name,
@@ -605,6 +782,7 @@ impl Project {
                 ));
             }
         }
+        validate_creation_lineages(&self.creations)?;
         let mut message_ids = HashSet::new();
         for msg in &self.messages {
             MessageId::parse(msg.id.as_str())?;
@@ -679,6 +857,69 @@ fn validate_file_metadata(
     Ok(())
 }
 
+/// Validate the versioned-lineage invariants of a creation set.
+///
+/// Legacy records (no explicit version fields) form one-version lineages read
+/// as version 1 and current. For every lineage: version numbers are unique and
+/// `>= 1`, exactly one version is current, a parent belongs to the same
+/// lineage, and version numbers strictly increase from parent to child. The
+/// strict increase also makes a parent cycle impossible.
+fn validate_creation_lineages(creations: &[Creation]) -> CoreResult<()> {
+    let by_id: HashMap<&CreationId, &Creation> = creations.iter().map(|c| (&c.id, c)).collect();
+    let mut lineage_versions: HashMap<&CreationId, HashSet<u32>> = HashMap::new();
+    let mut lineage_current: HashMap<&CreationId, usize> = HashMap::new();
+    for c in creations {
+        let lineage = c.lineage();
+        if !lineage_versions
+            .entry(lineage)
+            .or_default()
+            .insert(c.version())
+        {
+            return Err(ProjectCoreError::InvalidCreation(
+                "duplicate version number inside lineage".into(),
+            ));
+        }
+        let current = lineage_current.entry(lineage).or_insert(0);
+        if c.current() {
+            *current += 1;
+        }
+    }
+    for count in lineage_current.values() {
+        if *count != 1 {
+            return Err(ProjectCoreError::InvalidCreation(
+                "lineage must have exactly one current version".into(),
+            ));
+        }
+    }
+    for c in creations {
+        let Some(parent) = &c.parent_creation_id else {
+            continue;
+        };
+        let Some(parent_creation) = by_id.get(parent) else {
+            return Err(ProjectCoreError::InvalidCreation(
+                "parent creation is absent".into(),
+            ));
+        };
+        // Fully legacy records (no explicit version fields) may carry the
+        // pre-versioning `parent_creation_id` chain; only versioned records
+        // are required to keep their parent inside the same lineage and
+        // monotonic. This keeps legacy project.json files loading unchanged.
+        if c.version_number.is_some() {
+            if parent_creation.lineage() != c.lineage() {
+                return Err(ProjectCoreError::InvalidCreation(
+                    "parent version belongs to a different lineage".into(),
+                ));
+            }
+            if parent_creation.version() >= c.version() {
+                return Err(ProjectCoreError::InvalidCreation(
+                    "version number must increase from parent".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn schema_version_of(value: &serde_json::Value) -> CoreResult<u32> {
     match value.get("schemaVersion") {
         Some(serde_json::Value::Number(n)) => n
@@ -749,6 +990,10 @@ impl SchemaV1Project {
                     revision: c.revision,
                     parent_creation_id: c.parent_creation_id,
                     created_at: c.created_at,
+                    lineage_id: None,
+                    version_number: None,
+                    is_current: None,
+                    bundle_root: None,
                 })
                 .collect(),
             messages: vec![],
@@ -793,6 +1038,22 @@ pub struct StoredCreation {
     pub relative_path: RelativeProjectPath,
     pub byte_size: u64,
 }
+/// One changed/new file laid over an immutable version snapshot. `relative_path`
+/// is forward-slash and relative to the version directory (`outputs/<id>/`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationOverlay {
+    pub relative_path: String,
+    pub bytes: Vec<u8>,
+}
+/// The complete content of a new immutable creation version: a primary entry
+/// plus every changed/new overlay file. Unchanged files are inherited by
+/// copying the base version, never sent as overlays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationVersionContent {
+    /// Primary entry relative path, e.g. `index.html` or `notes.pdf`.
+    pub primary_relative_path: String,
+    pub overlays: Vec<CreationOverlay>,
+}
 pub trait ProjectContentStore {
     fn store_material(
         &mut self,
@@ -809,6 +1070,22 @@ pub trait ProjectContentStore {
         content: &CreationContent,
         safe_file_name: &str,
     ) -> CoreResult<StoredCreation>;
+    /// Build a new immutable, self-contained version directory
+    /// `outputs/<c>/`: recursively copy `base`'s complete tree (when given),
+    /// overlay the changed/new files, validate the result, then atomically
+    /// promote it. The previous version directory is never mutated.
+    fn store_creation_version(
+        &mut self,
+        p: &ProjectId,
+        c: &CreationId,
+        base: Option<&Creation>,
+        content: &CreationVersionContent,
+    ) -> CoreResult<StoredCreation>;
+    /// Remove stale `.staging-*` directories left by a crashed version build.
+    /// A staging directory is never referenced by metadata, so removing it is
+    /// always safe; an already-promoted orphan version directory is left alone
+    /// (immutable and never current).
+    fn recover_stale_creation_staging(&mut self, p: &ProjectId) -> CoreResult<()>;
     fn read_creation(&self, p: &ProjectId, c: &Creation) -> CoreResult<Vec<u8>>;
     /// Removes the fixed `inputs/<id>` content directory for a material. The
     /// original source file is never affected: only the app-managed copy is
@@ -832,6 +1109,22 @@ pub struct CreateCreation {
     pub content_type: Option<ContentType>,
     pub content: CreationContent,
     pub parent_creation_id: Option<CreationId>,
+}
+/// Request to build a new immutable version of a creation lineage. When
+/// `base_creation_id` is set, the new version inherits that version's complete
+/// tree and its lineage; otherwise a new lineage is started (version 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateCreationVersion {
+    pub display_name: String,
+    pub kind: CreationKind,
+    pub visibility: CreationVisibility,
+    pub content_type: Option<ContentType>,
+    pub content: CreationVersionContent,
+    pub base_creation_id: Option<CreationId>,
+    /// Workspace-relative forward-slash directory of the web bundle. Only used
+    /// when starting a new lineage; an existing lineage inherits its base's
+    /// bundle root. `None` is fine for standalone file lineages.
+    pub bundle_root: Option<String>,
 }
 pub struct ProjectService<R, S, C, I> {
     repository: R,
@@ -994,6 +1287,10 @@ where
             revision: 1,
             parent_creation_id: r.parent_creation_id,
             created_at: self.clock.now(),
+            lineage_id: None,
+            version_number: None,
+            is_current: None,
+            bundle_root: None,
         };
         p.creations.push(c.clone());
         p.updated_at = c.created_at.clone();
@@ -1001,9 +1298,97 @@ where
         Ok(c)
     }
 
-    /// Overwrites the files of an existing Creation without changing its id,
-    /// visibility, or revision. Used when a later turn updates the same
-    /// activity instead of minting a duplicate.
+    /// Builds a new immutable version of a creation lineage.
+    ///
+    /// The snapshot is fully written and atomically promoted to
+    /// `outputs/<new-id>/` BEFORE the metadata replace: a crash before
+    /// promotion leaves only a recoverable `.staging-*` directory and never a
+    /// current version, and a crash after promotion but before the metadata
+    /// commit can leave an orphan immutable directory that is never referenced
+    /// (and therefore never current). The previous version is never mutated;
+    /// only its `is_current` flag moves to the new version in the same metadata
+    /// write.
+    pub fn create_creation_version(
+        &mut self,
+        pid: &ProjectId,
+        r: CreateCreationVersion,
+    ) -> CoreResult<Creation> {
+        if r.display_name.trim().is_empty() || r.content.primary_relative_path.trim().is_empty() {
+            return Err(ProjectCoreError::InvalidCreation(r.display_name));
+        }
+        let mut p = self.repository.get(pid)?;
+        let e = p.updated_at.clone();
+        p.migrate_to_v3()?;
+        self.content.recover_stale_creation_staging(pid)?;
+        let base = match &r.base_creation_id {
+            Some(base_id) => Some(
+                p.creations
+                    .iter()
+                    .find(|c| &c.id == base_id)
+                    .cloned()
+                    .ok_or_else(|| ProjectCoreError::MissingCreation(base_id.clone()))?,
+            ),
+            None => None,
+        };
+        let id = self.ids.creation_id();
+        let lineage = match &base {
+            Some(base) => base.lineage().clone(),
+            None => id.clone(),
+        };
+        if p.creations.iter().any(|c| c.id == id) {
+            return Err(ProjectCoreError::DuplicateCreation(id));
+        }
+        let version_number = match &base {
+            Some(base) => {
+                let max = p
+                    .creations
+                    .iter()
+                    .filter(|c| c.lineage() == base.lineage())
+                    .map(|c| c.version())
+                    .max()
+                    .unwrap_or(0);
+                max + 1
+            }
+            None => 1,
+        };
+        let stored = self
+            .content
+            .store_creation_version(pid, &id, base.as_ref(), &r.content)?;
+        ensure_stored_path(&stored.relative_path, "outputs", id.as_str())?;
+        let parent_creation_id = base.as_ref().map(|b| b.id.clone());
+        // Bundle root is inherited from the base version; only a brand-new
+        // lineage adopts the caller-supplied root.
+        let bundle_root = match &base {
+            Some(base) => base.bundle_root.clone(),
+            None => r.bundle_root.clone(),
+        };
+        let now = self.clock.now();
+        let c = Creation {
+            id,
+            display_name: r.display_name,
+            kind: r.kind,
+            visibility: r.visibility,
+            relative_path: stored.relative_path,
+            content_type: r.content_type,
+            byte_size: stored.byte_size,
+            revision: 1,
+            parent_creation_id,
+            created_at: now.clone(),
+            lineage_id: Some(lineage),
+            version_number: Some(version_number),
+            is_current: Some(true),
+            bundle_root,
+        };
+        for existing in &mut p.creations {
+            if existing.lineage() == c.lineage() && existing.current() {
+                existing.is_current = Some(false);
+            }
+        }
+        p.creations.push(c.clone());
+        p.updated_at = now;
+        self.repository.replace(&p, &e)?;
+        Ok(c)
+    }
     pub fn replace_creation_content(
         &mut self,
         pid: &ProjectId,
@@ -1099,6 +1484,8 @@ where
             material_ids: material_ids.to_vec(),
             creation_ids: vec![],
             turn_metrics: None,
+            turn_referent: None,
+            turn_id: None,
         };
         p.messages.push(msg.clone());
         p.updated_at = created_at;
@@ -1111,6 +1498,7 @@ where
         text: &str,
         status: MessageStatus,
         creation_ids: &[CreationId],
+        turn_id: Option<MessageId>,
     ) -> CoreResult<Message> {
         if text.chars().count() > MAX_MESSAGE_TEXT_CHARS {
             return Err(ProjectCoreError::InvalidMessage(format!(
@@ -1143,6 +1531,8 @@ where
             material_ids: vec![],
             creation_ids: creation_ids.to_vec(),
             turn_metrics: None,
+            turn_referent: None,
+            turn_id,
         };
         p.messages.push(msg.clone());
         p.updated_at = created_at;
@@ -1173,6 +1563,35 @@ where
             ));
         }
         project.messages[index].turn_metrics = Some(metrics);
+        project.updated_at = self.clock.now();
+        let updated = project.messages[index].clone();
+        self.repository.replace(&project, &expected_updated_at)?;
+        Ok(updated)
+    }
+    /// Stores a structured referent on the already-persisted user message that
+    /// owns a logical turn, so a later contextual follow-up can resolve the
+    /// exact set produced by this turn even after restart. Repeating the same
+    /// write is safe; a `None` value leaves the existing referent untouched.
+    pub fn set_turn_referent(
+        &mut self,
+        pid: &ProjectId,
+        message_id: &MessageId,
+        referent: TurnReferent,
+    ) -> CoreResult<Message> {
+        let mut project = self.repository.get(pid)?;
+        let expected_updated_at = project.updated_at.clone();
+        project.migrate_to_v3()?;
+        let index = project
+            .messages
+            .iter()
+            .position(|message| &message.id == message_id)
+            .ok_or_else(|| ProjectCoreError::InvalidMessage("turn message is absent".into()))?;
+        if project.messages[index].role != MessageRole::User {
+            return Err(ProjectCoreError::InvalidMessage(
+                "turn referent must belong to a user message".into(),
+            ));
+        }
+        project.messages[index].turn_referent = Some(referent);
         project.updated_at = self.clock.now();
         let updated = project.messages[index].clone();
         self.repository.replace(&project, &expected_updated_at)?;
@@ -1469,6 +1888,34 @@ mod tests {
                 byte_size: x.bytes.len() as u64,
             })
         }
+        fn store_creation_version(
+            &mut self,
+            p: &ProjectId,
+            c: &CreationId,
+            _base: Option<&Creation>,
+            content: &CreationVersionContent,
+        ) -> CoreResult<StoredCreation> {
+            let primary = content
+                .overlays
+                .iter()
+                .find(|o| o.relative_path == content.primary_relative_path)
+                .map(|o| o.bytes.clone())
+                .unwrap_or_default();
+            let byte_size: u64 = content.overlays.iter().map(|o| o.bytes.len() as u64).sum();
+            let path = if self.invalid_path {
+                "inputs/x".into()
+            } else {
+                format!("outputs/{c}/{}", content.primary_relative_path)
+            };
+            self.creations.insert((p.clone(), c.clone()), primary);
+            Ok(StoredCreation {
+                relative_path: RelativeProjectPath::parse(path)?,
+                byte_size,
+            })
+        }
+        fn recover_stale_creation_staging(&mut self, _p: &ProjectId) -> CoreResult<()> {
+            Ok(())
+        }
         fn read_creation(&self, p: &ProjectId, c: &Creation) -> CoreResult<Vec<u8>> {
             self.creations
                 .get(&(p.clone(), c.id.clone()))
@@ -1764,6 +2211,10 @@ mod tests {
                 CreationId::parse("0198e4a6-86d6-7c16-b4c4-3197b355cf11").unwrap(),
             ),
             created_at: time(),
+            lineage_id: None,
+            version_number: None,
+            is_current: None,
+            bundle_root: None,
         });
         assert!(matches!(
             p.validate(),
@@ -1912,6 +2363,10 @@ mod tests {
             revision: 1,
             parent_creation_id: None,
             created_at: time(),
+            lineage_id: None,
+            version_number: None,
+            is_current: None,
+            bundle_root: None,
         });
         p.publication_route = Some(PublicationRoute::parse("fotosintesis-a7k2m9").unwrap());
         p.migrate_to_v3().unwrap();
@@ -2044,7 +2499,7 @@ mod tests {
         s.create_project("one").unwrap();
         let first = s.append_user_message(&pid(), "hello", &[]).unwrap();
         let second = s
-            .append_assistant_message(&pid(), "hi there", MessageStatus::Ok, &[])
+            .append_assistant_message(&pid(), "hi there", MessageStatus::Ok, &[], None)
             .unwrap();
         let msgs = s.messages(&pid()).unwrap();
         assert_eq!(msgs.len(), 2);
@@ -2084,11 +2539,11 @@ mod tests {
             .unwrap();
         let missing_creation = CreationId::parse("0198e4a6-86d6-7c16-b4c4-3197b355cf11").unwrap();
         assert!(matches!(
-            s.append_assistant_message(&pid(), "x", MessageStatus::Ok, &[missing_creation]),
+            s.append_assistant_message(&pid(), "x", MessageStatus::Ok, &[missing_creation], None),
             Err(ProjectCoreError::MissingCreation(_))
         ));
         assert!(
-            s.append_assistant_message(&pid(), "y", MessageStatus::Ok, &[c.id])
+            s.append_assistant_message(&pid(), "y", MessageStatus::Ok, &[c.id], None)
                 .is_ok()
         );
     }
@@ -2107,6 +2562,10 @@ mod tests {
             revision: 1,
             parent_creation_id: None,
             created_at: time(),
+            lineage_id: None,
+            version_number: None,
+            is_current: None,
+            bundle_root: None,
         });
         p.messages.push(Message {
             id: MessageId::parse(MSG_IDS[0]).unwrap(),
@@ -2117,6 +2576,8 @@ mod tests {
             material_ids: vec![],
             creation_ids: vec![cid],
             turn_metrics: None,
+            turn_referent: None,
+            turn_id: None,
         });
         assert!(matches!(
             p.validate(),
@@ -2146,6 +2607,8 @@ mod tests {
             material_ids: vec![mid],
             creation_ids: vec![],
             turn_metrics: None,
+            turn_referent: None,
+            turn_id: None,
         });
         assert!(matches!(
             p.validate(),
@@ -2204,6 +2667,96 @@ mod tests {
         let msgs = s.messages(&pid()).unwrap();
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].material_ids.is_empty());
+    }
+    #[test]
+    fn turn_referent_round_trips_through_project_json() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let m = s.add_material(&pid(), material()).unwrap();
+        let msg = s
+            .append_user_message(&pid(), "listame los archivos", std::slice::from_ref(&m.id))
+            .unwrap();
+        let referent = TurnReferent::MaterialSet(MaterialSetReferent {
+            material_ids: vec![m.id.as_str().to_owned()],
+            source_names: vec!["material.txt".to_owned()],
+            origin_turn_id: msg.id.as_str().to_owned(),
+            produced_by: "inventory".to_owned(),
+        });
+        s.set_turn_referent(&pid(), &msg.id, referent.clone())
+            .unwrap();
+        let project = s.open_project(&pid()).unwrap();
+        assert_eq!(project.messages[0].turn_referent, Some(referent.clone()));
+        let raw = serde_json::to_string(&project).unwrap();
+        let reloaded = Project::from_json(&raw).unwrap();
+        assert_eq!(
+            reloaded.messages[0].turn_referent,
+            Some(referent),
+            "referent must survive serialize + from_json"
+        );
+    }
+    #[test]
+    fn theme_referent_round_trips_and_serializes_with_kind_tag() {
+        let referent = TurnReferent::ThemeSet(ThemeSetReferent {
+            theme_keys: vec![
+                "presente continuo".to_owned(),
+                "google workspace".to_owned(),
+            ],
+            display_labels: vec![
+                "presente continuo".to_owned(),
+                "google workspace".to_owned(),
+            ],
+            origin_turn_id: "turn-1".to_owned(),
+            source_names: vec!["reunion-a.md".to_owned()],
+        });
+        let raw = serde_json::to_string(&referent).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json["kind"], "themeSet");
+        assert_eq!(json["themeKeys"][0], "presente continuo");
+        let back: TurnReferent = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back, referent);
+    }
+    #[test]
+    fn legacy_messages_without_turn_referent_load_successfully() {
+        // A pre-referent project.json message (no turnReferent key) must load
+        // with turn_referent == None. Simulated by serializing an old-shaped
+        // message and re-parsing it through the current schema.
+        let mut p = Project::new(pid(), ProjectName::parse("one").unwrap(), time());
+        p.messages.push(Message {
+            id: MessageId::parse(MSG_IDS[0]).unwrap(),
+            role: MessageRole::User,
+            text: "listame los archivos".into(),
+            status: MessageStatus::Ok,
+            created_at: time(),
+            material_ids: vec![],
+            creation_ids: vec![],
+            turn_metrics: None,
+            turn_referent: None,
+            turn_id: None,
+        });
+        let value: serde_json::Value = serde_json::to_value(&p).unwrap();
+        let message = value["messages"][0].as_object().unwrap().clone();
+        assert!(
+            !message.contains_key("turnReferent"),
+            "None referents must not be serialized"
+        );
+        let raw = serde_json::to_string(&p).unwrap();
+        let reloaded = Project::from_json(&raw).unwrap();
+        assert_eq!(reloaded.messages[0].turn_referent, None);
+    }
+    #[test]
+    fn set_turn_referent_requires_a_user_message() {
+        let mut s = service();
+        s.create_project("one").unwrap();
+        let msg = s
+            .append_assistant_message(&pid(), "hola", MessageStatus::Ok, &[], None)
+            .unwrap();
+        let referent = TurnReferent::MaterialSet(MaterialSetReferent {
+            material_ids: vec![],
+            source_names: vec![],
+            origin_turn_id: msg.id.as_str().to_owned(),
+            produced_by: "inventory".to_owned(),
+        });
+        assert!(s.set_turn_referent(&pid(), &msg.id, referent).is_err());
     }
 }
 

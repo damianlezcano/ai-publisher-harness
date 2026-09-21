@@ -18,6 +18,10 @@ const creation = {
   byteSize: 1024,
   createdAt: "2026-08-28T15:00:00Z",
   revision: 1,
+  lineageId: "0198e4a6-86d6-7c16-b4c4-3197b355cf10",
+  versionNumber: 1,
+  isCurrent: true,
+  availableVersionIds: ["0198e4a6-86d6-7c16-b4c4-3197b355cf10"],
 };
 const creations = [creation];
 
@@ -93,6 +97,10 @@ describe("CreationsPanel", () => {
       byteSize: 256,
       createdAt: "2026-08-28T15:00:00Z",
       revision: 1,
+      lineageId: "0198e4a6-86d6-7c16-b4c4-3197b355cf11",
+      versionNumber: 1,
+      isCurrent: true,
+      availableVersionIds: ["0198e4a6-86d6-7c16-b4c4-3197b355cf11"],
     };
     invokeMock.mockResolvedValueOnce({
       contentType: "text/markdown",

@@ -23,6 +23,11 @@ export interface CreationView {
   byteSize: number;
   createdAt: string;
   revision: number;
+  lineageId: string;
+  versionNumber: number;
+  parentVersionId?: string | null;
+  isCurrent: boolean;
+  availableVersionIds: string[];
 }
 
 export interface MaterialImportResult {
@@ -54,7 +59,19 @@ export interface PreviewData {
 
 export interface PublicationView {
   state: "local" | "published";
+  /**
+   * Authoritative share URL when published. For a shared web lineage this is
+   * the immutable current-version URL (/{slug}/{current-version-id}/); for
+   * non-web publications it is the route root. Copy / Open / QR all consume
+   * exactly this value.
+   */
   publicUrl: string | null;
+  /** Version-history landing page URL (/{slug}/). */
+  rootUrl?: string | null;
+  /** Current-version alias URL (/{slug}/latest/). */
+  latestUrl?: string | null;
+  /** The immutable version id the share URL currently targets. */
+  currentVersionId?: string | null;
 }
 
 export interface TurnMetrics {
@@ -89,6 +106,23 @@ export interface TurnMetrics {
   exhaustiveCoverage: string | null;
   lexicalHits: number | null;
   semanticHits: number | null;
+  localMode: string | null;
+  /** Exact grounded source display names for this turn (never filesystem paths). */
+  sourceNames?: string[];
+}
+
+export interface ConversationUsageTotals {
+  provider: string | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
+  turnDurationMs: number | null;
+  source: string | null;
+  remoteCalls: number | null;
 }
 
 export interface MessageView {
@@ -100,6 +134,9 @@ export interface MessageView {
   materialIds: string[];
   creationIds: string[];
   turnMetrics?: TurnMetrics | null;
+  /** Durable id of the owning user turn (the user message id). Present on
+   * assistant messages; absent on user messages and legacy records. */
+  turnId?: string | null;
 }
 
 export interface ProjectView {
@@ -117,6 +154,7 @@ export interface AcceptedImportProgressView {
   operationId: string;
   state: string;
   agentState: string;
+  summaryRetryable?: boolean;
   total: number;
   copied: number;
   lexicalCompleted: number;
@@ -124,6 +162,16 @@ export interface AcceptedImportProgressView {
   failed: number;
   embeddingsCreated: number;
   embeddingsReused: number;
+  chunksTotal: number;
+  embeddingsTotal: number;
+  /** Fully usable materials for the active Knowledge embedding generation. */
+  materialsReady: number;
+  elapsedMs: number;
+  throughputEmbeddingsPerSec?: number | null;
+  /** True while the turn's post-embedding compact/generic per-item summary
+   * synthesis is running. Replaces the misleading "99% · N de N" import line
+   * with a truthful synthesis phase. */
+  synthesizing?: boolean;
 }
 
 export interface ConversationModelView {
@@ -237,6 +285,21 @@ export interface SessionLogEntry {
   message: string;
   usage?: SessionUsage | null;
   knowledge?: SessionKnowledgeMetrics | null;
+  promptContext?: PromptContextMetrics | null;
+}
+
+export interface PromptContextMetrics {
+  conversationId: string;
+  turnId: string;
+  userPromptEstTokens: number;
+  conversationHistoryEstTokens: number;
+  knowledgeContextEstTokens: number;
+  systemContextEstTokens: number;
+  /** Bounded Knowledge evidence entries serialized in the provider request. */
+  ragAttachmentCount: number;
+  rawAttachmentCount: number;
+  serializedRequestEstTokens: number;
+  freshSession: boolean;
 }
 
 export interface SessionUsage {
@@ -278,6 +341,7 @@ export interface SessionKnowledgeMetrics {
   exhaustiveCoverage?: string | null;
   lexicalHits?: number | null;
   semanticHits?: number | null;
+  localMode?: string | null;
 }
 
 export interface SummarizationReportView {

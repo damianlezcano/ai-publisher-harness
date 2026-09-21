@@ -1147,8 +1147,9 @@ fn pre_turn_interruption_resume_is_typed_no_turn_denial_not_a_generic_error() {
     assert_eq!(err.code, ErrorCode::RecoveryNoTurn);
 
     // The operation is never silently completed or fabricated into a turn; it
-    // stays surfaced as incomplete so the frontend can show the truthful no-turn
-    // state (and the person can re-send).
+    // is terminated cleanly so a later launch never re-fires a futile resume.
+    // The frontend shows the truthful no-turn state (and the person can
+    // re-send) without a permanent accepted/no_turn zombie.
     let view = reopened.open_project(&project.id).unwrap();
     let progress = view
         .accepted_import
@@ -1156,5 +1157,15 @@ fn pre_turn_interruption_resume_is_typed_no_turn_denial_not_a_generic_error() {
         .clone();
     assert_eq!(progress.operation_id, operation_id);
     assert_eq!(progress.state, "copying");
-    assert_eq!(progress.agent_state, "not_started");
+    assert_eq!(
+        progress.agent_state, "failed_terminal",
+        "pre-turn interruption must terminate cleanly, never stay not_started"
+    );
+
+    // A second resume of a terminated pre-turn operation stays a typed denial
+    // and never re-enters the resume pipeline.
+    let again = reopened
+        .resume_accepted_import_operation(&project.id, &operation_id)
+        .unwrap_err();
+    assert_eq!(again.code, ErrorCode::RecoveryNoTurn);
 }

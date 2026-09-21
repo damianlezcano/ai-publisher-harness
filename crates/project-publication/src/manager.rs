@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use project_core::{
-    CoreResult, Project, ProjectId, ProjectRepository, PublicationRoute as CoreRoute,
+    CoreResult, CreationId, CreationKind, CreationVisibility, Project, ProjectId,
+    ProjectRepository, PublicationRoute as CoreRoute,
 };
 use project_fs::{ProjectPublishRootProvider, PublicationSnapshot, PublicationSnapshotStore};
 use project_publisher::{
     LocalPublisher, LoopbackUrl, PublicationRoute as PublisherRoute, PublishedProject,
+    PublishedVersions,
 };
 
 use crate::error::{
@@ -23,13 +25,26 @@ pub enum UnpublishOutcome {
     AlreadyLocal,
 }
 
-/// Runtime publication view: identity, durable route, current loopback endpoint.
+/// Runtime publication view: identity, durable route, current loopback endpoint,
+/// and the public URLs derived in exactly one domain location.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Publication {
     pub project_id: ProjectId,
     pub route: CoreRoute,
     pub endpoint: String,
+    /// Authoritative share URL: the immutable current-version URL
+    /// (`/<slug>/<current-version-id>/`) when a web lineage is shared, else the
+    /// project root URL. Copy / Open / QR all consume exactly this value.
     pub public_url: Option<String>,
+    /// Version-history landing page URL (`/<slug>/`).
+    pub root_url: Option<String>,
+    /// Current-version alias URL (`/<slug>/latest/`).
+    pub latest_url: Option<String>,
+    /// The immutable version id the share URL currently targets (`None` for
+    /// non-web publications, which share the root URL).
+    pub current_version_id: Option<String>,
+    /// Number of exposed historical + current versions of the shared lineage.
+    pub version_count: usize,
 }
 
 /// Default tunnel for M3-compatible constructors: in-process, no cloudflared.
@@ -144,7 +159,7 @@ pub struct PublicationManager<
     publisher: Mutex<L>,
     entropy: E,
     tunnel: Mutex<T>,
-    published: Mutex<HashMap<ProjectId, CoreRoute>>,
+    published: Mutex<HashMap<ProjectId, PublishedEntry>>,
     lifecycle: Mutex<()>,
     project_locks: Mutex<HashMap<ProjectId, Arc<Mutex<()>>>>,
     stop_failed: Mutex<bool>,
@@ -234,7 +249,12 @@ where
         let (project, route, already_published) = self.load_and_allocate(project_id)?;
         self.snapshots.prepare(&project).map_err(from_core)?;
         let root = self.roots.publish_root(project_id).map_err(from_core)?;
-        let published_project = PublishedProject::new(to_publisher_route(&route)?, root);
+        let index = version_index(&project);
+        let published_project = PublishedProject::with_versions(
+            to_publisher_route(&route)?,
+            root,
+            index.versions.clone(),
+        );
 
         let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
         self.retry_pending_stop()?;
@@ -263,13 +283,20 @@ where
             return Err(error);
         }
 
-        let first_project = if already_published {
-            false
-        } else {
+        let first_project = {
             let mut published = self.published.lock().unwrap_or_else(|e| e.into_inner());
             let was_empty = published.is_empty();
-            published.insert(project_id.clone(), route.clone());
-            was_empty
+            // Always refresh the retained entry: a re-publish of an
+            // already-shared project may expose a newer current version on the
+            // same route, so the derived share/latest URLs must follow it.
+            published.insert(
+                project_id.clone(),
+                PublishedEntry {
+                    route: route.clone(),
+                    index: index.clone(),
+                },
+            );
+            !already_published && was_empty
         };
 
         if first_project && let Err(error) = self.engage_tunnel(&*publisher) {
@@ -298,6 +325,7 @@ where
         Ok(publication(
             project_id.clone(),
             route,
+            &index,
             &base,
             public_base.as_ref(),
         ))
@@ -311,7 +339,7 @@ where
             let published = self.published.lock().unwrap_or_else(|e| e.into_inner());
             match published.get(project_id) {
                 None => return Ok(UnpublishOutcome::AlreadyLocal),
-                Some(route) => route.clone(),
+                Some(entry) => entry.route.clone(),
             }
         };
 
@@ -340,12 +368,12 @@ where
     }
 
     pub fn list_published(&self) -> PublicationResult<Vec<Publication>> {
-        let snapshot: Vec<(ProjectId, CoreRoute)> = self
+        let snapshot: Vec<(ProjectId, PublishedEntry)> = self
             .published
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|(id, route)| (id.clone(), route.clone()))
+            .map(|(id, entry)| (id.clone(), entry.clone()))
             .collect();
         let base = self
             .publisher
@@ -358,7 +386,9 @@ where
         let public_base = self.public_base_url();
         let mut items: Vec<_> = snapshot
             .into_iter()
-            .map(|(id, route)| publication(id, route, &base, public_base.as_ref()))
+            .map(|(id, entry)| {
+                publication(id, entry.route, &entry.index, &base, public_base.as_ref())
+            })
             .collect();
         items.sort_by(|a, b| a.project_id.cmp(&b.project_id));
         Ok(items)
@@ -551,16 +581,90 @@ fn to_publisher_route(route: &CoreRoute) -> PublicationResult<PublisherRoute> {
     PublisherRoute::parse(route.as_str()).map_err(|_| PublicationError::RouteAllocation)
 }
 
+/// The exposed version index for a project together with whether the share
+/// URL targets an interactive (web) resource. Every version of every public
+/// lineage is exposed (historical versions stay reachable); the authoritative
+/// current is the current version of a shared web lineage, falling back to the
+/// first current creation for non-web (file/document) publications.
+#[derive(Clone, Debug)]
+struct VersionIndex {
+    versions: PublishedVersions,
+    current_is_web: bool,
+}
+
+/// Builds the exposed version index for a project: every version of every
+/// public lineage (historical versions stay reachable), with the authoritative
+/// current version of each lineage resolved from the persisted `is_current`
+/// flag.
+fn version_index(project: &Project) -> VersionIndex {
+    let public_lineages: HashSet<&CreationId> = project
+        .creations
+        .iter()
+        .filter(|c| c.visibility == CreationVisibility::Public)
+        .map(|c| c.lineage())
+        .collect();
+    let mut versions: Vec<String> = project
+        .creations
+        .iter()
+        .filter(|c| public_lineages.contains(c.lineage()))
+        .map(|c| c.id.as_str().to_owned())
+        .collect();
+    versions.sort();
+    let web_current = project.creations.iter().find(|c| {
+        public_lineages.contains(c.lineage()) && c.kind == CreationKind::Web && c.current()
+    });
+    let current_is_web = web_current.is_some();
+    let current = web_current.map(|c| c.id.as_str().to_owned()).or_else(|| {
+        project
+            .creations
+            .iter()
+            .find(|c| public_lineages.contains(c.lineage()) && c.current())
+            .map(|c| c.id.as_str().to_owned())
+    });
+    VersionIndex {
+        versions: PublishedVersions::new(current, versions),
+        current_is_web,
+    }
+}
+
+/// One published entry retained so `list_published`/status can rebuild the
+/// exact public URLs without re-reading project state.
+#[derive(Clone, Debug)]
+struct PublishedEntry {
+    route: CoreRoute,
+    index: VersionIndex,
+}
+
+/// Derives every public URL for a published project in one place. The
+/// authoritative share URL is the immutable current-version URL when the
+/// current version is an interactive web resource; otherwise it is the route
+/// root (materials landing), preserving non-web publication semantics.
 fn publication(
     project_id: ProjectId,
     route: CoreRoute,
+    index: &VersionIndex,
     base: &LoopbackUrl,
     public_base: Option<&PublicBaseUrl>,
 ) -> Publication {
+    let root_url = public_base.map(|base| base.join(route.as_str()));
+    let latest_url = public_base.map(|base| base.join(&format!("{}/latest", route.as_str())));
+    let current_version_id = index
+        .versions
+        .current
+        .clone()
+        .filter(|_| index.current_is_web);
+    let public_url = match (&current_version_id, &root_url) {
+        (Some(id), Some(root)) => Some(format!("{root}{id}/")),
+        (_, root) => root.clone(),
+    };
     Publication {
         project_id,
         endpoint: format!("{}{}/", base.as_str(), route.as_str()),
-        public_url: public_base.map(|base| base.join(route.as_str())),
+        public_url,
+        root_url,
+        latest_url,
+        current_version_id,
+        version_count: index.versions.versions.len(),
         route,
     }
 }

@@ -219,3 +219,65 @@ fn web_preview_unknown_token_close_is_unavailable() {
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::PreviewUnavailable);
 }
+
+/// Exact-version preview: "Abrir" on an old card must preview that exact
+/// version, never resolve to latest.
+#[test]
+fn web_preview_exact_version_is_served_for_each_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, engine) = app(tmp.path());
+    let p = app.create_project("P").unwrap();
+
+    // V1.
+    engine.set_artifacts(vec![Artifact {
+        path: "workspace/app/index.html".into(),
+        kind: ArtifactKind::Web,
+        byte_size: 1,
+        sha256: None,
+    }]);
+    let v1 = create_web_creation(
+        &app,
+        tmp.path(),
+        &p.id,
+        "app/index.html",
+        &[("index.html", b"<h1>V1</h1>")],
+    );
+
+    // V2 (css-only change).
+    engine.set_artifacts(vec![Artifact {
+        path: "workspace/app/estilos.css".into(),
+        kind: ArtifactKind::Other,
+        byte_size: 1,
+        sha256: None,
+    }]);
+    let workspace = tmp.path().join("projects").join(&p.id).join("workspace");
+    fs::write(workspace.join("app").join("index.html"), b"<h1>V1</h1>").unwrap();
+    fs::write(
+        workspace.join("app").join("estilos.css"),
+        b"body{color:blue}",
+    )
+    .unwrap();
+    let run = app.run_agent(&p.id, "cambiá el color", &[]).unwrap();
+    let v2 = run.registered_creation_ids[0].clone();
+    assert_ne!(v1, v2);
+
+    let fetch = |cid: &str| {
+        let web = app.preview_open_web(&p.id, cid).unwrap();
+        let resp = reqwest::blocking::get(format!("{}index.html", web.url)).unwrap();
+        app.preview_close(&web.token).unwrap();
+        resp.text().unwrap()
+    };
+    assert_eq!(fetch(&v1), "<h1>V1</h1>", "old card opens V1");
+    assert_eq!(
+        fetch(&v2),
+        "<h1>V1</h1>",
+        "V2 inherits V1 html and serves its own snapshot"
+    );
+    let v2_css = {
+        let web = app.preview_open_web(&p.id, &v2).unwrap();
+        let resp = reqwest::blocking::get(format!("{}estilos.css", web.url)).unwrap();
+        app.preview_close(&web.token).unwrap();
+        resp.text().unwrap()
+    };
+    assert_eq!(v2_css, "body{color:blue}");
+}

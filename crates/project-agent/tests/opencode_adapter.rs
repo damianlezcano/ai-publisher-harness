@@ -35,6 +35,7 @@ fn prompt() -> AgentPrompt {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     }
 }
 
@@ -130,6 +131,117 @@ fn open_session_posts_directory_and_returns_id() {
 }
 
 #[test]
+fn send_uses_ordinary_session_contract_without_directory_query() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let session = engine.open_session(&project()).expect("session");
+    engine.send(&session, &prompt()).expect("completed task");
+
+    assert_eq!(
+        server.prompt_async_paths().len(),
+        1,
+        "exactly one prompt_async per ordinary chat turn"
+    );
+    let prompt_path = server.prompt_async_paths().first().unwrap().clone();
+    assert!(prompt_path.contains("/prompt_async"));
+    assert!(
+        !prompt_path.contains("directory="),
+        "ordinary chat prompt_async must not carry ?directory=: {prompt_path}"
+    );
+    for path in server
+        .message_paths()
+        .iter()
+        .chain(server.session_get_paths().iter())
+    {
+        assert!(
+            !path.contains("directory="),
+            "ordinary chat endpoint must not carry ?directory=: {path}"
+        );
+    }
+    assert!(!server.message_paths().is_empty());
+}
+
+#[test]
+fn fresh_sessions_never_reuse_the_project_conversation_cache() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+
+    let cached = engine.open_session(&project()).expect("cached session");
+    assert_eq!(
+        engine.open_session(&project()).expect("cached reuse").id,
+        cached.id,
+        "ordinary chat retains its established project session"
+    );
+
+    let first = engine
+        .open_fresh_session(&project())
+        .expect("fresh session");
+    let second = engine
+        .open_fresh_session(&project())
+        .expect("another fresh session");
+    assert_ne!(first.id, cached.id);
+    assert_ne!(second.id, first.id);
+    assert_eq!(server.created_session_ids().len(), 3);
+    assert_eq!(
+        engine
+            .open_session(&project())
+            .expect("cached session survives")
+            .id,
+        cached.id,
+        "a Knowledge QA scratch session must not replace ordinary-chat state"
+    );
+}
+
+#[test]
+fn ephemeral_send_failure_does_not_drop_the_conversation_cache() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let cached = engine.open_session(&project()).expect("cached");
+    let fresh = engine.open_fresh_session(&project()).expect("fresh");
+    server.set_status_sequence(&["failed"]);
+    assert!(engine.send(&fresh, &prompt()).is_err());
+    assert_eq!(
+        engine.open_session(&project()).expect("still cached").id,
+        cached.id
+    );
+}
+
+#[test]
+fn conversational_send_failure_invalidates_the_cached_session() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let cached = engine.open_session(&project()).expect("cached");
+    server.set_status_sequence(&["failed"]);
+    assert!(engine.send(&cached, &prompt()).is_err());
+    let next = engine
+        .open_session(&project())
+        .expect("replacement session");
+    assert_ne!(next.id, cached.id);
+}
+
+#[test]
+fn invalidate_cached_session_drops_reusable_conversational_id() {
+    let server = FakeServer::start();
+    let engine = engine_for(&server);
+    engine.ensure_ready().expect("ready");
+    let cached = engine.open_session(&project()).expect("cached");
+    engine.invalidate_cached_session(&project().project_id);
+    let next = engine.open_session(&project()).expect("rotated");
+    assert_ne!(next.id, cached.id);
+    assert_eq!(
+        engine
+            .open_session(&project())
+            .expect("reuse after rotate")
+            .id,
+        next.id
+    );
+}
+
+#[test]
 fn open_session_error_is_session_creation_failed() {
     let server = FakeServer::start();
     server.fail_session();
@@ -175,6 +287,7 @@ fn send_preserves_quoted_and_special_text_exactly_in_request_body() {
             text: text.to_owned(),
             model: None,
             knowledge: None,
+            conversation_context: None,
         };
         let task = engine.send(&session, &req).expect("send");
         assert_eq!(task.status, TaskStatus::Completed);

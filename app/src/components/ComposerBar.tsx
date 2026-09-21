@@ -19,6 +19,8 @@ export interface ComposerBarProps {
   attachmentIds?: string[];
   attachmentNames?: Map<string, StagedAttachmentView>;
   onAttachmentIdsChange?: (ids: string[]) => void;
+  prompt?: string;
+  onPromptChange?: (value: string) => void;
 }
 
 const TEXTAREA_MAX_HEIGHT_PX = 150;
@@ -44,8 +46,10 @@ export default function ComposerBar({
   attachmentIds: attachmentIdsProp,
   attachmentNames,
   onAttachmentIdsChange,
+  prompt: promptProp,
+  onPromptChange,
 }: ComposerBarProps) {
-  const [prompt, setPrompt] = useState("");
+  const [internalPrompt, setInternalPrompt] = useState("");
   const [internalAttachmentIds, setInternalAttachmentIds] = useState<string[]>([]);
   const [internalAttachmentNames, setInternalAttachmentNames] = useState<
     Map<string, StagedAttachmentView>
@@ -56,12 +60,23 @@ export default function ComposerBar({
   const [pasteBusy, setPasteBusy] = useState(false);
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
 
-  const controlled = attachmentIdsProp !== undefined;
-  const attachmentIds = controlled ? attachmentIdsProp : internalAttachmentIds;
+  const controlled = promptProp !== undefined && onPromptChange !== undefined;
+  const prompt = controlled ? promptProp : internalPrompt;
+
+  function setPrompt(value: string) {
+    if (controlled) {
+      onPromptChange(value);
+    } else {
+      setInternalPrompt(value);
+    }
+  }
+
+  const controlledAttachments = attachmentIdsProp !== undefined;
+  const attachmentIds = controlledAttachments ? attachmentIdsProp : internalAttachmentIds;
 
   function setAttachmentIds(next: string[] | ((prev: string[]) => string[])) {
     const resolved = typeof next === "function" ? next(attachmentIds) : next;
-    if (controlled) {
+    if (controlledAttachments) {
       onAttachmentIdsChange?.(resolved);
     } else {
       setInternalAttachmentIds(resolved);
@@ -167,6 +182,7 @@ export default function ComposerBar({
       const image = stagedImages.get(id);
       return image ? [image] : [];
     });
+    const submitted = prompt;
     setPrompt("");
     try {
       if (images.length > 0) {
@@ -175,16 +191,19 @@ export default function ComposerBar({
         await onSend(text, ids);
       }
       // `agent_send` resolves only after the user turn is durably accepted.
-      // Keep the pending selection on a pre-acceptance failure so the person can
-      // retry. Once accepted, Materials are already durable project state; these
-      // ids must no longer describe attachments for the next turn.
+      // Clear the prompt optimistically; keep the pending selection on a
+      // pre-acceptance failure so the person can retry. Once accepted,
+      // Materials are already durable project state; these ids must no longer
+      // describe attachments for the next turn.
       setAttachmentIds([]);
       setStagedImages(new Map());
       setInternalAttachmentNames(new Map());
       setAttachmentsExpanded(false);
     } catch {
       // WorkspaceView owns the user-facing failure and retry state. The pending
-      // attachment selection intentionally remains untouched here.
+      // attachment selection intentionally remains untouched here. Restore the
+      // draft text too so a failed send never silently destroys it.
+      setPrompt(submitted);
     }
   }
 

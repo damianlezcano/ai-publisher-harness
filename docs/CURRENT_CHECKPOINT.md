@@ -1,5 +1,92 @@
 # Current Checkpoint
 
+## KNOWLEDGE ANSWER GROUNDING FIX (2026-09-20)
+
+- **Scope:** minimal production prompt contract after a live A/B **proved** Thematic/Exhaustive misgrounding. Not a new architectural phase. Not classifier, retrieval, session, tools, or scratch-permission work.
+- **ROOT CAUSE OF KNOWLEDGE ANSWER MISGROUNDING: PROVEN** — CorpusThematic/CorpusExhaustive built valid evidence and used ephemeral Knowledge sessions, but the answer prompt did not override the OpenCode build-agent filesystem/workspace instruction. Same evidence/session/model/agent/cwd/tools/human prompt: current contract → `FILESYSTEM_MISGROUNDED`; identical turn plus Knowledge grounding → `GROUNDED`; current contract again → `FILESYSTEM_MISGROUNDED`.
+- **Fix:** `knowledge_answer_grounding_instruction()` in `project-agent` `augment_prompt`, applied only when serialized Knowledge answer context has `retrieval_mode` `normal` / `thematic` / `exhaustive`. OrdinaryChat, Creation, classifier/K6/PerItem scratch are unchanged. `<knowledge_evidence trust="untrusted">` is preserved. Still one answer call per turn.
+- **Contract:** evidence is the documentary source; an empty cwd is not an empty Knowledge corpus; use `source_name`/`source_label` when present; do not invent beyond evidence; do not force a positive over an authorized exhaustive negative.
+
+## SCRATCH PERMISSION FIX — TOOL-SAFE TEXT-PRODUCING PROFILE (2026-09-19)
+
+- **Scope:** minimal correction after the live A/B that **proved** empty scratch assistants. Not a new architectural phase. Not Fases 1–6. Not Creation. Not CompletedWithoutOutput removal.
+- **ROOT CAUSE OF EMPTY SCRATCH ASSISTANT: PROVEN** — scratch `POST /session` permission profile with global `permission:"*"` `action:"deny"` on OpenCode 1.18.25. Same directory/prompt/model/agent/fresh session with ordinary `external_directory` deny produces text; the `*` deny produces `parts=[]` `text_len=0` `finish=None` `error=false`. D → E → D was good → empty → good.
+- **Also proven:** per-tool `"*"` denies (no global `*`) still empty the model `activeTools` via `Permission.disabled` (`pattern === "*"` exact) and yield the same empty assistant.
+- **Fix:** `scratch_tool_free_permission` now denies builtin coding tools with pattern `"**"` (execution deny, tools stay visible) and keeps `external_directory` `"*"` deny. No global `*` rule. Classifier and summarizer still share the helper. `CompletedWithoutOutput` remains the fail-safe.
+- **Live:** control A text; candidate B (`*` per-tool) empty; candidate C (`**` + `external_directory`) text `finish=stop`. Post-implement confirmation uses the helper.
+
+## PHASE 6 — ARCHITECTURAL CONSOLIDATION (2026-09-19)
+
+- **Scope:** lock Phases 1–5 as one coherent model. Not a redesign. Not an independent integrated review. Not scratch empty-assistant root cause. Not session_id unification. Not K6/PerItem/classifier internals.
+- **Found:** routing, session frontiers, and OrdinaryChat already matched the Phase 1–5 contracts in code. The remaining contradictions were documentary (`docs/ARCHITECTURE_AUDIT_CONVERSATION_OPENCODE.md` still described OrdinaryChat hybrid default and thematic/exhaustive conversational sessions) plus missing cross-engine regression coverage.
+- **Decision:** keep the Phase 1–5 architecture. Treat historical audit claims as a 2026-09-18 snapshot. Protect invariants with tests rather than new abstractions.
+- **Change:** session-policy comment (evidence package, not reclassification); routing/session/provider tables in `docs/ARCHITECTURE.md`; historical banner on the audit; cross-engine and invariant tests (OrdinaryChat hard-no Knowledge, fallback exclusive, clamp, session roles, thematic follow-up → OrdinaryChat, inventory → K6 → OrdinaryChat, NormalSemantic → Exhaustive → PerItem → OrdinaryChat).
+- **Not done:** scratch empty-assistant root cause (`ROOT CAUSE OF EMPTY SCRATCH ASSISTANT: NOT YET PROVEN`), live classifier eval, broader product telemetry UI, independent integrated review.
+
+## PHASE 5 — CONTINUITY, TRANSITIONS, AND LIFECYCLE (2026-09-19)
+
+- **Scope:** multi-turn alternation after Phases 1–4. Not Phase 6. Not scratch empty-assistant root cause. Not session_id unification. Not classifier/K6/PerItem internals.
+- **Found:** ephemeral Knowledge already used `open_fresh_session` plus bounded EducAI history. The cancel map was restored only after a successful ephemeral `send`; a failed ephemeral `send` left abort targeting the dead ephemeral session. `conversation_context` already skipped failed turns and stripped evidence markup.
+- **Decision:** keep per-turn routing. Restore the conversational cancel target even when ephemeral `send` fails. Reconstruct follow-up continuity from bounded visible EducAI history + referents + this-turn retrieval. Do not persist OpenCode session ids.
+- **Change:** `EphemeralCancelRestore` Drop guard; `[lifecycle]` / prompt-context structural fields (`session_role`, `session_reused`, conversation_context counts); UTF-8-safe context budget; multi-turn tests for OrdinaryChat↔Knowledge, follow-ups, attachments, material scope A→B, cancel/failure, reopen, model pin per turn, inventory→PerItem, exhaustive local→OrdinaryChat.
+- **Not done (Phase 6):** scratch empty-assistant root cause (`ROOT CAUSE OF EMPTY SCRATCH ASSISTANT: NOT YET PROVEN`), live classifier eval, broader product telemetry UI.
+
+## PHASE 4 — OPENCODE SESSION FRONTIERS (2026-09-18)
+
+- **Scope:** session responsibility after Phases 1–3. Not Phase 5. Not scratch empty-completion root cause. Not session_id unification. Not classifier/K6/PerItem internals. Not OrdinaryChat Phase 2 contract.
+- **Found:** `NormalSemantic` already used `open_fresh_session` and did not overwrite the conversational cache. Continuity of pronouns such as “eso” did **not** come from OpenCode (EducAI history was not injected; `resolve_followup` does not bind a bare “eso”). `CorpusExhaustive` / `CorpusThematic` LLM synthesis used `open_session`, so serialized evidence could persist on the conversational transcript. A failed ephemeral `send` also dropped the conversational cache because `OpenCodeAgentEngine::send` keyed invalidation by `project_id`.
+- **Decision:** keep ephemeral sessions for any Knowledge answer that serializes evidence (`normal` / `exhaustive` / `thematic`). Reconstruct bounded visible EducAI turns into that ephemeral prompt. OrdinaryChat and creation stay on `open_session`. Classifier / K6 / PerItem stay scratch.
+- **Change:** `knowledge_uses_ephemeral_session`; bounded `<conversation_context>`; cancel map restored after an ephemeral turn; conversational cache survives ephemeral send failure.
+- **Not done (Phase 5):** scratch empty-assistant root cause, live classifier eval, broader session observability.
+
+## PHASE 3 — INTENT RESOLUTION PRECEDENCE (2026-09-18)
+
+- **Scope:** consolidate follow-up / creation pre-gates, semantic classifier, deterministic fallback, clamps, and `BoundRoute`. Not Phase 4. Not session/scratch/K6/PerItem internals.
+- **Found:** the live order already matched the desired precedence. Two seams could still compete with a valid semantic decision: (1) `resolve_intent_with` mapped classifier `Err` onto `DeterministicAdapter` with `DeterministicBypass` provenance; (2) `clamp_summary_depth` re-ran local summary wording detectors for every post-classifier turn.
+- **Change:** fallback is exclusive replacement (`SemanticFallback` provenance, one delegate call). The compact/K6 clamp runs only on a trusted semantic `WholeCorpusSummary` / `PerSourceSummary`. Routing telemetry adds `classifier_confidence`, `fallback_used`, `fallback_reason`, `pre_gate_used`, `clamp_applied`, `resolved_intent`, `uses_knowledge` without logging prompts.
+- **Not done (Phase 4):** NormalSemantic session design, scratch empty-completion root cause, session_id unification, live classifier eval.
+
+## PHASE 2 — ORDINARYCHAT IS A HARD NO-KNOWLEDGE TURN (2026-09-18)
+
+- **Scope:** bounded Phase 2 correction. Not Phase 3, not classifier/should_classify, not K6/PerItem/scratch, not NormalSemantic session redesign.
+- **Problem:** after Phase 1, OrdinaryChat skipped `apply_route` preparation, but `prepare_knowledge_context` still defaulted to hybrid search for any non-exhaustive/thematic/inventory intent, and leftover `AgentRunInputs.knowledge` could still serialize or open a fresh RAG session.
+- **Change:** `Intent::OrdinaryChat` is the execution source of truth. `apply_route` clears Knowledge fields and records `knowledge_used=false retrieval_mode=none query_embeddings=0`. `prepare_knowledge_context` returns immediately when the route does not use Knowledge (before sqlite/hybrid/embeddings). `dispatch_message_run` / `send_message_run` / `run_agent_with_inputs` strip leaked context. OrdinaryChat uses `open_session`, not `open_fresh_session`.
+- **Not done (Phase 3):** NormalSemantic session design, scratch empty-completion root cause, session_id unification.
+
+## PHASE 1 REWORK — SEMANTIC CLASSIFIER IS THE AMBIGUOUS-INTENT AUTHORITY (2026-09-18)
+
+- **Scope:** bounded Phase 1 correction. Not Phase 2, not K6/PerItem/scratch/session_id.
+- **Problem:** the first Phase 1 gate still used linguistic helpers (`has_open_question_lead` / `OPEN_QUESTION_WORDS`) to skip the semantic classifier or locally force `NormalSemantic`, which is language-fragile.
+- **Change:** `should_classify` is structural (`knowledge_may_apply`: persisted index OR current-turn attachments OR prior referent). Ambiguous wording with Knowledge available consults the LLM classifier, which may return `OrdinaryChat`. Deterministic catch-all is OrdinaryChat, not open-question → NormalSemantic. Helpers remain for retrieval internals only. Telemetry still records `knowledge_available`, `knowledge_needed_for_turn`, `classifier_invoked`.
+- **Not done (Phase 2):** full OrdinaryChat contract against embeddings/RAG leftovers.
+
+## SCRATCH-COMPLETION QUIESCENCE FALLBACK — OPENCODE 1.18.25 FINISH-ABSENT COMPLETION (2026-09-17)
+
+- **Objective:** fix the real OpenCode 1.18.25 scratch-session completion incompatibility proven by the human AppImage trace. Both the classifier and summarizer scratch sessions can contain a complete, correctly parent-correlated assistant text while OpenCode exposes `finish=None`, `time_completed=false`, `/session/status` absent, `error_present=false`, `parent_match=true`, `text_present=true`, stable non-empty text. EducAI previously waited for `finish=="stop"`, then timed out (classifier ~30s, summarizer ~120s, `timeout_reason=finish_stop_missing`). This is NOT an LLM connectivity / Big Pickle / PerItemBatchAggregate / K6 / embedding / prompt-size failure.
+- **Fix (shared layer, conservative):** `project-opencode::messages` gains `TerminalSource::StableText`, `scratch_text_candidate` (extracts the newest relevant assistant that is non-stale, parent-correlated, error-free, finish-absent, tool-free, and text-bearing), and a stateful `ScratchCompletionTracker` (tracks message id / parent id / text length / in-memory-only content hash / part types; resets on any change). Acceptance requires BOTH `SCRATCH_MIN_STABLE_POLLS=5` identical observations AND `SCRATCH_MIN_STABLE_DURATION=1s`. Explicit terminal/error signals remain authoritative (error wins; `stop`/`length`/`content-filter` unchanged). The fallback is scoped to scratch completion only; `project-agent` normal chat keeps its stricter `finish=="stop"` predicate.
+- **Streaming safety:** text that appears once, grows, or stays stable for insufficient polls/duration never finishes; a changed fingerprint (including same-length content change via the FNV-1a hash) resets the window; a later provider error or `finish` wins on the next poll; tool-call states and foreign/stale assistants cannot satisfy stability.
+- **Telemetry:** the summarizer/classifier emit `terminal_source=stable_text`, `stable_poll_count`, `stable_elapsed_ms`, `finish_present`, `status_present`, `assistant_message_seen` (structural only, never content). `finish_stop_missing` is no longer emitted when a valid quiescent completion was accepted.
+- **Tests:** `messages.rs` quiescence unit matrix (single observation / growing text / insufficient duration / enough polls+duration / same-length content change / reset); exact human-trace regression (`summarize_accepts_quiescent_finish_absent_assistant_without_120s_timeout`) and classifier equivalent (`classifies_quiescent_finish_absent_assistant_without_timeout`); production seams for compact one-file and multi-file (`terminal_source=stable_text`, `items_generated` correct), K6 one-document, and classifier valid text. No existing test was weakened.
+- **Validation:** pending (see gate run below).
+
+## SHARED OPENCODE TERMINAL DETECTOR HARDENING — ERROR PRECEDENCE + SAFE TERMINAL POLICY (2026-09-17)
+
+- **Objective:** harden the shared `project_opencode::messages::detect_terminal_assistant` terminal detector after an independent Grok 4.6 Medium review rejected the prior broadened implementation. A HIGH-severity error-precedence bug let a provider error on the newest relevant assistant become a successful summary (same-row `info.error` + `stop`/`length`/`content-filter` + text, or a newer error walking past to an older `stop`). Not a re-architecture: narrowly scoped correction of terminal semantics.
+- **Corrected precedence (absolute):** (1) **error wins** — `info.error` or `finish == "error"` on the newest relevant assistant returns a terminal failure immediately (before text-success evaluation and before scanning older messages; older success can never override newer failure); (2) `finish == "stop"` with non-empty text is the only normal success; (3) `finish == "length"` is terminal but truncated (`truncated = true`, no text, surfaced as `output_truncated`, never presented as complete); (4) `finish == "content-filter"` is a terminal failure (`content_filter`, never success); (5) `tool-calls`/`unknown`/absent finish/`time.completed` are non-terminal (poll keeps waiting, then a bounded timeout). `time.completed` is no longer an autonomous success fallback (not proven safe for OpenCode 1.18.25).
+- **Classifier:** `classifier/opencode.rs` now honors `terminal_source`/`provider_error` and falls back deterministically with a new `ClassifierFallbackReason::ProviderError`; it never accepts partial/older classifier content.
+- **Agent/chat:** unchanged. `project-agent/src/opencode.rs` keeps its own stricter `finish == "stop"` predicate (it is not subject to the masking bug because it never scans past the newest assistant); docs no longer claim total centralization.
+- **Tests:** `messages.rs` unit matrix covers the full failure surface (stop/length/content-filter/tool-calls/unknown/time.completed/error precedence/same-row error+terminal/newest-error-beats-older-stop/stale/foreign-parent/missing-parent/empty-text/envelope/json-parts/content-fallback). Production seams strengthened: compact provider-error/length/content-filter never fake success; K6 provider-error never becomes a document success.
+- **Validation:** pending (see gate run below).
+
+## SHARED OPENCODE COMPLETION-ADAPTER REGRESSION FIX — CENTRALIZED PARSER + STRUCTURAL TELEMETRY (2026-09-17)
+
+- **Objective:** fix the cross-cutting `finish_stop_missing` regression observed on BOTH the compact PerItemBatchAggregate path and the deep SelectedPerSource/K6 path (each remote document session waited the full 120s `SUMMARY_TASK_TIMEOUT`). Not a PerItemBatchAggregate redesign and not a K6 redesign.
+- **Root cause:** the terminal-completion detection was duplicated across three files (`project-app/src/summarize.rs`, `project-app/src/classifier/opencode.rs`, `project-agent/src/opencode.rs`) and each accepted only `info.finish == "stop"` as terminal. OpenCode 1.18.25's `finish` is an optional string whose terminal set also includes `"length"` and `"content-filter"`, and whose completion is independently marked by `info.time.completed`. A provider error (`info.error`) was indistinguishable from a timeout. The narrow condition made the human AppImage poll run out the 120s budget.
+- **Fix (shared layer):** new `project-opencode::messages` module centralizes the message-list/completion parser (`session_messages`, `message_role`/`message_id`/`parent_message_id`/`assistant_finish`/`message_text`/`message_time_completed`/`message_error`, and `detect_terminal_assistant` returning a structural `TerminalDetection`). Terminal = `finish` in `{"stop","length","content-filter"}` (with non-empty text) or `finish` absent with `time.completed` set; `"tool-calls"` and streaming remain non-terminal; a provider error surfaces as `provider_error` (never success). The summarizer, classifier, and agent primitives all delegate to this one parser.
+- **Telemetry:** the summarizer now emits `terminal_source`, `observed_finish`, `assistant_message_seen`, and `terminal_detected` alongside the historical `finish=stop` marker, and a `timeout_reason=provider_error` line on provider errors. No prompt/assistant/secret bodies are logged.
+- **Tests:** `project-opencode::messages` unit tests (stop/length/time.completed/streaming/tool-calls/error/envelope/newest-stop selection); two production seams against the real `OpenCodeRemoteSummarizer` + FakeServer — `compact_per_item_production_seam_one_ready_material` (1 generated slot, `items_generated=1 items_failed=0`, no K6, no timeout, one session) and `k6_selected_per_source_production_seam_one_ready_material` (document node completes, `finish=stop`, no `finish_stop_missing`).
+- **Validation:** `cargo fmt --all -- --check` PASS; `cargo clippy --workspace --all-targets -- -D warnings` PASS; `cargo test --workspace` PASS; frontend format/lint/typecheck/test (373) / `pnpm --dir app build` PASS; `git diff --check` PASS; `scripts/test-distribution-contracts` PASS; `CI=true ./scripts/verify` PASS. No AppImage built/committed; no push.
+
 ## FRESH FEDORA APPIMAGE FROM PROVENANCE-FIX HEAD — ALL GATES GREEN (2026-09-09)
 
 - **Starting/ending HEAD:** `6a5d58cb9cabc93e481fd1d5642a1e89c7db2cf1` `fix(knowledge): cite only selected supporting evidence as Fuentes` (source-provenance correction; independently reviewed, **REVIEW=APPROVE**). Working tree clean except untracked local `opencode.json` (not committed). AppImage **not committed**; only this docs checkpoint commit follows the artifact.

@@ -32,7 +32,7 @@ for file in \
   require_file "$file"
 done
 
-for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package packaging/linux/stage-onnxruntime-appdir; do
+for script in scripts/bootstrap scripts/verify scripts/agent-launch scripts/test-agent-launch scripts/check-session-budget scripts/test-session-budget scripts/fetch-sidecars scripts/check-appimage-glibc scripts/check-appimage-onnxruntime scripts/test-distribution-contracts scripts/package scripts/prepare-packaging-tools scripts/test-appimage-fallback packaging/linux/stage-onnxruntime-appdir packaging/linux/construct-appdir; do
   [[ -x "$script" ]] || fail "script is not executable: $script"
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
@@ -253,6 +253,9 @@ fi
 
 printf 'verify: ./scripts/test-distribution-contracts\n'
 ./scripts/test-distribution-contracts
+
+printf 'verify: ./scripts/test-appimage-fallback\n'
+./scripts/test-appimage-fallback
 
 m10_version='0.1.0'
 

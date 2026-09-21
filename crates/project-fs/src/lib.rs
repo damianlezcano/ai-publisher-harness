@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod creation_snapshot;
 pub mod publication_snapshot;
 pub mod publish_root;
 pub use publication_snapshot::{PublicationSnapshot, PublicationSnapshotStore, SnapshotFault};
@@ -771,6 +772,41 @@ impl ProjectContentStore for FilesystemProjectContentStore {
             relative_path: relative,
             byte_size: content.bytes.len() as u64,
         })
+    }
+
+    fn store_creation_version(
+        &mut self,
+        p: &ProjectId,
+        c: &CreationId,
+        base: Option<&Creation>,
+        content: &project_core::CreationVersionContent,
+    ) -> CoreResult<StoredCreation> {
+        project_core::CreationId::parse(c.as_str())?;
+        let canon_project = canon_project_dir(&self.base, p)?;
+        let project_dir = self.project_dir(p);
+        let outputs_dir = project_dir.join("outputs");
+        reject_symlink_path(&outputs_dir, &self.base)?;
+        let canon_outputs =
+            fs::canonicalize(&outputs_dir).map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        if !canon_outputs.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        if let Some(base) = base {
+            enforce_path_containment(&base.relative_path, "outputs", base.id.as_str())?;
+        }
+        creation_snapshot::build_version_snapshot(&canon_project, &canon_outputs, c, base, content)
+    }
+
+    fn recover_stale_creation_staging(&mut self, p: &ProjectId) -> CoreResult<()> {
+        let canon_project = canon_project_dir(&self.base, p)?;
+        let outputs_dir = self.project_dir(p).join("outputs");
+        reject_symlink_path(&outputs_dir, &self.base)?;
+        let canon_outputs =
+            fs::canonicalize(&outputs_dir).map_err(|_| ProjectCoreError::StorageUnavailable)?;
+        if !canon_outputs.starts_with(&canon_project) {
+            return Err(ProjectCoreError::PathEscape);
+        }
+        creation_snapshot::recover_stale_staging(&canon_project, &canon_outputs)
     }
 
     fn read_creation(&self, p: &ProjectId, c: &Creation) -> CoreResult<Vec<u8>> {

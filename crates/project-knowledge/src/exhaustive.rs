@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    EmbeddingProvider, HybridMatchSignals, HybridSearchResult, KnowledgeError, Provenance, Result,
-    SemanticSearchResult,
+    EmbeddingProvider, HybridMatchSignals, HybridSearchResult, InventorySort, KnowledgeError,
+    MaterialIndexState, Provenance, Result, SemanticSearchResult,
 };
 
 const SEMANTIC_EXPANSION_LIMIT: usize = 40;
@@ -23,6 +23,9 @@ pub enum RetrievalMode {
     #[default]
     Normal,
     Exhaustive,
+    /// Corpus-wide thematic synthesis: a distinct behavior from ordinary
+    /// top-k semantic retrieval and from concrete presence/inventory scanning.
+    Thematic,
 }
 
 impl RetrievalMode {
@@ -30,6 +33,7 @@ impl RetrievalMode {
         match self {
             Self::Normal => "normal",
             Self::Exhaustive => "exhaustive",
+            Self::Thematic => "thematic",
         }
     }
 }
@@ -79,6 +83,68 @@ impl crate::KnowledgeStore {
         let stats = self.corpus_stats()?;
         let eligible_materials = stats.material_count;
         let uninspectable = stats.pending + stats.failed + stats.unsupported;
+        self.exhaustive_presence_search_inner(
+            query,
+            terms,
+            provider,
+            None,
+            eligible_materials,
+            uninspectable,
+            stats.ready,
+        )
+    }
+
+    /// Inspects only the persisted materials named by `material_scope` (a
+    /// contextual follow-up over an explicit previous MaterialSet). Coverage is
+    /// complete only when every scoped material was READY and inspected; scoped
+    /// materials that are pending/failed/unsupported keep coverage incomplete so
+    /// a global negative can never be claimed over a reduced scope.
+    pub fn exhaustive_presence_search_scoped(
+        &self,
+        query: &str,
+        terms: &[String],
+        provider: Option<&mut dyn EmbeddingProvider>,
+        material_scope: &[String],
+    ) -> Result<ExhaustiveSearchReport> {
+        let scope: BTreeSet<String> = material_scope.iter().cloned().collect();
+        if scope.is_empty() {
+            return Ok(ExhaustiveSearchReport {
+                coverage: ExhaustiveCoverage::Complete,
+                eligible_materials: 0,
+                ..ExhaustiveSearchReport::default()
+            });
+        }
+        let ready_snapshot =
+            self.inventory_snapshot(Some(MaterialIndexState::Ready), InventorySort::Unsorted)?;
+        let ready_in_scope: BTreeSet<String> = ready_snapshot
+            .iter()
+            .filter(|record| scope.contains(&record.material_id))
+            .map(|record| record.material_id.clone())
+            .collect();
+        let eligible_materials = ready_in_scope.len();
+        let uninspectable = scope.len().saturating_sub(eligible_materials);
+        self.exhaustive_presence_search_inner(
+            query,
+            terms,
+            provider,
+            Some(&ready_in_scope),
+            eligible_materials,
+            uninspectable,
+            eligible_materials,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn exhaustive_presence_search_inner(
+        &self,
+        query: &str,
+        terms: &[String],
+        provider: Option<&mut dyn EmbeddingProvider>,
+        material_scope: Option<&BTreeSet<String>>,
+        eligible_materials: usize,
+        uninspectable: usize,
+        ready_target: usize,
+    ) -> Result<ExhaustiveSearchReport> {
         let needles: Vec<String> = terms
             .iter()
             .map(|term| normalize_text(term))
@@ -123,6 +189,9 @@ impl crate::KnowledgeStore {
         let mut lexical_by_chunk = BTreeMap::<String, HybridSearchResult>::new();
         for row in rows {
             let chunk = row?;
+            if material_scope.is_some_and(|scope| !scope.contains(&chunk.source_id)) {
+                continue;
+            }
             chunks_inspected += 1;
             inspected_materials.insert(chunk.source_id.clone());
             if needles.is_empty() {
@@ -148,6 +217,9 @@ impl crate::KnowledgeStore {
                 Ok(results) => {
                     for result in results {
                         if result.similarity < SEMANTIC_RELATEDNESS_FLOOR {
+                            continue;
+                        }
+                        if material_scope.is_some_and(|scope| !scope.contains(&result.source_id)) {
                             continue;
                         }
                         if lexical_by_chunk.contains_key(&result.chunk_id) {
@@ -190,8 +262,8 @@ impl crate::KnowledgeStore {
 
         let materials_inspected = inspected_materials.len();
         let coverage = if uninspectable == 0
-            && materials_inspected == stats.ready
-            && (stats.ready > 0 || eligible_materials == 0)
+            && materials_inspected == ready_target
+            && (ready_target > 0 || eligible_materials == 0)
         {
             ExhaustiveCoverage::Complete
         } else {
@@ -470,5 +542,186 @@ mod tests {
             "semantic near-miss must remain distinct from lexical evidence: {:?}",
             report.candidates
         );
+    }
+
+    #[test]
+    fn multi_word_phrase_matches_case_and_punctuation_variants() {
+        let (_temp, mut store) = store();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db20", "a.md"),
+                b"Students Depend on the schedule for the exam.\n",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db21", "b.md"),
+                b"We noted 'depend on,' in the margin.\n",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db22", "c.md"),
+                b"These rules depend on. Nothing else.\n",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db23", "d.md"),
+                b"La dependencia entre variables es otro tema.\n",
+            )
+            .unwrap();
+        let report = store
+            .exhaustive_presence_search("depend on", &["depend on".into()], None)
+            .unwrap();
+        assert_eq!(report.coverage, ExhaustiveCoverage::Complete);
+        assert_eq!(report.lexical_hits, 3);
+        let mut names = report.matching_source_names.clone();
+        names.sort();
+        assert_eq!(names, vec!["a.md", "b.md", "c.md"]);
+    }
+
+    #[test]
+    fn semantic_candidates_without_lexical_evidence_are_not_positive() {
+        let (_temp, mut store) = store();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db24", "related.md"),
+                b"Los alumnos practican la dependencia entre conceptos en clase.\n",
+            )
+            .unwrap();
+        let mut provider = RelatedEmbeddings {
+            generation: crate::EmbeddingGeneration::from(
+                crate::ModelManifest::embedded().unwrap().active(),
+            ),
+        };
+        assert_eq!(
+            store.index_embeddings(&mut provider, 8).unwrap().embedded,
+            1
+        );
+        let report = store
+            .exhaustive_presence_search("depend on", &["depend on".into()], Some(&mut provider))
+            .unwrap();
+        // The phrase is genuinely absent: no lexical evidence may exist.
+        assert_eq!(report.coverage, ExhaustiveCoverage::Complete);
+        assert_eq!(report.lexical_hits, 0);
+        // Semantic expansion may still surface a conceptually related chunk.
+        assert!(report.semantic_hits >= 1);
+        // That semantic candidate is never a positive match: no candidate may
+        // carry a lexical signal, so the app-level evidence set stays empty.
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| !candidate.signals.lexical_match),
+            "semantic-only candidates must not be lexical evidence: {:?}",
+            report.candidates
+        );
+    }
+
+    #[test]
+    fn scoped_search_inspects_only_the_previous_material_set() {
+        let (_temp, mut store) = store();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db15", "a.md"),
+                b"Se hablo de Kubernetes en la reunion uno.",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db16", "b.md"),
+                b"Solo gramatica y precios.",
+            )
+            .unwrap();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db17", "c.md"),
+                b"En la reunion tres tambien mencionaron Kubernetes.",
+            )
+            .unwrap();
+
+        let scoped_a_c = store
+            .exhaustive_presence_search_scoped(
+                "Kubernetes",
+                &["Kubernetes".into()],
+                None,
+                &[
+                    "0198e4a6-79b2-7b51-9e68-c2eb7af3db15".to_owned(),
+                    "0198e4a6-79b2-7b51-9e68-c2eb7af3db17".to_owned(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(scoped_a_c.coverage, ExhaustiveCoverage::Complete);
+        assert_eq!(scoped_a_c.eligible_materials, 2);
+        assert_eq!(scoped_a_c.materials_inspected, 2);
+        assert_eq!(scoped_a_c.lexical_hits, 2);
+        let mut names = scoped_a_c.matching_source_names.clone();
+        names.sort();
+        assert_eq!(names, vec!["a.md".to_owned(), "c.md".to_owned()]);
+
+        let scoped_a = store
+            .exhaustive_presence_search_scoped(
+                "Kubernetes",
+                &["Kubernetes".into()],
+                None,
+                &["0198e4a6-79b2-7b51-9e68-c2eb7af3db15".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(scoped_a.eligible_materials, 1);
+        assert_eq!(scoped_a.materials_inspected, 1);
+        assert_eq!(scoped_a.lexical_hits, 1);
+        assert_eq!(scoped_a.matching_source_names, vec!["a.md".to_owned()]);
+
+        // A scope naming only materials that are not READY in the corpus cannot
+        // claim complete verification: coverage stays incomplete and no global
+        // negative is invented over the reduced scope.
+        let empty = store
+            .exhaustive_presence_search_scoped(
+                "Kubernetes",
+                &["Kubernetes".into()],
+                None,
+                &["0198e4a6-79b2-7b51-9e68-c2eb7af3db99".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(empty.coverage, ExhaustiveCoverage::Incomplete);
+        assert_eq!(empty.eligible_materials, 0);
+        assert_eq!(empty.lexical_hits, 0);
+
+        // An actually empty scope is trivially complete (nothing requested).
+        let truly_empty = store
+            .exhaustive_presence_search_scoped("Kubernetes", &["Kubernetes".into()], None, &[])
+            .unwrap();
+        assert_eq!(truly_empty.coverage, ExhaustiveCoverage::Complete);
+        assert_eq!(truly_empty.eligible_materials, 0);
+    }
+
+    #[test]
+    fn scoped_search_keeps_coverage_incomplete_when_a_scope_material_is_unready() {
+        let (_temp, mut store) = store();
+        store
+            .index(
+                &source("0198e4a6-79b2-7b51-9e68-c2eb7af3db15", "a.md"),
+                b"Se hablo de Kubernetes.",
+            )
+            .unwrap();
+        // b is a pending (uninspected) material inside the scope.
+        let mut b = source("0198e4a6-79b2-7b51-9e68-c2eb7af3db16", "b.md");
+        b.media_type = Some("text/markdown".to_owned());
+        store.begin_material_indexing(&b).unwrap();
+        let report = store
+            .exhaustive_presence_search_scoped(
+                "Kubernetes",
+                &["Kubernetes".into()],
+                None,
+                &[
+                    "0198e4a6-79b2-7b51-9e68-c2eb7af3db15".to_owned(),
+                    "0198e4a6-79b2-7b51-9e68-c2eb7af3db16".to_owned(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(report.coverage, ExhaustiveCoverage::Incomplete);
+        assert_eq!(report.eligible_materials, 1);
+        assert_eq!(report.materials_inspected, 1);
     }
 }

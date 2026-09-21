@@ -2366,6 +2366,7 @@ fn messages_survive_reopen() {
             "Hello user",
             MessageStatus::Ok,
             std::slice::from_ref(&c.id),
+            Some(user.id.clone()),
         )
         .unwrap();
 
@@ -2385,6 +2386,7 @@ fn messages_survive_reopen() {
     assert_eq!(msgs[1].status, MessageStatus::Ok);
     assert_eq!(msgs[1].creation_ids, vec![c.id.clone()]);
     assert!(msgs[1].material_ids.is_empty());
+    assert_eq!(msgs[1].turn_id, Some(user.id.clone()));
 }
 
 #[test]
@@ -2421,6 +2423,7 @@ fn messages_are_not_published() {
         "Assistant secret message content",
         MessageStatus::Ok,
         std::slice::from_ref(&c.id),
+        None,
     )
     .unwrap();
 

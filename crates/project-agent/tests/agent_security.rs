@@ -31,6 +31,7 @@ fn prompt() -> AgentPrompt {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     }
 }
 
@@ -173,6 +174,7 @@ fn command_like_user_text_is_sent_literally_and_never_executed() {
             text: text.to_owned(),
             model: None,
             knowledge: None,
+            conversation_context: None,
         };
         let task = engine.send(&session, &req).expect("send");
         assert_eq!(task.status, project_agent::model::TaskStatus::Completed);

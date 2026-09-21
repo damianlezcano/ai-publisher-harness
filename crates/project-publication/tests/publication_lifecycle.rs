@@ -342,8 +342,25 @@ fn public_web_snapshot_and_endpoint_none_when_local() {
         vec![public_web("App", b"<html>ok</html>")],
     );
     h.manager.publish(&project.id).unwrap();
+    let root_html =
+        fs::read_to_string(publish_dir(h.temp.path(), &project.id).join("index.html")).unwrap();
+    // Root is the generated version-history landing page, not the web bytes.
+    assert!(root_html.contains("App"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("<html>ok</html>"), "{root_html}");
+    // The immutable web snapshot lives under versions/<id>/.
+    let web_id = svc.open_project(&project.id).unwrap().creations[0]
+        .id
+        .as_str()
+        .to_owned();
     assert_eq!(
-        fs::read(publish_dir(h.temp.path(), &project.id).join("index.html")).unwrap(),
+        fs::read(
+            publish_dir(h.temp.path(), &project.id)
+                .join("versions")
+                .join(&web_id)
+                .join("index.html")
+        )
+        .unwrap(),
         b"<html>ok</html>"
     );
     assert!(h.manager.endpoint().is_some());

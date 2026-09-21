@@ -609,8 +609,9 @@ select {
 }
 
 .import-progress {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   margin: var(--space-3) 0;
   padding: var(--space-3);
   border: 1px solid var(--border);
@@ -619,8 +620,199 @@ select {
   font-size: var(--font-size-meta);
 }
 
-.import-progress strong {
+.import-progress-primary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.import-progress-primary .spinner {
+  flex: 0 0 auto;
+}
+
+.import-progress-primary strong {
   color: var(--text);
+}
+
+.import-progress-info {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.import-progress-info-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.import-progress-info-button:hover,
+.import-progress-info-button:focus-visible {
+  color: var(--text);
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.import-progress-details {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.import-progress-detail-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+
+.import-progress-detail {
+  display: contents;
+}
+
+.import-progress-detail dt {
+  color: var(--muted);
+}
+
+.import-progress-detail dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-progress-notice {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Per-turn assistant metrics line + detail popover */
+
+.turn-metrics-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.turn-metrics-segments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  column-gap: 0.5em;
+}
+
+.turn-metrics-info-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.turn-metrics-info-button:hover,
+.turn-metrics-info-button:focus-visible {
+  color: var(--text);
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.turn-metrics-details {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  min-width: 260px;
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: min(80vh, 560px);
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.turn-metrics-subsection {
+  min-width: 0;
+}
+
+.turn-metrics-subsection h4 {
+  margin: 0 0 var(--space-1);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.turn-metrics-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+
+.turn-metrics-detail {
+  display: contents;
+}
+
+.turn-metrics-detail dt {
+  color: var(--muted);
+}
+
+.turn-metrics-detail dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.turn-metrics-notice {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.turn-metrics-sources {
+  margin: 0;
+  padding-left: var(--space-4);
+  list-style: disc;
+}
+
+.turn-metrics-sources li {
+  overflow-wrap: anywhere;
 }
 
 .conversation-metrics {
@@ -1699,6 +1891,44 @@ select {
   font-size: 0.8rem;
   min-height: 28px;
   min-width: auto;
+}
+
+.attachment-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  background: #eef0ff;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: inherit;
+}
+
+.attachment-summary:hover,
+.attachment-summary:focus-visible {
+  border-style: solid;
+}
+
+.attachment-summary-action {
+  color: var(--accent, #4c5fd5);
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.attachment-summary-toggle {
+  display: inline-block;
+  margin-bottom: var(--space-1);
+  padding: 2px 8px;
+  font-size: 0.8rem;
+  color: var(--accent, #4c5fd5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .message-error {

@@ -378,12 +378,11 @@ pub async fn agent_send(
         },
     );
     std::thread::spawn(move || {
-        let summarize_intent = project_app::detect_summarize_intent(&prompt);
-        let run = if summarize_intent {
-            shared.send_summary_run(inputs)
-        } else {
-            shared.send_message_run(inputs)
-        };
+        // All routing converges on the canonical normalized dispatch seam in
+        // the facade (`dispatch_message_run`), which consumes the already
+        // resolved bound route. This is the same seam `send_message` and the
+        // accepted-staged pipeline use.
+        let run = shared.dispatch_message_run(inputs);
         let event = match run {
             Ok(run) => AgentTaskEvent {
                 project_id,
@@ -528,6 +527,64 @@ pub async fn agent_resume_import(
     );
     std::thread::spawn(move || {
         let run = shared.resume_accepted_import_operation(&project_id, &operation_id);
+        let event = match run {
+            Ok(run) => AgentTaskEvent {
+                project_id,
+                turn_id: run.turn_id.unwrap_or(turn_id),
+                status: run.status,
+                message: run.message,
+                code: None,
+                registered_creation_ids: run.registered_creation_ids,
+            },
+            Err(err) => AgentTaskEvent {
+                project_id,
+                turn_id,
+                status: "failed".to_owned(),
+                message: Some(err.message),
+                code: Some(err.code.as_str().to_owned()),
+                registered_creation_ids: Vec::new(),
+            },
+        };
+        let _ = app.emit("agent://task", event);
+    });
+    Ok(())
+}
+
+/// Explicit user-approved retry of a RetryRequired/Failed K6 operation.
+/// Distinct from `agent_resume_import`: ordinary resume must never resend an
+/// unknown remote outcome.
+#[tauri::command]
+pub async fn agent_retry_summary(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    project_id: String,
+    operation_id: String,
+) -> Result<(), AppError> {
+    let shared = state.inner().clone();
+    let retry_project = project_id.clone();
+    let retry_operation = operation_id.clone();
+    project_app::session_log::record(
+        "INFO",
+        format!("[knowledge][summary-retry] command_received operation_id={operation_id}"),
+    );
+    let turn_id = blocking(shared.clone(), move |app_state| {
+        app_state.accepted_import_operation_turn_id(&retry_project, &retry_operation)
+    })
+    .await?
+    .unwrap_or_default();
+    let _ = app.emit(
+        "agent://task",
+        AgentTaskEvent {
+            project_id: project_id.clone(),
+            turn_id: turn_id.clone(),
+            status: "working".to_owned(),
+            message: None,
+            code: None,
+            registered_creation_ids: Vec::new(),
+        },
+    );
+    std::thread::spawn(move || {
+        let run = shared.retry_accepted_import_operation(&project_id, &operation_id);
         let event = match run {
             Ok(run) => AgentTaskEvent {
                 project_id,
@@ -799,6 +856,19 @@ pub async fn conversation_last_turn_metrics(
 ) -> Result<Option<project_app::TurnMetricsView>, AppError> {
     blocking(state.inner().clone(), move |app| {
         app.last_turn_metrics(&project_id)
+    })
+    .await
+}
+
+/// Returns durable additive provider telemetry over completed conversation
+/// turns. Retrieval facts remain available only on the last-turn endpoint.
+#[tauri::command]
+pub async fn conversation_accumulated_usage(
+    state: State<'_, SharedState>,
+    project_id: String,
+) -> Result<Option<project_app::ConversationUsageTotalsView>, AppError> {
+    blocking(state.inner().clone(), move |app| {
+        app.accumulated_conversation_usage(&project_id)
     })
     .await
 }

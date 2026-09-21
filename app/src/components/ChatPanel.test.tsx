@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import ChatPanel from "./ChatPanel";
 import { messages } from "../messages";
+import type { MessageView } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -39,6 +40,10 @@ const creations = [
     byteSize: 1024,
     createdAt: "2026-08-28T15:00:00Z",
     revision: 1,
+    lineageId: "c1",
+    versionNumber: 1,
+    isCurrent: true,
+    availableVersionIds: ["c1"],
   },
 ];
 
@@ -333,6 +338,19 @@ describe("ChatPanel timeline", () => {
     expect(document.querySelector(".spinner")).toHaveAttribute("aria-hidden", "true");
   });
 
+  it("suppresses the working status when the import progress line owns it", () => {
+    render(<ChatPanel {...base} agentPhase="working" suppressWorkingStatus />);
+    expect(screen.queryByText(messages.agent.creating)).not.toBeInTheDocument();
+  });
+
+  it("shows a synthesis label for a no-attachment summary turn", () => {
+    render(<ChatPanel {...base} agentPhase="working" synthesizingSummaries />);
+    expect(
+      screen.getByText(messages.compactProgress.generatingSummariesIndeterminate),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(messages.agent.creating)).not.toBeInTheDocument();
+  });
+
   it("does not render a raw green completed status that duplicates assistant content", () => {
     const assistantText = "Acá tenés la actividad";
     render(
@@ -534,5 +552,199 @@ describe("ChatPanel timeline", () => {
   it("keeps the polite live region on the chat log for accessibility", () => {
     const { container } = render(<ChatPanel {...base} />);
     expect(container.querySelector(".chat-log")).toHaveAttribute("aria-live", "polite");
+  });
+});
+
+describe("ChatPanel per-turn metrics", () => {
+  const turn = (inputTokens: number | null, sourceNames: string[] = []) => ({
+    provider: "opencode",
+    model: "big-pickle",
+    inputTokens,
+    outputTokens: 200,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    totalTokens: null,
+    costUsd: null,
+    turnDurationMs: 5000,
+    source: "provider_actual",
+    remoteCalls: 1,
+    materialCount: 2,
+    corpusBytes: 1000,
+    corpusUtf8Chars: 900,
+    corpusEstTokens: 300,
+    retrievalCandidateCount: 3,
+    selectedEvidenceCount: 1,
+    selectedEvidenceBytes: 100,
+    selectedEvidenceUtf8Chars: 90,
+    evidenceEstTokens: 30,
+    contextReductionPct: 90,
+    semanticProviderState: "available",
+    requestPreparationMs: 5,
+    retrievalMode: "normal",
+    eligibleMaterials: null,
+    materialsInspected: null,
+    chunksInspected: null,
+    exhaustiveCoverage: "not_requested",
+    lexicalHits: null,
+    semanticHits: null,
+    localMode: null,
+    sourceNames,
+  });
+
+  function user(overrides: Partial<MessageView>) {
+    return {
+      id: "u1",
+      role: "user" as const,
+      text: "pregunta",
+      status: "ok" as const,
+      createdAt: "2026-08-28T15:00:00Z",
+      materialIds: [],
+      creationIds: [],
+      ...overrides,
+    };
+  }
+
+  function assistant(overrides: Partial<MessageView>) {
+    return {
+      id: "a1",
+      role: "assistant" as const,
+      text: "respuesta",
+      status: "ok" as const,
+      createdAt: "2026-08-28T15:00:01Z",
+      materialIds: [],
+      creationIds: [],
+      ...overrides,
+    };
+  }
+
+  it("does not render a Fuentes block in the assistant answer bubble", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          user({ turnMetrics: turn(111, ["file-a.md"]) }),
+          assistant({ text: "La respuesta limpia, sin fuentes visibles." }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("La respuesta limpia, sin fuentes visibles.")).toBeInTheDocument();
+    expect(screen.queryByText(/Fuentes:/)).not.toBeInTheDocument();
+  });
+
+  it("shows grounded sources in the per-turn detail popover", async () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          user({ turnMetrics: turn(111, ["file-a.md", "file-b.md"]) }),
+          assistant({ text: "Respuesta fundamentada." }),
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: messages.turnMetrics.infoAria }));
+    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
+    expect(panel).toHaveTextContent("file-a.md");
+    expect(panel).toHaveTextContent("file-b.md");
+  });
+
+  it("binds each assistant response to its own per-turn metrics", () => {
+    render(
+      <ChatPanel
+        {...base}
+        messages={[
+          user({ id: "u1", turnMetrics: turn(111) }),
+          assistant({ id: "a1", text: "Primera." }),
+          user({ id: "u2", createdAt: "2026-08-28T15:00:02Z", turnMetrics: turn(222) }),
+          assistant({ id: "a2", createdAt: "2026-08-28T15:00:03Z", text: "Segunda." }),
+        ]}
+      />,
+    );
+    expect(screen.getByText(/111/)).toBeInTheDocument();
+    expect(screen.getByText(/222/)).toBeInTheDocument();
+  });
+});
+
+function manyMaterials(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `mm${index}`,
+    displayName: `archivo-${index}.md`,
+    originalFileName: `archivo-${index}.md`,
+    kind: "text",
+    byteSize: 1024,
+    createdAt: "2026-08-28T15:00:00Z",
+  }));
+}
+
+function userMessageWith(materialIds: string[]) {
+  return [
+    {
+      id: "msg-many",
+      role: "user" as const,
+      text: "haceme un resumen de estos archivos",
+      status: "ok" as const,
+      createdAt: "2026-08-28T15:00:00Z",
+      materialIds,
+      creationIds: [] as string[],
+    },
+  ];
+}
+
+describe("ChatPanel attachment collapse", () => {
+  it("keeps a single attachment as a natural per-file chip", () => {
+    const mats = manyMaterials(1);
+    render(
+      <ChatPanel {...base} materials={mats} messages={userMessageWith(mats.map((m) => m.id))} />,
+    );
+    expect(screen.getByRole("button", { name: `Abrir archivo-0.md` })).toBeInTheDocument();
+    expect(screen.queryByText(messages.timeline.attachmentsSummary(1))).toBeNull();
+  });
+
+  it("keeps a small attachment set expanded without a summary", () => {
+    const mats = manyMaterials(3);
+    render(
+      <ChatPanel {...base} materials={mats} messages={userMessageWith(mats.map((m) => m.id))} />,
+    );
+    expect(screen.getByRole("button", { name: `Abrir archivo-0.md` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Abrir archivo-2.md` })).toBeInTheDocument();
+    expect(screen.queryByText(messages.timeline.attachmentsSummary(3))).toBeNull();
+  });
+
+  it("collapses 50 attachments into a compact summary by default", () => {
+    const mats = manyMaterials(50);
+    render(
+      <ChatPanel {...base} materials={mats} messages={userMessageWith(mats.map((m) => m.id))} />,
+    );
+    expect(screen.getByText(messages.timeline.attachmentsSummary(50))).toBeInTheDocument();
+    expect(screen.getByText(messages.timeline.showAttachments)).toBeInTheDocument();
+    // No expanded chips dominate the conversation.
+    expect(screen.queryByRole("button", { name: `Abrir archivo-0.md` })).toBeNull();
+  });
+
+  it("expands the full list on demand and collapses back", async () => {
+    const mats = manyMaterials(50);
+    render(
+      <ChatPanel {...base} materials={mats} messages={userMessageWith(mats.map((m) => m.id))} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Ver archivos/ }));
+    expect(screen.getByRole("button", { name: `Abrir archivo-0.md` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Abrir archivo-49.md` })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: messages.timeline.hideAttachments }));
+    expect(screen.queryByRole("button", { name: `Abrir archivo-0.md` })).toBeNull();
+    expect(screen.getByText(messages.timeline.attachmentsSummary(50))).toBeInTheDocument();
+  });
+
+  it("preserves every attachment's Abrir action after expanding", async () => {
+    const mats = manyMaterials(50);
+    invokeMock.mockResolvedValue(undefined);
+    render(
+      <ChatPanel {...base} materials={mats} messages={userMessageWith(mats.map((m) => m.id))} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Ver archivos/ }));
+    await userEvent.click(screen.getByRole("button", { name: `Abrir archivo-7.md` }));
+    expect(invokeMock).toHaveBeenCalledWith("material_open", {
+      projectId,
+      materialId: "mm7",
+    });
   });
 });

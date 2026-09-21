@@ -55,6 +55,18 @@ export function humanDate(iso: string): string {
   });
 }
 
+/** Compact per-turn timestamp from the persisted message timestamp. */
+export function turnTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString(LOCALE, {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 const LEGACY_DEFAULT_PROJECT_NAME = /^Proyecto sin título(\s+\d+)?$/;
 
 export function conversationDisplayName(name: string): string {
@@ -116,6 +128,8 @@ export const messages = {
     metrics: {
       heading: "Uso y optimización",
       lastTurn: "Último turno",
+      accumulated: "Acumulado de la conversación",
+      accumulatedProvider: "Uso real acumulado del proveedor",
       realProvider: "Uso real del proveedor",
       knowledgeOptimization: "Optimización Knowledge (estimaciones locales)",
       unavailable: "No disponible",
@@ -144,12 +158,15 @@ export const messages = {
       semanticState: "Estado del proveedor semántico",
       preparationDuration: "Preparación de la solicitud",
       retrievalMode: "Modo de recuperación",
+      localMode: "Modo local",
       exhaustiveCoverage: "Cobertura exhaustiva",
       eligibleMaterials: "Materiales elegibles",
       materialsInspected: "Materiales inspeccionados",
       chunksInspected: "Fragmentos inspeccionados",
       lexicalHits: "Coincidencias léxicas",
       semanticHits: "Coincidencias semánticas",
+      thematicContributingSources: "Materiales que aportan temas",
+      thematicCandidates: "Candidatos de temas recurrentes",
       estimateNotice:
         "Estas son estimaciones locales de contexto de Knowledge, no tokens facturados ni un ahorro exacto.",
     },
@@ -240,6 +257,23 @@ export const messages = {
     },
   },
 
+  turnMetrics: {
+    infoAria: "Detalles de esta respuesta",
+    detailsLabel: "Detalles de esta respuesta",
+    // Compact line segment for the local Knowledge context reduction.
+    knowledgeReduction(percent: string): string {
+      return `Knowledge −${percent}`;
+    },
+    // Detailed popover sections and fields (shared labels are reused from
+    // `conversationDetails.metrics`; these are the per-turn specific ones).
+    responseHeading: "Respuesta",
+    dateTime: "Fecha y hora",
+    knowledgeHeading: "Knowledge",
+    contextSentEstimated: "Contexto enviado (estimado)",
+    contextReduction: "Reducción de contexto",
+    sourcesHeading: "Fuentes utilizadas",
+  },
+
   timeline: {
     userLabel: "Vos",
     assistantLabel: "Asistente",
@@ -247,6 +281,11 @@ export const messages = {
     unattachedTitle: "Materiales",
     collapse: "Ocultar",
     expand: "Mostrar",
+    attachmentsSummary(count: number): string {
+      return `📎 ${count} archivos adjuntos`;
+    },
+    showAttachments: "Ver archivos",
+    hideAttachments: "Ocultar archivos",
   },
 
   agent: {
@@ -419,39 +458,52 @@ export const messages = {
   },
 
   processing: {
-    title(count: number): string {
-      return `Procesando ${count} archivos`;
-    },
-    completed(count: number): string {
-      return count === 1 ? "1 archivo procesado" : `${count} archivos procesados`;
-    },
-    completedWithProblems(count: number): string {
-      return count === 1
-        ? "1 archivo procesado con problemas"
-        : `${count} archivos procesados con problemas`;
-    },
     semanticUnavailable: "Indexación semántica no disponible",
-    prepared(copied: number, total: number): string {
-      return `Archivos preparados: ${copied} / ${total}`;
-    },
-    indexed(lexical: number, total: number): string {
-      return `Indexación: ${lexical} / ${total}`;
-    },
-    embeddings(created: number, reused: number): string {
-      return `Embeddings: ${created} creados · ${reused} reutilizados`;
-    },
-    ready(count: number): string {
-      return `Listos: ${count}`;
-    },
-    errors(count: number): string {
-      return `Errores: ${count}`;
-    },
     pendingRetry: "El procesamiento quedó pendiente. Podés reintentarlo.",
     resumeFailed: "No pudimos reanudar el procesamiento local.",
     noTurn: "El envío se interrumpió antes de confirmarse; volvé a enviarlo.",
     outcomeUnknown:
       "El resultado anterior quedó pendiente y no se puede continuar automáticamente.",
     cannotContinue: "No pudimos continuar el procesamiento local.",
+  },
+  progressDetails: {
+    infoAria: "Detalles del procesamiento",
+    readyLabel: "Archivos listos",
+    errorsLabel: "Archivos con error",
+    preparedLabel: "Preparación",
+    fragmentsLabel: "Fragmentos procesados",
+    embeddingsLabel: "Embeddings completados",
+    embeddingsCreatedLabel: "Embeddings creados",
+    embeddingsReusedLabel: "Embeddings reutilizados",
+    elapsedLabel: "Tiempo transcurrido",
+    speedLabel: "Velocidad",
+  },
+  compactProgress: {
+    /** Prefix for the single merged in-flight line ("Procesando tu solicitud · "). */
+    requestPrefix: "Procesando tu solicitud · ",
+    embeddingPercent(percent: number): string {
+      return `${percent}%`;
+    },
+    readyCount(ready: number, total: number): string {
+      return total === 1 ? `${ready} de 1 archivo listo` : `${ready} de ${total} archivos listos`;
+    },
+    readyCountWithErrors(ready: number, total: number, errors: number): string {
+      const base =
+        total === 1 ? `${ready} de 1 archivo listo` : `${ready} de ${total} archivos listos`;
+      return `${base} · ${errors} con error`;
+    },
+    readyTotal(count: number): string {
+      return count === 1 ? "1 archivo listo" : `${count} archivos listos`;
+    },
+    /** Truthful synthesis phase shown once embeddings complete and compact
+     * summary generation starts (a single indeterminate phase for one-call
+     * synthesis). Never fakes per-file provider progress. */
+    generatingSummaries(count: number): string {
+      return count === 1 ? "Generando resumen…" : `Generando resúmenes de ${count} archivos…`;
+    },
+    /** Indeterminate synthesis label for a no-attachment compact follow-up,
+     * where the backend's single aggregate call exposes no per-item count. */
+    generatingSummariesIndeterminate: "Generando resúmenes…",
   },
 
   error: {
@@ -530,5 +582,19 @@ export const messages = {
       message: "Algo salió mal.",
       hint: "reiniciá la aplicación",
     },
+    refreshAfterSend: {
+      title: "El mensaje ya se envió.",
+      message: "No pudimos actualizar la vista, pero tu mensaje está confirmado.",
+    },
   },
 } as const;
+
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}

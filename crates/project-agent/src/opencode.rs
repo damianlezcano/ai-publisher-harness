@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use project_opencode::messages;
 use project_opencode::{BackendError, BackendStatus, OpenCodeBackend, with_directory_query};
 use serde_json::{Value, json};
 
@@ -17,7 +18,7 @@ use crate::model::{
 };
 use crate::port::AgentEngine;
 
-const DEFAULT_TASK: Duration = Duration::from_secs(120);
+const DEFAULT_TASK: Duration = Duration::from_secs(1000);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const ARTIFACT_REFRESH: Duration = Duration::from_millis(250);
 const MESSAGE_LIMIT: &str = "1000";
@@ -179,16 +180,7 @@ impl OpenCodeAgentEngine {
         if !(200..300).contains(&status) {
             return Err(AgentError::Http(format!("message list status {status}")));
         }
-        let value: Value = serde_json::from_str(&body)
-            .map_err(|err| AgentError::Http(format!("malformed message list JSON: {err}")))?;
-        Ok(match value {
-            Value::Array(items) => items,
-            Value::Object(mut map) => map
-                .remove("data")
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        })
+        Ok(messages::session_messages(&body).unwrap_or_default())
     }
 
     fn fetch_artifacts(&self, session_id: &str) -> AgentResult<Vec<Artifact>> {
@@ -377,6 +369,44 @@ impl AgentEngine for OpenCodeAgentEngine {
         })
     }
 
+    fn open_fresh_session(&self, project: &AgentProject) -> AgentResult<AgentSession> {
+        self.require_ready()?;
+        let directory = project.directory.to_string_lossy().replace('\\', "/");
+        let path = with_directory_query("/session", &directory);
+        let body = json!({
+            "permission": [{
+                "permission": "external_directory",
+                "pattern": "*",
+                "action": "deny",
+            }],
+        });
+        let (status, text) = self.backend.post(&path, &body).map_err(map_backend_error)?;
+        if !(200..300).contains(&status) {
+            return Err(AgentError::SessionCreationFailed(format!(
+                "status {status}"
+            )));
+        }
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|err| AgentError::SessionCreationFailed(err.to_string()))?;
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AgentError::SessionCreationFailed("missing id".into()))?
+            .to_owned();
+        log_event(&format!(
+            "fresh bounded session created project_id={}",
+            project.project_id
+        ));
+        Ok(AgentSession {
+            id,
+            project_id: project.project_id.clone(),
+        })
+    }
+
+    fn invalidate_cached_session(&self, project_id: &str) {
+        self.lock_sessions().remove(project_id);
+    }
+
     fn send(&self, session: &AgentSession, req: &AgentPrompt) -> AgentResult<AgentTask> {
         let result = (|| {
             self.require_ready()?;
@@ -468,7 +498,13 @@ impl AgentEngine for OpenCodeAgentEngine {
             }
         })();
         if result.is_err() {
-            self.lock_sessions().remove(&session.project_id);
+            let mut sessions = self.lock_sessions();
+            if sessions
+                .get(&session.project_id)
+                .is_some_and(|cached| cached == &session.id)
+            {
+                sessions.remove(&session.project_id);
+            }
         }
         result
     }
@@ -556,16 +592,7 @@ fn assistant_message_is_terminal(
 }
 
 fn message_role(message: &Value) -> &str {
-    message
-        .get("role")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            message
-                .get("info")
-                .and_then(|info| info.get("role"))
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("")
+    messages::message_role(message)
 }
 
 fn authoritative_assistant_text(
@@ -591,31 +618,11 @@ fn authoritative_assistant_text(
 }
 
 fn message_id(message: &Value) -> Option<&str> {
-    message.get("id").and_then(Value::as_str).or_else(|| {
-        message
-            .get("info")
-            .and_then(|info| info.get("id"))
-            .and_then(Value::as_str)
-    })
+    messages::message_id(message)
 }
 
 fn parent_message_id(message: &Value) -> Option<&str> {
-    message
-        .get("parentID")
-        .and_then(Value::as_str)
-        .or_else(|| message.get("parentId").and_then(Value::as_str))
-        .or_else(|| {
-            message
-                .get("info")
-                .and_then(|info| info.get("parentID"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| {
-            message
-                .get("info")
-                .and_then(|info| info.get("parentId"))
-                .and_then(Value::as_str)
-        })
+    messages::parent_message_id(message)
 }
 
 fn message_belongs_to_turn(message: &Value, originating_user_id: Option<&str>) -> bool {
@@ -629,51 +636,15 @@ fn message_belongs_to_turn(message: &Value, originating_user_id: Option<&str>) -
 }
 
 fn assistant_finish(message: &Value) -> Option<&str> {
-    message
-        .get("info")
-        .and_then(|info| info.get("finish"))
-        .and_then(Value::as_str)
-        .or_else(|| message.get("finish").and_then(Value::as_str))
+    messages::assistant_finish(message)
 }
 
 fn assistant_message_count(messages: &[Value]) -> usize {
-    messages
-        .iter()
-        .filter(|message| {
-            let role = message
-                .get("role")
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    message
-                        .get("info")
-                        .and_then(|info| info.get("role"))
-                        .and_then(Value::as_str)
-                })
-                .unwrap_or("");
-            role == "assistant"
-        })
-        .count()
+    messages::assistant_message_count(messages)
 }
 
 fn message_text(message: &Value) -> Option<String> {
-    let parts = message.get("parts").and_then(Value::as_array);
-    let mut chunks = Vec::new();
-    for part in parts.into_iter().flatten() {
-        if part.get("type").and_then(Value::as_str) == Some("text")
-            && let Some(text) = part.get("text").and_then(Value::as_str)
-            && !text.trim().is_empty()
-        {
-            chunks.push(text);
-        }
-    }
-    if !chunks.is_empty() {
-        return Some(chunks.join(""));
-    }
-    message
-        .get("content")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .map(str::to_owned)
+    messages::message_text(message)
 }
 
 fn artifacts_from_diff(value: &Value) -> Vec<Artifact> {

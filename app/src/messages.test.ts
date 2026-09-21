@@ -6,6 +6,7 @@ import {
   kindIcon,
   kindLabel,
   messages,
+  turnTimestamp,
   visibilityLabel,
 } from "./messages";
 
@@ -124,6 +125,31 @@ describe("messages catalog", () => {
     expect(humanSize(2048)).toBe("2 KB");
     expect(humanDate("not-a-date")).toBe("not-a-date");
     expect(humanDate("2026-08-28T15:00:00Z")).toMatch(/\d/);
+  });
+
+  it("formats a compact per-turn timestamp from the persisted value", () => {
+    expect(turnTimestamp("not-a-date")).toBe("not-a-date");
+    // The day (15) of the persisted timestamp is preserved and formatted,
+    // never replaced with a render-time clock.
+    expect(turnTimestamp("2026-09-15T22:18:00")).toMatch(/15/);
+  });
+
+  it("uses the actual ready value for singular compact progress (CASE A/B)", () => {
+    expect(messages.compactProgress.readyCount(0, 1)).toBe("0 de 1 archivo listo");
+    expect(messages.compactProgress.readyCount(1, 1)).toBe("1 de 1 archivo listo");
+    expect(messages.compactProgress.readyCountWithErrors(0, 1, 1)).toBe(
+      "0 de 1 archivo listo · 1 con error",
+    );
+    expect(messages.compactProgress.readyCountWithErrors(1, 1, 0)).toBe(
+      "1 de 1 archivo listo · 0 con error",
+    );
+  });
+
+  it("keeps multi-file compact progress unchanged (CASE C)", () => {
+    expect(messages.compactProgress.readyCount(49, 50)).toBe("49 de 50 archivos listos");
+    expect(messages.compactProgress.readyCountWithErrors(49, 50, 1)).toBe(
+      "49 de 50 archivos listos · 1 con error",
+    );
   });
 });
 

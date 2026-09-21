@@ -39,6 +39,20 @@ pub struct Script {
     pub prompt_status: u16,
     pub prompt_delay: Duration,
     pub prompt_called: bool,
+    /// Full `path?query` of every `POST /session/{id}/prompt_async` request, in
+    /// order. Lets contract tests assert that scratch sessions use the same
+    /// prompt endpoint contract as ordinary chat (no stray `?directory=`).
+    pub prompt_async_paths: Vec<String>,
+    /// The `model` field of every `prompt_async` body (`None` when absent),
+    /// captured structurally so tests can assert provider/model identity
+    /// without storing prompt text.
+    pub prompt_async_models: Vec<Option<Value>>,
+    /// Full `path?query` of every `GET /session/{id}/message` request.
+    pub message_paths: Vec<String>,
+    /// Full `path?query` of every `POST /session/{id}/abort` request.
+    pub abort_paths: Vec<String>,
+    /// Full `path?query` of every `GET /session/{id}` metadata request.
+    pub session_get_paths: Vec<String>,
     /// Exact text of the first `type:"text"` part in the last `prompt_async`
     /// body. Lets tests assert that user text is preserved byte-for-byte as
     /// data (never shell-escaped, re-quoted, or stripped) across the OpenCode
@@ -329,6 +343,11 @@ impl Default for Script {
             prompt_status: 204,
             prompt_delay: Duration::ZERO,
             prompt_called: false,
+            prompt_async_paths: Vec::new(),
+            prompt_async_models: Vec::new(),
+            message_paths: Vec::new(),
+            abort_paths: Vec::new(),
+            session_get_paths: Vec::new(),
             last_prompt_text: None,
             prompt_texts: Vec::new(),
             prompt_appends_response: true,
@@ -494,6 +513,31 @@ impl FakeServer {
         self.script().prompt_called
     }
 
+    /// Full `path?query` of every `prompt_async` request, in order.
+    pub fn prompt_async_paths(&self) -> Vec<String> {
+        self.script().prompt_async_paths.clone()
+    }
+
+    /// The `model` field of every `prompt_async` body, in order.
+    pub fn prompt_async_models(&self) -> Vec<Option<Value>> {
+        self.script().prompt_async_models.clone()
+    }
+
+    /// Full `path?query` of every `GET /session/{id}/message` request.
+    pub fn message_paths(&self) -> Vec<String> {
+        self.script().message_paths.clone()
+    }
+
+    /// Full `path?query` of every `POST /session/{id}/abort` request.
+    pub fn abort_paths(&self) -> Vec<String> {
+        self.script().abort_paths.clone()
+    }
+
+    /// Full `path?query` of every `GET /session/{id}` metadata request.
+    pub fn session_get_paths(&self) -> Vec<String> {
+        self.script().session_get_paths.clone()
+    }
+
     /// Exact text of the first `type:"text"` part in the last `prompt_async`
     /// request body.
     pub fn last_prompt_text(&self) -> Option<String> {
@@ -609,6 +653,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     // Strip query string so handlers can match routes with parameters (e.g.
     // `/session/{id}/message?limit=...`). Keep the query for POST /session,
     // where OpenCode 1.18.25 takes `directory` as a query parameter.
+    let full_request_path = full_path.clone();
     let (path, query) = match full_path.split_once('?') {
         Some((path, query)) => (path.to_owned(), Some(query.to_owned())),
         None => (full_path, None),
@@ -921,8 +966,10 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     {
         state.last_session_id = id.to_owned();
         state.prompt_called = true;
-        if let Ok(value) = serde_json::from_slice::<Value>(&body)
-            && let Some(text) = value
+        state.prompt_async_paths.push(full_request_path.clone());
+        if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+            state.prompt_async_models.push(value.get("model").cloned());
+            if let Some(text) = value
                 .get("parts")
                 .and_then(Value::as_array)
                 .and_then(|parts| {
@@ -934,9 +981,10 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
                             .and_then(Value::as_str)
                     })
                 })
-        {
-            state.last_prompt_text = Some(text.to_owned());
-            state.prompt_texts.push(text.to_owned());
+            {
+                state.last_prompt_text = Some(text.to_owned());
+                state.prompt_texts.push(text.to_owned());
+            }
         }
         if state.prompt_appends_response {
             let response_text = if state.k6_echo_from_prompt {
@@ -972,6 +1020,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
     {
         state.last_session_id = id.to_owned();
         state.abort_called = true;
+        state.abort_paths.push(full_request_path.clone());
         let status = state.abort_status;
         drop(state);
         write_response(&mut stream, status, b"");
@@ -997,6 +1046,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         && method == "GET"
     {
         state.last_session_id = id.to_owned();
+        state.message_paths.push(full_request_path.clone());
         let body = if state.messages_sequence.is_empty() {
             state
                 .session_messages
@@ -1027,6 +1077,7 @@ fn handle_client(mut stream: TcpStream, script: &Arc<Mutex<Script>>) {
         && !id.contains('/')
     {
         state.last_session_id = id.to_owned();
+        state.session_get_paths.push(full_request_path.clone());
         let body = if state.session_details_sequence.is_empty() {
             format!(r#"{{"id":"{id}"}}"#)
         } else {

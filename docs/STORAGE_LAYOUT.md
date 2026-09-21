@@ -103,23 +103,41 @@ Workspace files are **not** what Abrir/Compartir serve; those use registered
 
 ## 5. Generated artifacts / Creations
 
+A logical interactive resource is a **versioned lineage** of complete,
+immutable snapshots (ADR-0018):
+
 ```
-<app-data>/projects/<project-id>/outputs/<creation-id>/
+<app-data>/projects/<project-id>/outputs/<version-id>/
   index.html          # web entry (any `.html` is stored under this name)
   …sibling CSS/JS/images copied as sidecars
 ```
 
-Metadata lives on `Creation` in `project.json` (`displayName`, `kind`,
-`visibility`, `relativePath`, `byteSize`, `revision` currently always `1`).
-A later turn that modifies the **same** activity (same kind + display name)
-overwrites this tree in place and keeps the same Creation id. A distinct
-activity (different folder/display name) creates a new id.
+Each version directory is **self-contained and immutable**. A later turn that
+modifies an existing activity (e.g. only `estilos.css`) builds a NEW version
+directory by copying the base version's complete tree and overlaying only the
+changed files, then atomically renames it into place; the previous version is
+never mutated. V1..V3 of the same activity are three separate
+`outputs/<version-id>/` trees.
+
+Metadata lives on each `Creation` in `project.json`: `displayName`, `kind`,
+`visibility`, `relativePath`, `byteSize`, `revision` (always `1`), plus the
+versioned-lineage fields `lineageId`, `versionNumber`, `parentCreationId`, and
+`isCurrent`. Legacy records without these fields load as a one-version lineage
+(version 1, current, lineage = own id); they are never physically moved and
+their `project.json` stays byte-stable. Exactly one version is current per
+lineage; `parentCreationId` points to the previous version in the same lineage.
+
+Version building happens in a `.staging-<id>` directory under `outputs/`
+before an atomic rename, so a crash before promotion can never make a partial
+tree current. Stale `.staging-*` directories are recovered on the next version
+build.
 
 ## 6. Previewable outputs
 
 In-app **Abrir** for a web Creation:
 
-1. Resolves `outputs/<creation-id>/` for that project (same Creation as the card).
+1. Resolves `outputs/<version-id>/` for that project (the exact version the card
+   references, never "latest").
 2. Copies that tree to a **temporary** directory (`m8-preview-*` under the OS temp dir).
 3. Serves it from a loopback token server at
    `http://127.0.0.1:<ephemeral>/preview/<token>/` (token root maps to `index.html`).
@@ -134,6 +152,11 @@ materials).
 
 ```
 <app-data>/projects/<project-id>/publish/
+  index.html                # generated version-history landing page (metadata)
+  versions/
+    <version-id>/           # every published version, immutable
+      index.html
+      …
 ```
 
 This is a **copied snapshot** of currently public Creations (ADR-0004), not a
@@ -142,23 +165,42 @@ live view of `outputs/`. The local HTTP publisher serves only registered
 URL path uses the durable `publicationRoute` allocated on first publish; rename
 and republish keep the same route.
 
+Public routes:
+- `/slug/` serves a generated version-history landing page (V1..VN, current
+  marked "Actual", each with an "Abrir" link to its immutable version URL).
+- `/slug/latest/` aliases the current version's actual resource.
+- `/slug/<version-id>/` serves that exact immutable historical version.
+- `/slug/<version-id>/<asset>` serves an asset of that exact version.
+
+The words `latest` and `versions` are reserved. Unpublish only removes the
+route registration; it never deletes `outputs/` or `publish/` history.
+Re-publish restores the same route and historical URLs.
+
+The authoritative Share URL exposed to Copy / Open / QR is the immutable
+current-version URL (`/<slug>/<current-version-id>/`), so a shared link always
+identifies the exact version the user shared at that moment. A later version
+moves the share URL (and `/slug/latest/`) to the new version while every
+previously copied historical URL keeps resolving to its exact version. For
+non-web (document/file) publications the share URL is the route root.
+
 Active sharing (tunnel, port, public hostname) is **runtime-only**. After quit,
 links stop working even though `publish/` files remain on disk.
 
-When a shared Creation is updated in place, the app rebuilds this snapshot
-(`replace` on the existing route) so the **same public URL** serves the new
-bytes. If that rebuild fails, the assistant message must not claim the public
-link is already updated.
+When a shared Creation lineage gains a new version, the app rebuilds this
+snapshot (`replace` on the existing route) so the **same public URL** serves the
+new current bytes while historical versions remain reachable. If that rebuild
+fails, the assistant message must not claim the public link is already updated.
 
 ## 8. Publication model (from code, not intent)
 
 | Question | Actual behavior |
 | --- | --- |
 | Live from Creation files? | No. Publisher never reads `outputs/` or `workspace/`. |
-| Copied snapshot? | Yes. `PublicationSnapshotStore::prepare` copies public creations into `publish/`. |
+| Copied snapshot? | Yes. `PublicationSnapshotStore::prepare` copies public creations into `publish/` (all versions under `versions/<id>/`, plus a generated landing `index.html` and optional `materials.html`). |
 | Separate publish tree? | Yes: `publish/` is a sibling of `outputs/`. |
-| Same URL after update? | Yes, if republish/`replace` succeeds (same `publicationRoute`). |
-| Generic landing page? | Only when no public web Creation exists. Share promotes the target web Creation before snapshotting. |
+| Same URL after update? | Yes, if republish/`replace` succeeds (same `publicationRoute`; the share URL and `/slug/latest/` move to the new current version, historical versions stay under `/slug/<version-id>/`). |
+| Landing page? | `/slug/` is a generated version-history page for the shared web lineage; a materials page exists only when public non-web Creations exist. |
+| Historical versions? | Every version of a public lineage is exposed under `/slug/<version-id>/` while the project is published. |
 
 ## 9. Conversation history / messages
 
@@ -166,6 +208,15 @@ Messages persist inside `project.json` (`messages: Vec<Message>`, schema v3).
 No `localStorage`, no separate `messages.json`. User text is appended in
 `send_message_persist` before the agent runs; the assistant outcome is appended
 in `send_message_run`. Switching conversations is `project_open` of another id.
+
+Per-turn telemetry (`TurnMetrics`) is stored on the user message that owns the
+logical turn, and now includes `sourceNames` — the grounded source display
+names that were formerly concatenated into the assistant text as a `Fuentes:`
+block. New assistant messages carry no embedded `Fuentes:` suffix; the UI maps
+each assistant message to its preceding user message's `TurnMetrics` to render
+the per-turn compact line and detail popover. Older persisted messages whose
+`text` already contains a generated `Fuentes:` suffix are left byte-stable
+(no stripping or rewriting), and their `sourceNames` defaults to empty.
 
 ## 10. Persistent vs temporary vs reconstructed
 
@@ -207,14 +258,17 @@ still work. Public URLs require the live tunnel + publisher.
 Intent (ADR-0002 / CODEX_HANDOFF) matches the on-disk project layout
 (`inputs` / `workspace` / `outputs` / `publish`). Known implementation notes:
 
-- `revision` is stored and validated as `1`; in-place Creation updates overwrite
-  files without bumping revision (no schema migration).
+- `revision` is stored and validated as `1`; in-place Creation updates are NOT
+  supported anymore. Modifying an activity builds a new immutable version
+  (ADR-0018).
 - `workspace/` persists after turns; it is scratch, not a second Creation store.
 - Publication is a snapshot, not live files. Updating a shared Creation requires
   an explicit republish/replace of `publish/` (implemented on the agent-complete
-  path when the project is already published).
+  path when the project is already published and the new version belongs to a
+  shared lineage).
 - Share/tunnel state is not persisted; a restart does not restore public URLs.
-- Preview uses a temp copy of `outputs/<id>`, not `publish/` and not the AppImage.
+- Preview uses a temp copy of `outputs/<version-id>`, not `publish/` and not the
+  AppImage.
 
 If a future change migrates this tree, it must be a dedicated storage task with
 an upgrade plan. This pass does not restructure storage.

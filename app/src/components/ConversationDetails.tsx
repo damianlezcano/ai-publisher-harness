@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
 import type {
   ModelSummary,
+  ConversationUsageTotals,
   PreviewData,
   ProjectView,
   ProviderSummary,
@@ -27,6 +28,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [logs, setLogs] = useState<SessionLogEntry[]>([]);
   const [durableMetrics, setDurableMetrics] = useState<TurnMetrics | null>(null);
+  const [accumulatedUsage, setAccumulatedUsage] = useState<ConversationUsageTotals | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{
     title: string;
@@ -41,12 +43,14 @@ export default function ConversationDetails({ project, active, onClose, onRefres
       api.providerList(),
       api.sessionLogs().catch(() => []),
       api.conversationTurnMetrics(project.id).catch(() => null),
+      api.conversationAccumulatedUsage(project.id).catch(() => null),
     ])
-      .then(([modelList, providerList, sessionLogs, metrics]) => {
+      .then(([modelList, providerList, sessionLogs, metrics, totals]) => {
         setModels(modelList);
         setProviders(providerList);
         setLogs(Array.isArray(sessionLogs) ? sessionLogs : []);
         setDurableMetrics(metrics);
+        setAccumulatedUsage(totals);
       })
       .catch((err) => setError(errorMessage(err)));
   }, [project.id, project.name]);
@@ -158,6 +162,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
         conversationId={project.id}
         logs={logs}
         durableMetrics={durableMetrics}
+        accumulatedUsage={accumulatedUsage}
       />
       <section className="provider-section">
         <h3>{messages.conversationDetails.modelHeading}</h3>

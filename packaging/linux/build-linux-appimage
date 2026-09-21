@@ -1,41 +1,71 @@
 #!/usr/bin/env bash
+# Controlled Ubuntu 24.04 AppImage build (runs inside the packaging root).
+#
+# Flow:
+#   PATH A — normal Tauri bundling: `cargo tauri build --bundles appimage`
+#   assembles the AppDir and gathers the Ubuntu 24.04 dependency closure. The
+#   pinned sidecars are static executables, so linuxdeploy aborts on them once
+#   the closure is complete; the controlled fallback then packages that AppDir.
+#   PATH B — bundling failed before AppDir assembly (e.g. a transient HTTP 503
+#   downloading linuxdeploy/AppRun/plugin helpers): the AppDir is constructed
+#   deterministically from the compiled release tree. The fallback NEVER runs
+#   `find` against a `bundle/appimage/` directory that Tauri may not have made.
+#
+# Both paths converge on packaging/linux/construct-appdir, which restores the
+# verified sidecars, stages the ONNX Runtime payload, prepares the WebKitGTK and
+# graphics runtimes, and packages the canonical AppImage with appimagetool.
 set -euo pipefail
 cd /workspace
 export CI=true
 export COREPACK_HOME=/workspace/.corepack
 ./scripts/fetch-sidecars linux-x86_64
 ( cd app && pnpm install --frozen-lockfile )
-# tauri-bundler assembles the AppDir with the Ubuntu 24.04 dependency closure
-# and then runs linuxdeploy. linuxdeploy aborts on the pinned sidecars (static
-# executables: ldd exits 1) once the AppDir is complete, so fall back to
-# appimagetool packaging of that container-assembled AppDir (same documented
-# pattern as scripts/smoke-package).
-rm -rf app/src-tauri/target/release/bundle/appimage
+
+# tauri.conf.json sets bundle.useLocalToolsDir, so the Tauri AppImage helpers
+# live under app/src-tauri/target/.tauri, persisted in the mounted workspace.
+# Pre-populating them means the bundler (and the appimagetool fallback) never
+# depend on a fresh transient linuxdeploy/AppRun/plugin download per run.
+./scripts/prepare-packaging-tools
+
+bundle_dir="app/src-tauri/target/release/bundle/appimage"
+tools_dir="app/src-tauri/target/.tauri"
+release_bin="app/src-tauri/target/release/educai"
+canonical="$bundle_dir/EducAI_0.1.0_amd64.AppImage"
+
+# Stale-artifact safety: a previous run's AppImage or AppDir can never be
+# reported as this run's output.
+rm -rf "$bundle_dir"
+
+# PATH A: try the normal Tauri AppImage bundling first. linuxdeploy aborts on
+# the pinned static sidecars once the dependency closure is complete, so the
+# build itself normally reports failure even though the AppDir was assembled.
 if ! ( cd app/src-tauri && cargo tauri build --bundles appimage ); then
-  echo 'build-linux-appimage: note: tauri linuxdeploy step failed; packaging AppDir with appimagetool' >&2
+  echo 'build-linux-appimage: note: tauri AppImage bundling did not complete; looking for the assembled AppDir' >&2
 fi
-appdir="$(find app/src-tauri/target/release/bundle/appimage -maxdepth 1 -type d -name '*.AppDir' | head -n 1)"
-[[ -n "$appdir" ]] || { echo 'build-linux-appimage: FAIL: no AppDir produced' >&2; exit 1; }
-if [[ ! -e "$appdir/educai.png" && -f "$appdir/EducAI.png" ]]; then
-  ln -sf EducAI.png "$appdir/educai.png"
+
+appdir=""
+mapfile -t appdirs < <(find "$bundle_dir" -maxdepth 1 -type d -name '*.AppDir' 2>/dev/null || true)
+if (( ${#appdirs[@]} == 1 )); then
+  appdir="${appdirs[0]}"
+  echo "build-linux-appimage: using the Tauri-assembled AppDir: $appdir"
 fi
-# Always rebuild from the controlled AppDir after restoring/verifying our
-# component payloads. A linuxdeploy-produced AppImage may predate these copies.
-cp sidecars/opencode-x86_64-unknown-linux-gnu "$appdir/usr/bin/opencode"
-cp sidecars/cloudflared-x86_64-unknown-linux-gnu "$appdir/usr/bin/cloudflared"
-./packaging/linux/stage-onnxruntime-appdir "$appdir"
-./packaging/linux/prepare-graphics-appdir "$appdir"
-./packaging/linux/prepare-webkit-appdir "$appdir"
-appimagetool="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
-[[ -f "$appimagetool" ]] || { echo "build-linux-appimage: FAIL: appimagetool not found at $appimagetool" >&2; exit 1; }
-appimage="app/src-tauri/target/release/bundle/appimage/EducAI_0.1.0_amd64.AppImage"
-rm -f "$appimage"
-if ! env OUTPUT="$appimage" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
-    "$appimagetool" --appimage-extract-and-run --appdir="$appdir" >/dev/null 2>&1; then
-  echo 'build-linux-appimage: FAIL: appimagetool packaging failed' >&2
-  exit 1
+if [[ -z "$appdir" ]]; then
+  # PATH B: Tauri produced no AppDir (e.g. its linuxdeploy/AppRun/plugin
+  # download failed before AppDir assembly). Construct one deterministically at
+  # the canonical location — never `find` against a directory Tauri did not make.
+  appdir="$bundle_dir/EducAI.AppDir"
+  echo 'build-linux-appimage: note: no Tauri AppDir produced; constructing the AppDir from the release tree' >&2
 fi
-artifact="$appimage"
+
+./packaging/linux/construct-appdir \
+  --appdir "$appdir" \
+  --release-bin "$release_bin" \
+  --sidecars "$(pwd)/sidecars" \
+  --components "$(pwd)/components/linux-x86_64" \
+  --tools "$(pwd)/$tools_dir" \
+  --output "$(pwd)/$canonical"
+
+artifact="$canonical"
 artifact="$(readlink -f "$artifact")"
 ./scripts/check-appimage-glibc "$artifact" 2.39
 ./scripts/check-appimage-webkit-runtime "$artifact"

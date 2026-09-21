@@ -120,6 +120,7 @@ fn fake_engine_send_returns_scripted_artifacts_and_message() {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     };
 
     let task = engine.send(&session, &prompt).unwrap();
@@ -164,6 +165,7 @@ fn fake_engine_fault_injection() {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     };
     assert!(matches!(
         engine.send(&session, &prompt),
@@ -182,6 +184,7 @@ fn fake_engine_send_and_cancel_before_ready_error() {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     };
 
     assert!(matches!(
@@ -208,6 +211,7 @@ fn fake_engine_shutdown_returns_to_stopped() {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     };
     assert!(matches!(
         engine.send(&session, &prompt),
@@ -230,6 +234,7 @@ fn fake_engine_records_calls_in_order() {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     };
     engine.send(&session, &prompt).unwrap();
     engine.cancel(&session).unwrap();

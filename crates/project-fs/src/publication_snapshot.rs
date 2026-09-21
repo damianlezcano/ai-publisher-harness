@@ -1,7 +1,8 @@
 //! Validated, journaled publication snapshots for M3.
 //!
 //! This adapter receives already-persisted project metadata and never decides
-//! visibility.  It only copies creations explicitly marked public.
+//! visibility.  It only copies creations explicitly marked public (plus every
+//! historical version of a public web lineage).
 
 use std::fs;
 use std::io::Write;
@@ -9,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use project_core::{
     CoreResult, Creation, CreationKind, CreationVisibility, Project, ProjectCoreError, ProjectId,
+    Timestamp,
 };
 use project_publisher::PublishRoot;
 use serde::{Deserialize, Serialize};
@@ -23,7 +25,7 @@ const STAGING_PREFIX: &str = ".publish-staging-";
 const PREVIOUS_PREFIX: &str = ".publish-previous-";
 const JOURNAL_PREFIX: &str = ".publish-swap-";
 const JOURNAL_SUFFIX: &str = ".json";
-const RESERVED_ROOTS: &[&str] = &["index.html", "materials.html", "files"];
+const RESERVED_ROOTS: &[&str] = &["index.html", "materials.html", "files", "versions"];
 
 /// A successfully installed immutable `publish/` tree.
 #[derive(Clone, Debug)]
@@ -87,29 +89,58 @@ impl PublicationSnapshotStore {
         project.validate()?;
         self.recover(&project.id)?;
         let project_dir = self.project_dir(&project.id)?;
+        // Visibility is lineage-scoped for web version history: when a web
+        // lineage is shared (its current version is public), every historical
+        // version of that same lineage is exposed under `versions/<id>/`, even
+        // though those versions keep their own private visibility. Files remain
+        // individually scoped (only explicitly-public creations are copied).
+        let public_lineages: std::collections::HashSet<&project_core::CreationId> = project
+            .creations
+            .iter()
+            .filter(|creation| {
+                creation.visibility == CreationVisibility::Public
+                    && creation.kind == CreationKind::Web
+            })
+            .map(project_core::Creation::lineage)
+            .collect();
         let public: Vec<&Creation> = project
             .creations
             .iter()
-            .filter(|creation| creation.visibility == CreationVisibility::Public)
+            .filter(|creation| {
+                creation.visibility == CreationVisibility::Public
+                    || (creation.kind == CreationKind::Web
+                        && public_lineages.contains(creation.lineage()))
+            })
             .collect();
         let web: Vec<&Creation> = public
             .iter()
             .copied()
             .filter(|creation| creation.kind == CreationKind::Web)
             .collect();
-        if web.len() > 1 {
+        // More than one public web LINEAGE would mean two independent
+        // interactive resources competing for the same `/slug/` root. Multiple
+        // versions of the SAME lineage are fine: historical versions live under
+        // `versions/<id>/`.
+        let web_lineages: std::collections::HashSet<&project_core::CreationId> =
+            web.iter().map(|creation| creation.lineage()).collect();
+        if web_lineages.len() > 1 {
             return Err(ProjectCoreError::InvalidCreation(
-                "more than one public web creation".into(),
+                "more than one public web lineage".into(),
             ));
         }
 
+        let current_web = web
+            .iter()
+            .copied()
+            .find(|creation| creation.current())
+            .or_else(|| web.first().copied());
         let staging_temp = Builder::new()
             .prefix(STAGING_PREFIX)
             .tempdir_in(&project_dir)
             .map_err(|_| ProjectCoreError::WriteFailed)?;
         let staging = staging_temp.keep();
         let result = self
-            .prepare_staging(project, &public, web.first().copied(), &staging)
+            .prepare_staging(project, &public, current_web, &staging)
             .and_then(|_| {
                 if self.fault == Some(SnapshotFault::AfterStaging) {
                     return Err(ProjectCoreError::OperationFailed {
@@ -199,6 +230,11 @@ impl PublicationSnapshotStore {
     ) -> CoreResult<()> {
         let project_dir = self.project_dir(&project.id)?;
         let mut materials = Vec::new();
+        // A shared web lineage is materialized ONLY under `versions/<id>/` as
+        // complete immutable snapshots. The publish root never mirrors the
+        // current creation: its `index.html` is publication metadata (either
+        // the generated version-history landing page or the materials landing
+        // for non-web publications), never a copied creation index.
         if let Some(web) = web {
             let source_root = creation_root(&project_dir, web)?;
             validate_source_tree(&source_root, true)?;
@@ -210,7 +246,18 @@ impl PublicationSnapshotStore {
                     "web entry must be index.html".into(),
                 ));
             }
-            copy_tree(&source_root, staging, true)?;
+        }
+        // Every public creation (including the current web) is exposed under
+        // `versions/<id>/` so exact immutable URLs stay stable while the
+        // project remains published.
+        let versions_root = staging.join("versions");
+        fs::create_dir_all(&versions_root).map_err(|_| ProjectCoreError::WriteFailed)?;
+        for creation in public.iter().copied() {
+            let source_root = creation_root(&project_dir, creation)?;
+            validate_source_tree(&source_root, true)?;
+            let version_dir = versions_root.join(creation.id.as_str());
+            fs::create_dir(&version_dir).map_err(|_| ProjectCoreError::WriteFailed)?;
+            copy_tree(&source_root, &version_dir, false)?;
         }
         for creation in public
             .iter()
@@ -235,14 +282,22 @@ impl PublicationSnapshotStore {
             materials.push((creation, relative));
         }
         let html = landing_html(&materials);
-        let landing = if web.is_some() && !materials.is_empty() {
-            "materials.html"
+        if let Some(web) = web {
+            // Version-history landing page for the shared web lineage. This is
+            // publication metadata: it never touches a creation snapshot, and
+            // every "Abrir" targets the immutable `/slug/<version-id>/` URL.
+            let lineage_versions: Vec<&Creation> = public
+                .iter()
+                .copied()
+                .filter(|c| c.lineage() == web.lineage())
+                .collect();
+            let history = versions_landing_html(web, &lineage_versions);
+            write_file(&staging.join("index.html"), history.as_bytes())?;
+            if !materials.is_empty() {
+                write_file(&staging.join("materials.html"), html.as_bytes())?;
+            }
         } else {
-            "index.html"
-        };
-        if web.is_some() && materials.is_empty() { /* untrusted web owns index */
-        } else {
-            write_file(&staging.join(landing), html.as_bytes())?;
+            write_file(&staging.join("index.html"), html.as_bytes())?;
         }
         // Generated `index.html`, `materials.html`, and `files/` are valid
         // snapshot roots; source-copy validation above reserves them from an
@@ -578,6 +633,61 @@ fn escape_html(value: &str) -> String {
         })
         .collect()
 }
+
+/// Generates the user-facing version-history landing page for a shared web
+/// lineage. This is publication metadata, never a creation snapshot: every
+/// "Abrir" link targets the immutable `/slug/<version-id>/` URL, no raw
+/// filesystem path is disclosed, and all values are HTML-escaped.
+fn versions_landing_html(web: &Creation, versions: &[&Creation]) -> String {
+    let mut entries: Vec<&Creation> = versions.to_vec();
+    // Newest/current first. The persisted monotonic version number is the
+    // trusted ordering (validated per lineage); creation time then id are the
+    // deterministic fallback for legacy records without a clean version number.
+    // Ordering is presentation-only: no immutable version identity is mutated.
+    entries.sort_by(|a, b| {
+        b.version()
+            .cmp(&a.version())
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    let title = escape_html(&web.display_name);
+    let mut html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title} · Versiones</title>\
+         </head><body><h1>{title}</h1><h2>Versiones disponibles</h2><ol class=\"versions\">"
+    );
+    for creation in entries {
+        let label = escape_html(&format!("V{}", creation.version()));
+        let date = escape_html(&version_date(&creation.created_at));
+        let id = escape_html(creation.id.as_str());
+        let current = if creation.current() {
+            " <span class=\"version-current\">Actual</span>"
+        } else {
+            ""
+        };
+        let open = format!("<a class=\"version-open\" href=\"{id}/\">Abrir</a>");
+        let id_meta = format!("<span class=\"version-id\">ID: {id}</span>");
+        html.push_str(&format!(
+            "<li><span class=\"version-label\">{label}</span>{current} \
+             <span class=\"version-date\">{date}</span> {open} {id_meta}</li>"
+        ));
+    }
+    html.push_str("</ol></body></html>");
+    html
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` (UTC) -> `DD/MM/YYYY HH:MM` for the landing page.
+/// Timestamps are stored and served in UTC; the format is deterministic.
+fn version_date(created_at: &Timestamp) -> String {
+    let rfc3339 = created_at.as_str();
+    let (date, rest) = rfc3339.split_once('T').unwrap_or((rfc3339, ""));
+    let time = rest.strip_suffix('Z').unwrap_or(rest);
+    let mut parts = date.split('-');
+    let year = parts.next().unwrap_or("");
+    let month = parts.next().unwrap_or("");
+    let day = parts.next().unwrap_or("");
+    let hhmm = time.get(..5).unwrap_or(time);
+    format!("{day}/{month}/{year} {hhmm}")
+}
 fn read_journal(path: &Path) -> CoreResult<SwapJournal> {
     let bytes = fs::read(path).map_err(|_| ProjectCoreError::OperationFailed {
         operation: "recover",
@@ -673,6 +783,11 @@ mod tests {
             revision: 1,
             parent_creation_id: None,
             created_at: Timestamp::parse("2026-08-29T00:00:00Z").unwrap(),
+
+            lineage_id: None,
+            version_number: None,
+            is_current: None,
+            bundle_root: None,
         }
     }
 

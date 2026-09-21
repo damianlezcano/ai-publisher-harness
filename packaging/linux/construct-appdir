@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# Locate or construct the EducAI AppDir, populate the verified component
+# payloads, and package the canonical AppImage with appimagetool.
+#
+# Two entry modes, selected by the state of --appdir:
+#   1. LOCATE: --appdir already contains a complete AppDir (AppRun + binary +
+#      desktop entry). This is the Tauri/linuxdeploy-assembled AppDir that the
+#      normal bundling path leaves behind when linuxdeploy aborts on the pinned
+#      static sidecars. It is validated, then its component payloads are
+#      refreshed and it is repackaged.
+#   2. CONSTRUCT: --appdir does not exist yet. This happens when the Tauri
+#      bundler failed before AppDir assembly (e.g. a transient HTTP 503 while
+#      downloading its linuxdeploy/AppRun/plugin helpers). A complete AppDir is
+#      built deterministically from the compiled release tree, the dependency
+#      closure is gathered by the cached linuxdeploy, and it is repackaged.
+#
+# The fallback NEVER assumes Tauri created `bundle/appimage/`; the release
+# binary, verified sidecars, verified ONNX Runtime payload and the cached
+# packaging tools are the only inputs required.
+#
+# Fail-closed: a missing release binary, missing verified sidecar/ONNX payload,
+# missing cached tool, or a failed linuxdeploy/appimagetool step aborts with a
+# clear diagnostic. No broad `|| true` masking.
+#
+# Usage:
+#   packaging/linux/construct-appdir \
+#     --appdir DIR --release-bin BIN --sidecars DIR --components DIR \
+#     --tools DIR --output FILE [--no-webkit-prep]
+#
+# Exit codes: 0 = PASS, 1 = FAIL, 2 = usage.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+appdir="" release_bin="" sidecars_dir="" components_dir="" tools_dir="" output=""
+webkit_prep=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --appdir) appdir="$2"; shift 2 ;;
+    --release-bin) release_bin="$2"; shift 2 ;;
+    --sidecars) sidecars_dir="$2"; shift 2 ;;
+    --components) components_dir="$2"; shift 2 ;;
+    --tools) tools_dir="$2"; shift 2 ;;
+    --output) output="$2"; shift 2 ;;
+    --no-webkit-prep) webkit_prep=0; shift ;;
+    *)
+      echo "construct-appdir: usage: --appdir DIR --release-bin BIN --sidecars DIR --components DIR --tools DIR --output FILE [--no-webkit-prep]" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ -z "$appdir" || -z "$release_bin" || -z "$sidecars_dir" || -z "$components_dir" || -z "$tools_dir" || -z "$output" ]]; then
+  echo "construct-appdir: usage: --appdir DIR --release-bin BIN --sidecars DIR --components DIR --tools DIR --output FILE [--no-webkit-prep]" >&2
+  exit 2
+fi
+
+fail() {
+  echo "construct-appdir: FAIL: $*" >&2
+  exit 1
+}
+
+# Fixed packaging identity (matches tauri.conf.json / Cargo).
+product="educai"
+product_title="EducAI"
+version="0.1.0"
+desktop_file="usr/share/applications/$product_title.desktop"
+
+# --- Fail-closed prerequisite gate ------------------------------------------
+[[ -f "$release_bin" && -x "$release_bin" ]] \
+  || fail "release binary missing or not executable (expected after a successful Rust build): $release_bin"
+
+opencode_sidecar="$sidecars_dir/opencode-x86_64-unknown-linux-gnu"
+cloudflared_sidecar="$sidecars_dir/cloudflared-x86_64-unknown-linux-gnu"
+[[ -f "$opencode_sidecar" && -x "$opencode_sidecar" ]] \
+  || fail "verified opencode sidecar missing; run scripts/fetch-sidecars linux-x86_64: $opencode_sidecar"
+[[ -f "$cloudflared_sidecar" && -x "$cloudflared_sidecar" ]] \
+  || fail "verified cloudflared sidecar missing; run scripts/fetch-sidecars linux-x86_64: $cloudflared_sidecar"
+
+[[ -d "$components_dir/onnxruntime" ]] \
+  || fail "verified ONNX Runtime component missing; run scripts/fetch-sidecars linux-x86_64: $components_dir/onnxruntime"
+
+appimagetool="$tools_dir/linuxdeploy-plugin-appimage.AppImage"
+apprun="$tools_dir/AppRun-x86_64"
+linuxdeploy="$tools_dir/linuxdeploy-x86_64.AppImage"
+[[ -f "$appimagetool" ]] || fail "appimagetool missing; run scripts/prepare-packaging-tools: $appimagetool"
+[[ -f "$apprun" ]] || fail "AppRun missing; run scripts/prepare-packaging-tools: $apprun"
+[[ -f "$linuxdeploy" ]] || fail "linuxdeploy missing; run scripts/prepare-packaging-tools: $linuxdeploy"
+
+# --- Locate or construct the AppDir ------------------------------------------
+is_complete_appdir() {
+  [[ -f "$1/AppRun" ]] \
+    && [[ -x "$1/usr/bin/$product" ]] \
+    && [[ -f "$1/$desktop_file" ]]
+}
+
+if is_complete_appdir "$appdir"; then
+  echo "construct-appdir: locating existing AppDir: $appdir"
+else
+  echo "construct-appdir: constructing AppDir from the release tree: $appdir"
+  rm -rf "$appdir"
+  mkdir -p "$appdir/usr/bin" "$appdir/usr/lib" \
+    "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor"
+
+  cp "$release_bin" "$appdir/usr/bin/$product"
+  chmod +x "$appdir/usr/bin/$product"
+
+  # Desktop entry mirrors the tauri-bundler freedesktop generator contract.
+  cat > "$appdir/$desktop_file" <<EOF
+[Desktop Entry]
+Categories=Education;
+Comment=Asistente educativo con IA para crear y compartir materiales.
+Exec=$product
+StartupWMClass=$product
+Icon=$product
+Name=$product_title
+Terminal=false
+Type=Application
+EOF
+
+  # Icons: hicolor hierarchy (sizes derived from the actual PNGs) plus the
+  # largest square icon at the AppDir root, as appimagetool and tauri expect.
+  python3 - "$appdir" "$repo_root/app/src-tauri/icons" "$product" "$product_title" <<'PY'
+import os, shutil, struct, sys
+appdir, icons_dir, product, product_title = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+largest = None
+for name in sorted(os.listdir(icons_dir)):
+    if not name.endswith(".png"):
+        continue
+    with open(os.path.join(icons_dir, name), "rb") as handle:
+        width, height = struct.unpack(">II", handle.read(26)[16:24])
+    suffix = "@2" if "@2x" in name else ""
+    dest = os.path.join(appdir, f"usr/share/icons/hicolor/{width}x{height}{suffix}/apps/{product}.png")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    shutil.copyfile(os.path.join(icons_dir, name), dest)
+    if width == height and (largest is None or width > largest[0]):
+        largest = (width, name)
+if largest is not None:
+    shutil.copyfile(os.path.join(icons_dir, largest[1]), os.path.join(appdir, f"{product_title}.png"))
+PY
+
+  cp "$apprun" "$appdir/AppRun"
+  chmod +x "$appdir/AppRun"
+
+  # WebKitGTK subprocess helpers staged before linuxdeploy so their dynamic
+  # dependencies join the closure; prepare-webkit-appdir re-installs and
+  # relocates them afterwards (this matches the Tauri-assembled AppDir layout).
+  webkit_src="/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+  webkit_dir="$appdir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+  if [[ -d "$webkit_src" ]]; then
+    mkdir -p "$webkit_dir/injected-bundle"
+    for helper in WebKitNetworkProcess WebKitWebProcess WebKitGPUProcess; do
+      [[ -f "$webkit_src/$helper" ]] && install -m 0755 "$webkit_src/$helper" "$webkit_dir/$helper"
+    done
+    if [[ -f "$webkit_src/injected-bundle/libwebkit2gtkinjectedbundle.so" ]]; then
+      install -m 0644 "$webkit_src/injected-bundle/libwebkit2gtkinjectedbundle.so" \
+        "$webkit_dir/injected-bundle/libwebkit2gtkinjectedbundle.so"
+    fi
+  fi
+
+  # Place the (verified) sidecars BEFORE linuxdeploy exactly like the Tauri flow:
+  # linuxdeploy gathers the dependency closure first, then aborts on the static
+  # executables. The abort also skips linuxdeploy's relocatable path-rewrite of
+  # the bundled libs, so libwebkit2gtk keeps the absolute Ubuntu helper paths
+  # that prepare-webkit-appdir later relocates — byte-identical to the
+  # Tauri-assembled AppDir. The verified originals are restored below.
+  cp "$opencode_sidecar" "$appdir/usr/bin/opencode"
+  chmod +x "$appdir/usr/bin/opencode"
+  cp "$cloudflared_sidecar" "$appdir/usr/bin/cloudflared"
+  chmod +x "$appdir/usr/bin/cloudflared"
+
+  linuxdeploy_log="$(mktemp)"
+  if ! PATH="$tools_dir:$PATH" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+      "$linuxdeploy" --appimage-extract-and-run --verbosity 1 \
+      --appdir "$appdir" --plugin gtk >"$linuxdeploy_log" 2>&1; then
+    echo 'construct-appdir: note: linuxdeploy aborted (expected on the pinned static sidecars); validating the gathered closure' >&2
+  fi
+  # A non-zero exit is expected here; real failures leave the closure incomplete
+  # or the WebKitGTK payload in a state prepare-webkit-appdir cannot relocate.
+  if [[ ! -f "$appdir/usr/lib/libwebkit2gtk-4.1.so.0" ]]; then
+    tail -n 20 "$linuxdeploy_log" >&2 || true
+    rm -f "$linuxdeploy_log"
+    fail "linuxdeploy dependency gathering failed for $appdir (dependency closure incomplete; see log above)"
+  fi
+  if ! grep -a -q -F "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" "$appdir/usr/lib/libwebkit2gtk-4.1.so.0"; then
+    tail -n 20 "$linuxdeploy_log" >&2 || true
+    rm -f "$linuxdeploy_log"
+    fail "linuxdeploy dependency gathering failed for $appdir (bundled WebKitGTK is not in the expected pre-relocation state)"
+  fi
+  rm -f "$linuxdeploy_log"
+fi
+
+# Root artifacts appimagetool resolves from the desktop entry (Icon=educai).
+[[ -f "$appdir/$product_title.png" ]] || fail "AppDir root icon missing: $appdir/$product_title.png"
+[[ -e "$appdir/$product.png" ]] || ln -sf "$product_title.png" "$appdir/$product.png"
+[[ -e "$appdir/.DirIcon" ]] || ln -sf "$product_title.png" "$appdir/.DirIcon"
+[[ -e "$appdir/$product_title.desktop" ]] || ln -sf "$desktop_file" "$appdir/$product_title.desktop"
+
+# --- Verified component payloads (never silently skipped) --------------------
+cp "$opencode_sidecar" "$appdir/usr/bin/opencode"
+chmod +x "$appdir/usr/bin/opencode"
+cp "$cloudflared_sidecar" "$appdir/usr/bin/cloudflared"
+chmod +x "$appdir/usr/bin/cloudflared"
+
+"$repo_root/packaging/linux/stage-onnxruntime-appdir" "$appdir"
+"$repo_root/packaging/linux/prepare-graphics-appdir" "$appdir"
+if (( webkit_prep )); then
+  "$repo_root/packaging/linux/prepare-webkit-appdir" "$appdir"
+fi
+
+# --- Package with appimagetool -----------------------------------------------
+# Create the canonical output directory explicitly: the fallback must not depend
+# on Tauri having created `bundle/appimage/`.
+out_dir="$(dirname "$output")"
+mkdir -p "$out_dir"
+rm -f "$output"
+
+appimagetool_log="$(mktemp)"
+if ! env OUTPUT="$output" ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+    "$appimagetool" --appimage-extract-and-run --appdir="$appdir" \
+    >"$appimagetool_log" 2>&1; then
+  tail -n 20 "$appimagetool_log" >&2 || true
+  rm -f "$output" "$appimagetool_log"
+  fail "appimagetool packaging failed for $appdir (see log above)"
+fi
+rm -f "$appimagetool_log"
+[[ -f "$output" ]] || fail "appimagetool did not produce the expected artifact: $output"
+
+echo "construct-appdir: PASS: packaged $output"

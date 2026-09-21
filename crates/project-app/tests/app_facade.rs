@@ -148,6 +148,62 @@ fn completed_turn_logs_sanitized_actual_usage_without_prompt_content() {
 }
 
 #[test]
+fn per_turn_metrics_are_distinct_and_accumulate_additively() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let project = app.create_project("A").expect("project");
+
+    engine.set_message("Primera respuesta".into());
+    engine.set_usage(RemoteUsage {
+        input_tokens: Some(100),
+        output_tokens: Some(50),
+        cache_read_tokens: Some(10),
+        cache_write_tokens: Some(5),
+        total_tokens: Some(165),
+        cost_usd: Some(0.5),
+        source: UsageSource::ProviderActual,
+    });
+    app.send_message(&project.id, "uno", &[]).expect("send");
+
+    let first = app.last_turn_metrics(&project.id).unwrap().unwrap();
+    assert_eq!(first.input_tokens, Some(100));
+    assert_eq!(first.output_tokens, Some(50));
+
+    // A second turn with different provider usage must not overwrite the
+    // first turn's per-turn record.
+    engine.set_message("Segunda respuesta".into());
+    engine.set_usage(RemoteUsage {
+        input_tokens: Some(300),
+        output_tokens: Some(150),
+        cache_read_tokens: Some(30),
+        cache_write_tokens: Some(15),
+        total_tokens: Some(495),
+        cost_usd: Some(0.25),
+        source: UsageSource::ProviderActual,
+    });
+    app.send_message(&project.id, "dos", &[]).expect("send");
+
+    let second = app.last_turn_metrics(&project.id).unwrap().unwrap();
+    assert_eq!(second.input_tokens, Some(300));
+    assert_eq!(second.output_tokens, Some(150));
+    assert_ne!(first.input_tokens, second.input_tokens);
+
+    // Conversation totals are the additive sum of both turns, never a single
+    // turn's values nor the latest turn only.
+    let totals = app
+        .accumulated_conversation_usage(&project.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(totals.remote_calls, Some(2));
+    assert_eq!(totals.input_tokens, Some(400));
+    assert_eq!(totals.output_tokens, Some(200));
+    assert_eq!(totals.cache_read_tokens, Some(40));
+    assert_eq!(totals.cache_write_tokens, Some(20));
+    assert_eq!(totals.total_tokens, Some(660));
+    assert_eq!(totals.cost_usd, Some(0.75));
+}
+
+#[test]
 fn conversation_model_is_validated_persisted_isolated_and_clearable() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, _, _) = app(tmp.path());
@@ -575,10 +631,98 @@ fn publish_returns_public_url_and_status() {
     let url = view.public_url.clone().expect("url");
     assert!(url.starts_with("https://fake-tunnel.trycloudflare.com/"));
     assert!(url.contains("fotosintesis"));
+    // A non-web project shares the route root; root/latest are exposed too.
+    assert_eq!(view.root_url.as_deref(), Some(url.as_str()));
+    assert!(view.latest_url.as_deref().unwrap().ends_with("/latest/"));
+    assert_eq!(view.current_version_id, None);
 
     let status = app.publication_status(&p.id).expect("status");
     assert_eq!(status.state, "published");
     assert_eq!(status.public_url, Some(url));
+}
+
+#[test]
+fn share_publication_view_targets_the_immutable_current_version() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V1</html>");
+    let v1 = app
+        .send_message(&p.id, "creá la actividad", &[])
+        .expect("v1")
+        .registered_creation_ids[0]
+        .clone();
+    app.publish_creation(&p.id, Some(&v1)).expect("share v1");
+    let view = app.publication_status(&p.id).expect("status");
+    let route = view
+        .root_url
+        .clone()
+        .expect("root")
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .expect("route")
+        .to_owned();
+    let base = format!("https://fake-tunnel.trycloudflare.com/{route}");
+    // The authoritative share URL is the immutable V1 URL, never root/latest.
+    assert_eq!(
+        view.public_url.as_deref(),
+        Some(format!("{base}/{v1}/").as_str())
+    );
+    assert_eq!(view.root_url.as_deref(), Some(format!("{base}/").as_str()));
+    assert_eq!(
+        view.latest_url.as_deref(),
+        Some(format!("{base}/latest/").as_str())
+    );
+    assert_eq!(view.current_version_id.as_deref(), Some(v1.as_str()));
+    assert_ne!(view.public_url.as_deref(), view.root_url.as_deref());
+    assert_ne!(view.public_url.as_deref(), view.latest_url.as_deref());
+
+    // V2 becomes current; the share URL moves to the immutable V2 URL on the
+    // SAME route, and the already-copied V1 URL still resolves to V1.
+    engine.set_message("Listo. Cambié el título.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V2</html>");
+    let v2 = app
+        .send_message(&p.id, "cambiá el título", &[])
+        .expect("v2")
+        .registered_creation_ids[0]
+        .clone();
+    app.publish_creation(&p.id, Some(&v2)).expect("share v2");
+    let view = app.publication_status(&p.id).expect("status v2");
+    assert_eq!(
+        view.public_url.as_deref(),
+        Some(format!("{base}/{v2}/").as_str())
+    );
+    assert_eq!(view.current_version_id.as_deref(), Some(v2.as_str()));
+    assert_eq!(view.root_url.as_deref(), Some(format!("{base}/").as_str()));
+    assert_eq!(
+        view.latest_url.as_deref(),
+        Some(format!("{base}/latest/").as_str())
+    );
+    assert_ne!(view.public_url.as_deref(), view.root_url.as_deref());
+
+    // V1 remains byte-identical and reachable under its immutable URL.
+    let v1_html = fs::read_to_string(publish.join("versions").join(&v1).join("index.html"))
+        .expect("v1 immutable");
+    assert!(v1_html.contains("V1"), "{v1_html}");
+    let v2_html = fs::read_to_string(publish.join("versions").join(&v2).join("index.html"))
+        .expect("v2 immutable");
+    assert!(v2_html.contains("V2"), "{v2_html}");
+    // Root lists both and marks V2 Actual.
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root");
+    assert!(
+        root_html.contains(&format!("href=\"{v1}/\""),),
+        "{root_html}"
+    );
+    assert!(
+        root_html.contains(&format!("href=\"{v2}/\""),),
+        "{root_html}"
+    );
+    assert_eq!(root_html.matches("Actual").count(), 1, "{root_html}");
 }
 
 #[test]
@@ -857,18 +1001,20 @@ fn publish_promotes_the_generated_web_creation_as_the_public_entry() {
     assert_eq!(after.creations[0].id, *cid);
     assert_eq!(after.creations[0].visibility, "public");
 
-    let published = tmp
-        .path()
-        .join("projects")
-        .join(&p.id)
-        .join("publish")
-        .join("index.html");
-    let html = fs::read_to_string(&published).expect("published html");
-    assert!(html.contains("JUEGO"), "{html}");
+    let published = tmp.path().join("projects").join(&p.id).join("publish");
+    let html = fs::read_to_string(published.join("index.html")).expect("published html");
+    // Root is the generated version-history landing page, never the raw
+    // creation: the resource bytes live under the immutable version URL.
+    assert!(!html.contains("JUEGO"), "{html}");
+    assert!(html.contains("V1"), "{html}");
+    assert!(html.contains("Actual"), "{html}");
     assert!(
         !html.contains("Material del proyecto"),
-        "published root must be the creation, not the empty materials landing"
+        "published root must be the version history, not the empty materials landing"
     );
+    let v1_html = fs::read_to_string(published.join("versions").join(cid).join("index.html"))
+        .expect("v1 html");
+    assert!(v1_html.contains("JUEGO"), "{v1_html}");
 }
 
 #[test]
@@ -878,18 +1024,21 @@ fn publish_without_creation_id_still_promotes_the_latest_web() {
     let p = app.create_project("Actividad").expect("create");
     engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
     write_artifact(tmp.path(), &p.id, "index.html", b"<h1>actividad</h1>");
-    app.run_agent(&p.id, "crea", &[]).expect("run");
+    let run = app.run_agent(&p.id, "crea", &[]).expect("run");
+    let cid = &run.registered_creation_ids[0];
     app.publish(&p.id).expect("publish");
-    let html = fs::read_to_string(
-        tmp.path()
-            .join("projects")
-            .join(&p.id)
-            .join("publish")
-            .join("index.html"),
-    )
-    .expect("html");
-    assert!(html.contains("actividad"), "{html}");
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+    let html = fs::read_to_string(publish.join("index.html")).expect("html");
+    // Root is the version-history landing page (title = display name), the raw
+    // resource bytes live under the immutable version URL.
+    assert!(html.contains("Actividad"), "{html}");
+    assert!(html.contains("V1"), "{html}");
+    assert!(html.contains("Actual"), "{html}");
+    assert!(!html.contains("<h1>actividad</h1>"), "{html}");
     assert!(!html.contains("Material del proyecto"), "{html}");
+    let v1_html =
+        fs::read_to_string(publish.join("versions").join(cid).join("index.html")).expect("v1 html");
+    assert!(v1_html.contains("actividad"), "{v1_html}");
 }
 
 #[test]
@@ -920,15 +1069,27 @@ fn web_sidecar_sibling_is_copied_into_outputs_and_publish() {
     );
 
     app.publish_creation(&p.id, Some(cid)).expect("share");
+    // Sidecars land under the immutable version snapshot in publish/, never at
+    // the root (the root is publication metadata only).
     let published_js = tmp
         .path()
         .join("projects")
         .join(&p.id)
         .join("publish")
+        .join("versions")
+        .join(cid)
         .join("app.js");
     assert_eq!(
         fs::read_to_string(&published_js).expect("published js"),
         "console.log(1)"
+    );
+    assert!(
+        !tmp.path()
+            .join("projects")
+            .join(&p.id)
+            .join("publish")
+            .join("app.js")
+            .exists()
     );
 }
 
@@ -1108,7 +1269,7 @@ fn sequential_sends_keep_distinct_turn_ids_and_ordered_results() {
 }
 
 #[test]
-fn later_turn_updates_the_same_web_creation_and_refreshes_publish() {
+fn later_turn_creates_a_new_immutable_version_and_refreshes_publish() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (app, engine, _) = app(tmp.path());
     let p = app.create_project("Actividad").expect("create");
@@ -1124,20 +1285,20 @@ fn later_turn_updates_the_same_web_creation_and_refreshes_publish() {
         .send_message(&p.id, "creá la actividad", &[])
         .expect("first");
     assert_eq!(first.registered_creation_ids.len(), 1);
-    let cid = first.registered_creation_ids[0].clone();
+    let v1 = first.registered_creation_ids[0].clone();
 
-    app.publish_creation(&p.id, Some(&cid)).expect("share");
-    let published = tmp
-        .path()
-        .join("projects")
-        .join(&p.id)
-        .join("publish")
-        .join("index.html");
-    assert!(
-        fs::read_to_string(&published)
-            .expect("first snapshot")
-            .contains("ORIGINAL")
-    );
+    app.publish_creation(&p.id, Some(&v1)).expect("share");
+    let publish_dir = tmp.path().join("projects").join(&p.id).join("publish");
+    // Root is the generated version-history landing page; the immutable V1
+    // resource lives under versions/<v1>/.
+    let root_html = fs::read_to_string(publish_dir.join("index.html")).expect("root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("ORIGINAL"), "{root_html}");
+    let v1_published =
+        fs::read_to_string(publish_dir.join("versions").join(&v1).join("index.html"))
+            .expect("v1 snapshot");
+    assert!(v1_published.contains("ORIGINAL"), "{v1_published}");
 
     write_artifact(
         tmp.path(),
@@ -1149,15 +1310,45 @@ fn later_turn_updates_the_same_web_creation_and_refreshes_publish() {
     let second = app
         .send_message(&p.id, "cambiá el fondo a blanco", &[])
         .expect("second");
-    assert_eq!(second.registered_creation_ids, vec![cid.clone()]);
+    assert_eq!(second.registered_creation_ids.len(), 1);
+    let v2 = second.registered_creation_ids[0].clone();
+    assert_ne!(
+        v2, v1,
+        "a modification must mint a NEW version, never mutate V1"
+    );
 
     let view = app.open_project(&p.id).expect("open");
-    assert_eq!(view.creations.len(), 1);
-    assert_eq!(view.creations[0].id, cid);
-    let html = fs::read_to_string(&published).expect("updated snapshot");
-    assert!(html.contains("UPDATED"), "{html}");
-    assert!(html.contains("background:white"), "{html}");
-    assert!(!html.contains("ORIGINAL"), "{html}");
+    assert_eq!(view.creations.len(), 2, "V1 and V2 both exist");
+    let v1_view = view.creations.iter().find(|c| c.id == v1).expect("V1 card");
+    let v2_view = view.creations.iter().find(|c| c.id == v2).expect("V2 card");
+    assert_eq!(v1_view.version_number, 1);
+    assert_eq!(v2_view.version_number, 2);
+    assert_eq!(v1_view.lineage_id, v2_view.lineage_id);
+    assert_eq!(v2_view.parent_version_id.as_deref(), Some(v1.as_str()));
+    assert!(!v1_view.is_current);
+    assert!(v2_view.is_current);
+
+    // V1 bytes remain byte-identical; V2 is the complete self-contained snapshot.
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+    let v1_html = fs::read_to_string(outputs.join(&v1).join("index.html")).expect("v1 html");
+    assert!(v1_html.contains("ORIGINAL"), "{v1_html}");
+    assert!(!v1_html.contains("UPDATED"), "V1 must be immutable");
+    let v2_html = fs::read_to_string(outputs.join(&v2).join("index.html")).expect("v2 html");
+    assert!(v2_html.contains("UPDATED"), "{v2_html}");
+
+    // The shared URL now serves the current version (V2) under its immutable URL:
+    // the landing page lists both versions, and versions/<v2>/ carries the bytes.
+    let root_html = fs::read_to_string(publish_dir.join("index.html")).expect("updated root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("V2"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("UPDATED"), "{root_html}");
+    let v2_published =
+        fs::read_to_string(publish_dir.join("versions").join(&v2).join("index.html"))
+            .expect("v2 snapshot");
+    assert!(v2_published.contains("UPDATED"), "{v2_published}");
+    assert!(v2_published.contains("background:white"), "{v2_published}");
+    assert!(!v2_published.contains("ORIGINAL"), "{v2_published}");
 }
 
 #[test]
@@ -1185,32 +1376,31 @@ fn new_distinct_web_does_not_replace_an_already_published_snapshot() {
     let (app, engine, _) = app(tmp.path());
     let p = app.create_project("Actividad").expect("create");
     engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
-    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>one</h1>");
+    write_artifact(tmp.path(), &p.id, "index.html", b"<h1>UNO</h1>");
     let first = app.send_message(&p.id, "creá una", &[]).expect("first");
     let cid = first.registered_creation_ids[0].clone();
     app.publish_creation(&p.id, Some(&cid)).expect("share");
-    let published = tmp
-        .path()
-        .join("projects")
-        .join(&p.id)
-        .join("publish")
-        .join("index.html");
-    assert!(
-        fs::read_to_string(&published)
-            .expect("first snapshot")
-            .contains("one")
-    );
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("UNO"), "{root_html}");
+    let v1_html = fs::read_to_string(publish.join("versions").join(&cid).join("index.html"))
+        .expect("v1 snapshot");
+    assert!(v1_html.contains("UNO"), "{v1_html}");
 
     engine.set_artifacts(vec![artifact(
         "workspace/actividad-2/index.html",
         ArtifactKind::Web,
     )]);
-    write_artifact(tmp.path(), &p.id, "actividad-2/index.html", b"<h1>two</h1>");
+    write_artifact(tmp.path(), &p.id, "actividad-2/index.html", b"<h1>DOS</h1>");
     app.send_message(&p.id, "creá otra", &[]).expect("second");
 
-    let html = fs::read_to_string(&published).expect("snapshot after second");
-    assert!(html.contains("one"), "{html}");
-    assert!(!html.contains("two"), "{html}");
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root after second");
+    assert!(!root_html.contains("DOS"), "{root_html}");
+    let v1_html = fs::read_to_string(publish.join("versions").join(&cid).join("index.html"))
+        .expect("v1 still");
+    assert!(v1_html.contains("UNO"), "{v1_html}");
     let view = app.open_project(&p.id).expect("open");
     assert_eq!(view.creations.len(), 2);
 }
@@ -1306,17 +1496,16 @@ fn attached_input_image_updates_existing_creation_in_place_without_phantom_image
         .send_message(&p.id, "creá una sopa de letras", &[])
         .expect("turn 1");
     assert_eq!(first.registered_creation_ids.len(), 1);
-    let cid = first.registered_creation_ids[0].clone();
-    state.publish_creation(&p.id, Some(&cid)).expect("share");
-    let published = tmp
-        .path()
-        .join("projects")
-        .join(&p.id)
-        .join("publish")
-        .join("index.html");
+    let v1 = first.registered_creation_ids[0].clone();
+    state.publish_creation(&p.id, Some(&v1)).expect("share");
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("first root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("ORIGINAL"), "{root_html}");
     assert!(
-        fs::read_to_string(&published)
-            .expect("first snapshot")
+        fs::read_to_string(publish.join("versions").join(&v1).join("index.html"))
+            .expect("v1 snapshot")
             .contains("ORIGINAL")
     );
 
@@ -1339,37 +1528,54 @@ fn attached_input_image_updates_existing_creation_in_place_without_phantom_image
         )
         .expect("turn 2");
 
-    // A1 stays INPUT material: no phantom "Imagen" Creation; C1 identity holds.
-    assert_eq!(second.registered_creation_ids, vec![cid.clone()]);
+    // A1 stays INPUT material: no phantom "Imagen" Creation; the update is a
+    // NEW immutable version (V2) of the same web lineage.
+    assert_eq!(second.registered_creation_ids.len(), 1);
+    let v2 = second.registered_creation_ids[0].clone();
+    assert_ne!(v2, v1, "a modification must mint a new version");
     let view = state.open_project(&p.id).expect("open");
     assert_eq!(
         view.creations.len(),
-        1,
-        "attached PNG must not become a Creation"
+        2,
+        "attached PNG must not become a Creation; V1 and V2 exist"
     );
-    assert_eq!(view.creations[0].id, cid);
+    let v1_view = view.creations.iter().find(|c| c.id == v1).expect("V1 card");
+    let v2_view = view.creations.iter().find(|c| c.id == v2).expect("V2 card");
+    assert_eq!(v1_view.version_number, 1);
+    assert_eq!(v2_view.version_number, 2);
+    assert_eq!(v1_view.lineage_id, v2_view.lineage_id);
+    assert_eq!(v2_view.parent_version_id.as_deref(), Some(v1.as_str()));
+    assert!(v2_view.is_current);
 
-    // C1 is re-registered in place and serves the image as a web sidecar.
-    let outputs_dir = tmp
-        .path()
-        .join("projects")
-        .join(&p.id)
-        .join("outputs")
-        .join(&cid);
-    let html = fs::read_to_string(outputs_dir.join("index.html")).expect("updated html");
-    assert!(html.contains("UPDATED"), "{html}");
-    assert!(!html.contains("ORIGINAL"), "{html}");
+    // V2 serves the image as a web sidecar; V1 stays byte-identical.
+    let outputs_dir = tmp.path().join("projects").join(&p.id).join("outputs");
+    let v1_html = fs::read_to_string(outputs_dir.join(&v1).join("index.html")).expect("v1 html");
+    assert!(
+        v1_html.contains("ORIGINAL"),
+        "V1 must be immutable: {v1_html}"
+    );
+    let v2_html =
+        fs::read_to_string(outputs_dir.join(&v2).join("index.html")).expect("updated html");
+    assert!(v2_html.contains("UPDATED"), "{v2_html}");
+    assert!(!v2_html.contains("ORIGINAL"), "{v2_html}");
     assert_eq!(
-        fs::read(outputs_dir.join("encabezado.png")).expect("sidecar"),
+        fs::read(outputs_dir.join(&v2).join("encabezado.png")).expect("sidecar"),
         png
     );
 
-    // Established republish semantics: the shared URL now shows the update.
-    let published_html = fs::read_to_string(&published).expect("refreshed snapshot");
-    assert!(published_html.contains("UPDATED"), "{published_html}");
-    assert!(
-        fs::read(published.parent().unwrap().join("encabezado.png")).expect("published sidecar")
-            == png
+    // The shared history now shows V1..V2 with V2 Actual; the current resource
+    // (with the image) lives under the immutable V2 URL.
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("refreshed root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("V2"), "{root_html}");
+    assert_eq!(root_html.matches("Actual").count(), 1, "{root_html}");
+    let v2_published = fs::read_to_string(publish.join("versions").join(&v2).join("index.html"))
+        .expect("v2 published");
+    assert!(v2_published.contains("UPDATED"), "{v2_published}");
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v2).join("encabezado.png"))
+            .expect("published sidecar"),
+        png
     );
 }
 
@@ -1402,4 +1608,539 @@ fn agent_generated_image_can_be_a_creation_not_an_input_copy() {
     let view = state.open_project(&p.id).expect("open");
     assert_eq!(view.creations.len(), 1);
     assert_eq!(view.creations[0].kind, "image");
+}
+
+/// The approved primary regression: a V1 web bundle (index.html + estilos.css +
+/// app.js), then a CSS-only change (V2), then a JS-only change (V3). Every
+/// version is a complete self-contained snapshot, earlier versions are
+/// byte-identical, and the lineage is stable across the chain.
+#[test]
+fn css_then_js_changes_produce_complete_v1_v2_v3_chain() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+
+    // V1: index.html + estilos.css + app.js created in one turn.
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo. Creé la actividad.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V1</html>");
+    write_artifact(tmp.path(), &p.id, "estilos.css", b"body{color:red}");
+    write_artifact(tmp.path(), &p.id, "app.js", b"console.log(1)");
+    let first = app
+        .send_message(&p.id, "creá la actividad", &[])
+        .expect("v1");
+    assert_eq!(first.registered_creation_ids.len(), 1);
+    let v1 = first.registered_creation_ids[0].clone();
+
+    // V2: only estilos.css changed. The diff names the changed sidecar.
+    engine.set_artifacts(vec![artifact("workspace/estilos.css", ArtifactKind::Other)]);
+    engine.set_message("Listo. Cambié el color.".into());
+    write_artifact(tmp.path(), &p.id, "estilos.css", b"body{color:blue}");
+    let second = app.send_message(&p.id, "cambiá el color", &[]).expect("v2");
+    assert_eq!(second.registered_creation_ids.len(), 1);
+    let v2 = second.registered_creation_ids[0].clone();
+    assert_ne!(v2, v1);
+
+    // V3: only app.js changed.
+    engine.set_artifacts(vec![artifact("workspace/app.js", ArtifactKind::Other)]);
+    engine.set_message("Listo. Cambié el comportamiento.".into());
+    write_artifact(tmp.path(), &p.id, "app.js", b"console.log(3)");
+    let third = app
+        .send_message(&p.id, "cambiá el comportamiento", &[])
+        .expect("v3");
+    assert_eq!(third.registered_creation_ids.len(), 1);
+    let v3 = third.registered_creation_ids[0].clone();
+    assert_ne!(v3, v2);
+
+    let view = app.open_project(&p.id).expect("open");
+    assert_eq!(view.creations.len(), 3);
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&v1).version_number, 1);
+    assert_eq!(card(&v2).version_number, 2);
+    assert_eq!(card(&v3).version_number, 3);
+    assert_eq!(card(&v1).lineage_id, card(&v2).lineage_id);
+    assert_eq!(card(&v2).lineage_id, card(&v3).lineage_id);
+    assert_eq!(card(&v2).parent_version_id.as_deref(), Some(v1.as_str()));
+    assert_eq!(card(&v3).parent_version_id.as_deref(), Some(v2.as_str()));
+    assert!(!card(&v1).is_current);
+    assert!(!card(&v2).is_current);
+    assert!(card(&v3).is_current);
+    assert_eq!(
+        card(&v3).available_version_ids,
+        vec![v1.clone(), v2.clone(), v3.clone()]
+    );
+
+    // Every version is complete; earlier versions are byte-identical.
+    assert_eq!(
+        fs::read(outputs.join(&v1).join("index.html")).unwrap(),
+        b"<html>V1</html>"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v1).join("estilos.css")).unwrap(),
+        b"body{color:red}"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v1).join("app.js")).unwrap(),
+        b"console.log(1)"
+    );
+
+    assert_eq!(
+        fs::read(outputs.join(&v2).join("index.html")).unwrap(),
+        b"<html>V1</html>"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v2).join("estilos.css")).unwrap(),
+        b"body{color:blue}"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v2).join("app.js")).unwrap(),
+        b"console.log(1)"
+    );
+
+    assert_eq!(
+        fs::read(outputs.join(&v3).join("index.html")).unwrap(),
+        b"<html>V1</html>"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v3).join("estilos.css")).unwrap(),
+        b"body{color:blue}"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v3).join("app.js")).unwrap(),
+        b"console.log(3)"
+    );
+}
+
+#[test]
+fn sharing_v3_publishes_all_historical_versions_and_republish_restores() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Rosco").expect("create");
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+
+    // V1 (private)
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo. Creé la actividad.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V1</html>");
+    let v1 = app
+        .send_message(&p.id, "creá la actividad", &[])
+        .expect("v1")
+        .registered_creation_ids[0]
+        .clone();
+
+    // V2 (private)
+    engine.set_message("Listo. Cambié el título.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V2</html>");
+    let v2 = app
+        .send_message(&p.id, "cambiá el título", &[])
+        .expect("v2")
+        .registered_creation_ids[0]
+        .clone();
+
+    // V3 (private)
+    engine.set_message("Listo. Cambié el color.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>V3</html>");
+    let v3 = app
+        .send_message(&p.id, "cambiá el color", &[])
+        .expect("v3")
+        .registered_creation_ids[0]
+        .clone();
+
+    let before = app.open_project(&p.id).expect("open");
+    assert!(
+        before.creations.iter().all(|c| c.visibility == "private"),
+        "all versions start private"
+    );
+
+    // First share targets V3 only.
+    app.publish_creation(&p.id, Some(&v3)).expect("share v3");
+    // Root is the generated version-history landing page, not a copied index.
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root");
+    assert!(root_html.contains("V3"), "{root_html}");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("<html>V3</html>"), "{root_html}");
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v1).join("index.html")).expect("v1"),
+        b"<html>V1</html>"
+    );
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v2).join("index.html")).expect("v2"),
+        b"<html>V2</html>"
+    );
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v3).join("index.html")).expect("v3"),
+        b"<html>V3</html>"
+    );
+
+    // Unpublish removes the route but preserves durable outputs + history.
+    app.unpublish(&p.id).expect("unpublish");
+    assert_eq!(
+        app.publication_status(&p.id).expect("status").state,
+        "local"
+    );
+    assert!(outputs.join(&v1).join("index.html").exists());
+    assert!(outputs.join(&v2).join("index.html").exists());
+    assert!(outputs.join(&v3).join("index.html").exists());
+
+    // Re-publish restores current + historical URLs.
+    app.publish_creation(&p.id, Some(&v3)).expect("republish");
+    assert_eq!(
+        app.publication_status(&p.id).expect("status").state,
+        "published"
+    );
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root again");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("V3"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("<html>V3</html>"), "{root_html}");
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v1).join("index.html")).expect("v1 again"),
+        b"<html>V1</html>"
+    );
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v2).join("index.html")).expect("v2 again"),
+        b"<html>V2</html>"
+    );
+    assert_eq!(
+        fs::read(publish.join("versions").join(&v3).join("index.html")).expect("v3 again"),
+        b"<html>V3</html>"
+    );
+}
+
+#[test]
+fn sharing_one_web_lineage_does_not_expose_an_unrelated_lineage() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Rosco").expect("create");
+    let publish = tmp.path().join("projects").join(&p.id).join("publish");
+
+    // Lineage A at the workspace root.
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>A</html>");
+    let a = app
+        .send_message(&p.id, "creá A", &[])
+        .expect("a")
+        .registered_creation_ids[0]
+        .clone();
+
+    // Lineage B in a subfolder.
+    engine.set_artifacts(vec![artifact("workspace/b/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "b/index.html", b"<html>B</html>");
+    let b = app
+        .send_message(&p.id, "creá B", &[])
+        .expect("b")
+        .registered_creation_ids[0]
+        .clone();
+
+    app.publish_creation(&p.id, Some(&a)).expect("share A");
+    let root_html = fs::read_to_string(publish.join("index.html")).expect("root");
+    assert!(root_html.contains("V1"), "{root_html}");
+    assert!(root_html.contains("Actual"), "{root_html}");
+    assert!(!root_html.contains("<html>A</html>"), "{root_html}");
+    assert!(
+        publish
+            .join("versions")
+            .join(&a)
+            .join("index.html")
+            .exists()
+    );
+    assert!(
+        !publish.join("versions").join(&b).exists(),
+        "unrelated lineage B must not become public"
+    );
+    assert!(
+        !root_html.contains("href=\"{b}/\""),
+        "B must not appear in history"
+    );
+}
+
+#[test]
+fn two_same_display_name_web_lineages_keep_sidecars_isolated() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Juego").expect("create");
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+
+    // Two independent bundles whose folders sanitize to the same display name.
+    engine.set_artifacts(vec![artifact(
+        "workspace/a/juego/index.html",
+        ArtifactKind::Web,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "a/juego/index.html", b"<html>A1</html>");
+    let a_v1 = app
+        .send_message(&p.id, "creá A", &[])
+        .expect("a")
+        .registered_creation_ids[0]
+        .clone();
+
+    engine.set_artifacts(vec![artifact(
+        "workspace/b/juego/index.html",
+        ArtifactKind::Web,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "b/juego/index.html", b"<html>B1</html>");
+    let b_v1 = app
+        .send_message(&p.id, "creá B", &[])
+        .expect("b")
+        .registered_creation_ids[0]
+        .clone();
+
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&a_v1).display_name, card(&b_v1).display_name);
+    assert_ne!(card(&a_v1).lineage_id, card(&b_v1).lineage_id);
+
+    // A CSS-only change to lineage A.
+    engine.set_artifacts(vec![artifact(
+        "workspace/a/juego/estilos.css",
+        ArtifactKind::Other,
+    )]);
+    engine.set_message("Listo. Cambié el color.".into());
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "a/juego/estilos.css",
+        b"body{color:blue}",
+    );
+    let a_v2 = app
+        .send_message(&p.id, "cambiá el color de A", &[])
+        .expect("a v2")
+        .registered_creation_ids[0]
+        .clone();
+
+    assert_ne!(a_v2, a_v1, "A must get a NEW version, never B");
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&a_v2).lineage_id, card(&a_v1).lineage_id);
+    assert_eq!(card(&a_v2).version_number, 2);
+
+    // A's new version has the CSS; B's version does not.
+    assert_eq!(
+        fs::read(outputs.join(&a_v2).join("estilos.css")).expect("A css"),
+        b"body{color:blue}"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&a_v2).join("index.html")).expect("A inherited html"),
+        b"<html>A1</html>"
+    );
+    assert!(
+        !outputs.join(&b_v1).join("estilos.css").exists(),
+        "B must not receive A's CSS"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&b_v1).join("index.html")).expect("B html"),
+        b"<html>B1</html>"
+    );
+}
+
+#[test]
+fn one_turn_can_update_two_web_lineages_independently() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Doble").expect("create");
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+
+    engine.set_artifacts(vec![artifact("workspace/a/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "a/index.html", b"<html>A1</html>");
+    let a_v1 = app
+        .send_message(&p.id, "creá A", &[])
+        .expect("a")
+        .registered_creation_ids[0]
+        .clone();
+
+    engine.set_artifacts(vec![artifact("workspace/b/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "b/index.html", b"<html>B1</html>");
+    let b_v1 = app
+        .send_message(&p.id, "creá B", &[])
+        .expect("b")
+        .registered_creation_ids[0]
+        .clone();
+
+    // One turn changes A's CSS and B's JS at the same time.
+    engine.set_artifacts(vec![
+        artifact("workspace/a/estilos.css", ArtifactKind::Other),
+        artifact("workspace/b/app.js", ArtifactKind::Other),
+    ]);
+    engine.set_message("Listo. Actualicé ambas.".into());
+    write_artifact(tmp.path(), &p.id, "a/estilos.css", b"body{color:blue}");
+    write_artifact(tmp.path(), &p.id, "b/app.js", b"console.log(3)");
+    let result = app.send_message(&p.id, "cambiá ambas", &[]).expect("both");
+
+    assert_eq!(
+        result.registered_creation_ids.len(),
+        2,
+        "two lineages updated -> two new versions"
+    );
+
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    let a_v2 = result
+        .registered_creation_ids
+        .iter()
+        .find(|id| card(id).lineage_id == card(&a_v1).lineage_id)
+        .cloned()
+        .expect("A v2");
+    let b_v2 = result
+        .registered_creation_ids
+        .iter()
+        .find(|id| card(id).lineage_id == card(&b_v1).lineage_id)
+        .cloned()
+        .expect("B v2");
+
+    // A's new version has A's CSS but not B's JS; B's has B's JS but not A's CSS.
+    assert_eq!(
+        fs::read(outputs.join(&a_v2).join("estilos.css")).unwrap(),
+        b"body{color:blue}"
+    );
+    assert!(!outputs.join(&a_v2).join("app.js").exists());
+    assert_eq!(
+        fs::read(outputs.join(&b_v2).join("app.js")).unwrap(),
+        b"console.log(3)"
+    );
+    assert!(!outputs.join(&b_v2).join("estilos.css").exists());
+}
+
+#[test]
+fn root_and_subfolder_bundles_are_owned_by_their_own_root() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Mixto").expect("create");
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+
+    // Root bundle.
+    engine.set_artifacts(vec![artifact("workspace/index.html", ArtifactKind::Web)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "index.html", b"<html>ROOT</html>");
+    let root_v1 = app
+        .send_message(&p.id, "creá raíz", &[])
+        .expect("root")
+        .registered_creation_ids[0]
+        .clone();
+
+    // Subfolder bundle.
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/index.html",
+        ArtifactKind::Web,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "actividad/index.html",
+        b"<html>SUB</html>",
+    );
+    let sub_v1 = app
+        .send_message(&p.id, "creá sub", &[])
+        .expect("sub")
+        .registered_creation_ids[0]
+        .clone();
+
+    // A root-level CSS change belongs to the root bundle, not the subfolder.
+    engine.set_artifacts(vec![artifact("workspace/estilos.css", ArtifactKind::Other)]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "estilos.css", b"root-css");
+    let root_v2 = app
+        .send_message(&p.id, "cambiá raíz", &[])
+        .expect("root v2")
+        .registered_creation_ids[0]
+        .clone();
+
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&root_v2).lineage_id, card(&root_v1).lineage_id);
+    assert_eq!(
+        fs::read(outputs.join(&root_v2).join("estilos.css")).unwrap(),
+        b"root-css"
+    );
+    assert!(!outputs.join(&sub_v1).join("estilos.css").exists());
+
+    // A subfolder CSS change belongs to the subfolder bundle.
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/estilos.css",
+        ArtifactKind::Other,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(tmp.path(), &p.id, "actividad/estilos.css", b"sub-css");
+    let sub_v2 = app
+        .send_message(&p.id, "cambiá sub", &[])
+        .expect("sub v2")
+        .registered_creation_ids[0]
+        .clone();
+
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&sub_v2).lineage_id, card(&sub_v1).lineage_id);
+    assert_eq!(
+        fs::read(outputs.join(&sub_v2).join("estilos.css")).unwrap(),
+        b"sub-css"
+    );
+}
+
+#[test]
+fn bundle_ownership_survives_restart() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    // First session creates a subfolder bundle.
+    let (app, engine, _) = app(tmp.path());
+    let p = app.create_project("Actividad").expect("create");
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/index.html",
+        ArtifactKind::Web,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "actividad/index.html",
+        b"<html>V1</html>",
+    );
+    let v1 = app
+        .send_message(&p.id, "creá", &[])
+        .expect("v1")
+        .registered_creation_ids[0]
+        .clone();
+    drop(app);
+    drop(engine);
+
+    // Restart on the same base.
+    let (app, engine, _) = crate::app(tmp.path());
+    engine.set_artifacts(vec![artifact(
+        "workspace/actividad/estilos.css",
+        ArtifactKind::Other,
+    )]);
+    engine.set_message("Listo.".into());
+    write_artifact(
+        tmp.path(),
+        &p.id,
+        "actividad/estilos.css",
+        b"body{color:blue}",
+    );
+    let v2 = app
+        .send_message(&p.id, "cambiá el color", &[])
+        .expect("v2")
+        .registered_creation_ids[0]
+        .clone();
+
+    let view = app.open_project(&p.id).expect("open");
+    let card = |id: &str| view.creations.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(card(&v2).lineage_id, card(&v1).lineage_id);
+    assert_eq!(card(&v2).version_number, 2);
+
+    let outputs = tmp.path().join("projects").join(&p.id).join("outputs");
+    assert_eq!(
+        fs::read(outputs.join(&v2).join("estilos.css")).unwrap(),
+        b"body{color:blue}"
+    );
+    assert_eq!(
+        fs::read(outputs.join(&v2).join("index.html")).unwrap(),
+        b"<html>V1</html>"
+    );
 }

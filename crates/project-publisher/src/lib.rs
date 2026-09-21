@@ -18,7 +18,7 @@ pub use axum_adapter::AxumLocalPublisher;
 pub use error::{PublisherError, PublisherResult};
 pub use model::{
     LoopbackUrl, MAX_ROUTE_CHARS, PublicationRoute, PublishRoot, PublishedProject,
-    PublisherEndpoint,
+    PublishedVersions, PublisherEndpoint,
 };
 pub use port::LocalPublisher;
 pub use registry::RouteRegistry;

@@ -10,6 +10,7 @@ import type { ProviderStatus } from "./components/ui/ProviderStatusBanner";
 import ToastRegion from "./components/ui/ToastRegion";
 import { useToast } from "./components/ui/useToast";
 import { conversationDisplayName, messages } from "./messages";
+import { loadDrafts, saveDrafts } from "./drafts";
 
 export default function App() {
   const [conversations, setConversations] = useState<ProjectSummary[]>([]);
@@ -23,12 +24,18 @@ export default function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [backendStatus, setBackendStatus] = useState<BackendReadiness>("starting");
+  const [draftByConversationId, setDraftByConversationId] =
+    useState<Record<string, string>>(loadDrafts);
   const { toasts, show } = useToast();
   const selectedIdRef = useRef(selectedId);
   const inFlightRef = useRef(new Map<string, string>());
   const resumeTriggeredRef = useRef(new Set<string>());
   const [resumeFailure, setResumeFailure] = useState<string | null>(null);
   const [resumeNoTurn, setResumeNoTurn] = useState<string | null>(null);
+
+  useEffect(() => {
+    saveDrafts(draftByConversationId);
+  }, [draftByConversationId]);
 
   const refreshConversations = useCallback(async () => {
     const list = await api.projectList();
@@ -233,6 +240,18 @@ export default function App() {
       .catch(() => setResumeFailure(operationId));
   }, []);
 
+  const handleRetrySummary = useCallback((operationId: string) => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    void api
+      .agentRetrySummary(id, operationId)
+      .then(() => {
+        void refreshConversationRef.current(id);
+        void refreshConversationsRef.current();
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -269,6 +288,12 @@ export default function App() {
       await api.projectDelete(id);
       const deletedIndex = conversations.findIndex((c) => c.id === id);
       const remaining = conversations.filter((c) => c.id !== id);
+      setDraftByConversationId((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
 
       try {
         await refreshConversations();
@@ -374,6 +399,11 @@ export default function App() {
               resumeFailure={resumeFailure}
               resumeNoTurn={resumeNoTurn}
               onResumeRetry={handleResumeRetry}
+              onRetrySummary={handleRetrySummary}
+              draft={draftByConversationId[conversation.id] ?? ""}
+              onDraftChange={(value) =>
+                setDraftByConversationId((prev) => ({ ...prev, [conversation.id]: value }))
+              }
             />
           </div>
         ) : selectedId ? (

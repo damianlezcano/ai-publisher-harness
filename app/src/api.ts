@@ -5,6 +5,7 @@ import type {
   AgentTaskEvent,
   AppError,
   ConnectionTest,
+  ConversationUsageTotals,
   ConnectionView,
   CreationView,
   MaterialView,
@@ -93,6 +94,8 @@ export const api = {
   agentCancel: (projectId: string) => invoke<void>("agent_cancel", { projectId }),
   agentResumeImport: (projectId: string, operationId: string) =>
     invoke<void>("agent_resume_import", { projectId, operationId }),
+  agentRetrySummary: (projectId: string, operationId: string) =>
+    invoke<void>("agent_retry_summary", { projectId, operationId }),
   publish: (projectId: string, creationId?: string | null) =>
     invoke<PublicationView>("publish", { projectId, creationId: creationId ?? null }),
   unpublish: (projectId: string) => invoke<PublicationView>("unpublish", { projectId }),
@@ -140,6 +143,8 @@ export const api = {
   sessionLogRecord: (message: string) => invoke<void>("session_log_record", { message }),
   conversationTurnMetrics: (projectId: string) =>
     invoke<TurnMetrics | null>("conversation_last_turn_metrics", { projectId }),
+  conversationAccumulatedUsage: (projectId: string) =>
+    invoke<ConversationUsageTotals | null>("conversation_accumulated_usage", { projectId }),
 };
 
 export function isAppError(value: unknown): value is AppError {

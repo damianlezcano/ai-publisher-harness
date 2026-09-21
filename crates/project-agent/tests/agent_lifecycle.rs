@@ -32,6 +32,7 @@ fn prompt() -> AgentPrompt {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     }
 }
 
@@ -76,17 +77,16 @@ impl FakeRegistrar {
 }
 
 impl CreationRegistrar for FakeRegistrar {
-    fn register(
+    fn register_turn(
         &self,
         _project_id: &str,
-        _artifact: &Artifact,
-        _bytes: Vec<u8>,
-    ) -> project_agent::AgentResult<String> {
+        _artifacts: &[project_agent::RegisteredArtifact],
+    ) -> project_agent::AgentResult<Vec<String>> {
         if *self.fail.lock().unwrap_or_else(|e| e.into_inner()) {
             return Err(AgentError::RegistrationFailed("injected".into()));
         }
         let n = self.next_id.fetch_add(1, Ordering::SeqCst);
-        Ok(format!("creation-{n}"))
+        Ok(vec![format!("creation-{n}")])
     }
 }
 

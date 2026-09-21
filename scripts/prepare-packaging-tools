@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Populate the persistent Tauri AppImage packaging-tools cache.
+#
+# tauri.conf.json sets bundle.useLocalToolsDir, so tauri-bundler looks for its
+# AppImage helpers (AppRun, linuxdeploy, the gtk/gstreamer plugins and the
+# appimagetool wrapper) under <cargo target>/.tauri. Pre-populating that cache
+# means the Tauri bundler never has to download linuxdeploy/AppRun/plugin files
+# at build time: a transient HTTP 503 on any of those downloads can no longer
+# abort an otherwise healthy packaging run, and the appimagetool fallback uses
+# the exact same verified cache.
+#
+# Sources mirror the canonical tauri-bundler URLs. The raw-hosted plugin scripts
+# fall back to the GitHub API contents endpoint and, as a last resort, a shallow
+# git clone when raw.githubusercontent.com is unavailable (observed HTTP 503).
+# Downloads are bounded (EDUCAI_TOOL_DOWNLOAD_ATTEMPTS attempts per source);
+# the cache is written only after a usable payload arrives, so a partial fetch
+# is never mistaken for a cached tool.
+#
+# Usage: scripts/prepare-packaging-tools [TOOLS_DIR] [ARCH]
+#   TOOLS_DIR  default: app/src-tauri/target/.tauri (the useLocalToolsDir cache)
+#   ARCH       default: x86_64
+#
+# Exit codes: 0 = PASS, 1 = FAIL, 2 = usage.
+
+set -euo pipefail
+
+SCRIPT="$(basename "$0")"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tools_dir="${1:-$repo_root/app/src-tauri/target/.tauri}"
+arch="${2:-x86_64}"
+attempts="${EDUCAI_TOOL_DOWNLOAD_ATTEMPTS:-3}"
+
+fail() {
+  echo "$SCRIPT: FAIL: $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
+}
+
+require_cmd curl
+require_cmd file
+require_cmd rg
+
+mkdir -p "$tools_dir"
+
+# is_usable_file <path>: the payload must exist, be non-empty and look like a
+# script or an ELF image (AppImage files are ELF).
+is_usable_file() {
+  local path="$1"
+  [[ -s "$path" ]] || return 1
+  file -b "$path" | rg -q "ELF|shell script|script, ASCII|text" || return 1
+  return 0
+}
+
+download_with_retry() {
+  local url="$1" dest="$2" try
+  for try in $(seq 1 "$attempts"); do
+    if curl -fsSL --connect-timeout 15 --max-time 300 -o "$dest" "$url"; then
+      return 0
+    fi
+    echo "$SCRIPT: download attempt $try/$attempts failed for $url" >&2
+    rm -f "$dest"
+    [[ "$try" -lt "$attempts" ]] && sleep 3
+  done
+  return 1
+}
+
+# api_source <owner> <repo> <file>: GitHub API contents URL (immune to the raw
+# content CDN 503s). The response is JSON whose `content` field is base64.
+api_source() {
+  printf '%s' "https://api.github.com/repos/${1}/${2}/contents/${3}"
+}
+
+# download_with_retry already writes raw bytes. For the API fallback the JSON
+# must be decoded before it can be validated as a usable script.
+fetch_from_api() {
+  local dest="$1" url="$2" json="$(mktemp)" try
+  for try in $(seq 1 "$attempts"); do
+    if curl -fsSL --connect-timeout 15 --max-time 300 "$url" -o "$json" \
+        && python3 - "$json" "$dest" <<'PY'
+import base64, json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    with open(sys.argv[2], "wb") as handle:
+        handle.write(base64.b64decode(data["content"]))
+except Exception as exc:
+    print(f"prepare-packaging-tools: FAIL: cannot decode {sys.argv[1]}: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+    then
+      rm -f "$json"
+      return 0
+    fi
+    echo "$SCRIPT: api download attempt $try/$attempts failed for $url" >&2
+    rm -f "$dest"
+    [[ "$try" -lt "$attempts" ]] && sleep 3
+  done
+  rm -f "$json"
+  return 1
+}
+
+# fetch_source <name> <dest> <source...>: tries each source in order. Sources are
+# plain URLs, or `api:<owner>/<repo>/<file>` for the GitHub API contents endpoint.
+fetch_source() {
+  local name="$1" dest="$2"
+  shift 2
+  local source
+  for source in "$@"; do
+    if [[ "$source" == api:* ]]; then
+      local spec="${source#api:}" owner="${source#api:}" rest file
+      owner="${spec%%/*}"
+      rest="${spec#*/}"
+      file="${rest#*/}"
+      rest="${rest%%/*}"
+      echo "$SCRIPT: fetching $name via GitHub API"
+      if fetch_from_api "$dest" "$(api_source "$owner" "$rest" "$file")" \
+          && is_usable_file "$dest"; then
+        return 0
+      fi
+    else
+      echo "$SCRIPT: fetching $name from $source"
+      if download_with_retry "$source" "$dest" && is_usable_file "$dest"; then
+        return 0
+      fi
+    fi
+    rm -f "$dest"
+  done
+  return 1
+}
+
+# ensure_tool <name> <source...>: reuse a usable cached copy, otherwise fetch.
+ensure_tool() {
+  local name="$1"
+  shift
+  local dest="$tools_dir/$name"
+  if is_usable_file "$dest"; then
+    echo "$SCRIPT: cached $name ($(stat -c%s "$dest") bytes)"
+    return 0
+  fi
+  rm -f "$dest"
+  if ! fetch_source "$name" "$dest" "$@"; then
+    fail "could not fetch $name after $attempts attempts from any configured source"
+  fi
+  chmod +x "$dest"
+  echo "$SCRIPT: installed $name"
+}
+
+ensure_tool "AppRun-$arch" \
+  "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-$arch"
+
+ensure_tool "linuxdeploy-$arch.AppImage" \
+  "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-$arch.AppImage"
+
+ensure_tool "linuxdeploy-plugin-gtk.sh" \
+  "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh" \
+  "api:tauri-apps/linuxdeploy-plugin-gtk/linuxdeploy-plugin-gtk.sh"
+
+# tauri-bundler downloads the gstreamer plugin unconditionally even though
+# `--plugin gstreamer` is never used here; a missing file aborts its bundling.
+ensure_tool "linuxdeploy-plugin-gstreamer.sh" \
+  "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" \
+  "api:tauri-apps/linuxdeploy-plugin-gstreamer/linuxdeploy-plugin-gstreamer.sh"
+
+# The appimagetool fallback and linuxdeploy's `--output appimage` both use this
+# AppImage wrapper; it is required, unlike in tauri-bundler where it is optional.
+ensure_tool "linuxdeploy-plugin-appimage.AppImage" \
+  "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-$arch.AppImage"
+
+echo "$SCRIPT: PASS: Tauri AppImage packaging tools available under $tools_dir"

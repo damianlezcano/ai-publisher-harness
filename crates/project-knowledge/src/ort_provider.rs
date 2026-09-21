@@ -40,6 +40,8 @@ pub struct OrtEmbeddingProvider {
     generation: EmbeddingGeneration,
     tokenizer: Tokenizer,
     session: Session,
+    /// Bounded intra-op CPU thread count used to build the ONNX session.
+    intra_threads: usize,
 }
 
 /// An extraction chunk is character-bounded while the model is
@@ -47,6 +49,26 @@ pub struct OrtEmbeddingProvider {
 /// rejecting an otherwise valid accepted Material or allocating one enormous
 /// ONNX batch.
 const MAX_SUBDIVIDED_PIECES_PER_INPUT: usize = 32;
+
+/// Upper bound for ONNX intra-op CPU threads. Unbounded CPU parallelism is
+/// deliberately avoided: this is an execution-throughput knob, never a
+/// semantics knob.
+pub const MAX_INTRA_THREADS: usize = 4;
+
+/// Bounded intra-op thread count: available parallelism clamped to
+/// [`MAX_INTRA_THREADS`], never less than 1. This keeps the ONNX runtime on
+/// this machine from spinning up more CPU threads than the bounded ceiling.
+pub fn bounded_intra_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_INTRA_THREADS)
+}
+
+/// Maximum number of tokenizer-safe pieces handed to one ONNX `run` call.
+/// The provider still re-batches larger caller batches internally so memory
+/// stays bounded and ordering/association is preserved.
+const MAX_EMBEDDING_BATCH: usize = 32;
 
 /// Resolves the bundled runtime solely from the application executable. Linux
 /// packages place it under `usr/lib/educai/onnxruntime`; Windows places both
@@ -71,22 +93,45 @@ pub fn runtime_library_from_executable(executable: &Path) -> Result<PathBuf> {
 
 impl OrtEmbeddingProvider {
     /// `runtime_library` must be an absolute executable-relative packaged path
-    /// (never PATH, cwd, or an ORT environment variable).
+    /// (never PATH, cwd, or an ORT environment variable). Bounded intra-op
+    /// threads are chosen via [`bounded_intra_threads`].
     pub fn load(
         generation: &ModelGeneration,
         tokenizer: Tokenizer,
         model_path: &Path,
         runtime_library: &Path,
     ) -> std::result::Result<Self, OrtProviderLoadError> {
+        Self::load_with_intra_threads(
+            generation,
+            tokenizer,
+            model_path,
+            runtime_library,
+            bounded_intra_threads(),
+        )
+    }
+
+    /// Loads a session with an explicitly bounded intra-op thread count. The
+    /// count is clamped to `1..=MAX_INTRA_THREADS`, so this can never create an
+    /// unbounded session. Production uses [`Self::load`]; this is the explicit
+    /// seam the throughput probe and gated runtime tests use to compare
+    /// bounded configurations without changing semantics.
+    pub fn load_with_intra_threads(
+        generation: &ModelGeneration,
+        tokenizer: Tokenizer,
+        model_path: &Path,
+        runtime_library: &Path,
+        intra_threads: usize,
+    ) -> std::result::Result<Self, OrtProviderLoadError> {
         if !runtime_library.is_absolute() || !model_path.is_absolute() {
             return Err(OrtProviderLoadError::SessionBuildFailed);
         }
+        let intra_threads = intra_threads.clamp(1, MAX_INTRA_THREADS);
         ort::init_from(runtime_library.to_string_lossy())
             .commit()
             .map_err(|_| OrtProviderLoadError::RuntimeInitFailed)?;
         let session = Session::builder()
             .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?
-            .with_intra_threads(1)
+            .with_intra_threads(intra_threads)
             .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?
             .commit_from_file(model_path)
             .map_err(|_| OrtProviderLoadError::SessionBuildFailed)?;
@@ -107,7 +152,13 @@ impl OrtEmbeddingProvider {
             generation: EmbeddingGeneration::from(generation),
             tokenizer,
             session,
+            intra_threads,
         })
+    }
+
+    /// The bounded intra-op CPU thread count this session was built with.
+    pub fn intra_threads(&self) -> usize {
+        self.intra_threads
     }
 
     /// Embeds one or more already tokenizer-safe passages in one ONNX call.
@@ -251,9 +302,10 @@ impl OrtEmbeddingProvider {
         }
         let mut pooled = vec![vec![0.0_f32; 384]; texts.len()];
         let mut counts = vec![0_usize; texts.len()];
-        // Preserve the established accepted-batch bound (eight source chunks)
-        // even if one source expands to several tokenizer-safe pieces.
-        let source_batch_size = texts.len().clamp(1, 8);
+        // Bounded ONNX batch: feed at most [`MAX_EMBEDDING_BATCH`] pieces per
+        // `run` call even if several source chunks expand to tokenizer-safe
+        // pieces, so memory stays bounded and ordering/association is exact.
+        let source_batch_size = texts.len().clamp(1, MAX_EMBEDDING_BATCH);
         for start in (0..flattened.len()).step_by(source_batch_size) {
             let end = (start + source_batch_size).min(flattened.len());
             let vectors = self.embed_batch(prefix, &flattened[start..end])?;

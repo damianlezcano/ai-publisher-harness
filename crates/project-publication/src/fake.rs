@@ -72,6 +72,16 @@ impl FakePublisher {
             .collect()
     }
 
+    /// Test-only: the full registered project (route, root, version index).
+    pub fn registered_project(&self, route: &str) -> Option<PublishedProject> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .routes
+            .get(route)
+            .cloned()
+    }
+
     pub fn fail_start(&self) {
         self.inner
             .lock()

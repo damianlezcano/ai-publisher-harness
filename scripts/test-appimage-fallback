@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Deterministic, offline simulation of the AppImage packaging fallback.
+#
+# Exercising the real fallback end-to-end needs a container (WebKitGTK source,
+# Ubuntu dependency closure) and network (tauri helper downloads). This test
+# therefore drives packaging/linux/construct-appdir with STUB linuxdeploy and
+# STUB appimagetool tools plus a fake release tree, proving the fallback's
+# control flow without any network, podman, or container-only prerequisite:
+#
+#   CASE 1 — normal path: an existing complete AppDir is located and packaged;
+#            it is not reconstructed.
+#   CASE 2 — tauri bundling failed / bundle/appimage absent: the release binary
+#            + inputs exist, so the AppDir is constructed deterministically and
+#            appimagetool packages it. No `find` against a missing
+#            bundle/appimage directory.
+#   CASE 3 — missing release binary: hard failure.
+#   CASE 4 — missing required sidecar: hard failure.
+#   CASE 5 — a stale pre-existing AppImage is replaced, never mistaken for a
+#            freshly produced artifact.
+#
+# Exit codes: 0 = PASS, 1 = FAIL, 2 = usage.
+
+set -euo pipefail
+
+SCRIPT="$(basename "$0")"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+fail() { echo "$SCRIPT: FAIL: $*" >&2; exit 1; }
+
+assert_file() { [[ -f "$1" ]] || fail "expected file missing: $1"; }
+assert_exec() { [[ -x "$1" ]] || fail "expected executable missing: $1"; }
+assert_true() { "$@" >/dev/null 2>&1 || fail "assertion failed: $*"; }
+assert_contains() { rg -Fq "$2" "$1" || fail "expected '$2' in $1"; }
+
+# --- fixtures ----------------------------------------------------------------
+release_bin="$workdir/release/educai"
+mkdir -p "$workdir/release"
+printf '#!/bin/sh\necho fake-educai\n' > "$release_bin"
+chmod +x "$release_bin"
+
+sidecars="$workdir/sidecars"
+mkdir -p "$sidecars"
+printf '#!/bin/sh\necho fake-opencode\n' > "$sidecars/opencode-x86_64-unknown-linux-gnu"
+printf '#!/bin/sh\necho fake-cloudflared\n' > "$sidecars/cloudflared-x86_64-unknown-linux-gnu"
+chmod +x "$sidecars/opencode-x86_64-unknown-linux-gnu" "$sidecars/cloudflared-x86_64-unknown-linux-gnu"
+
+tools="$workdir/tools"
+mkdir -p "$tools"
+export LD_LOG="$workdir/linuxdeploy.log"
+export AIT_LOG="$workdir/appimagetool.log"
+
+cat > "$tools/linuxdeploy-x86_64.AppImage" <<'STUB'
+#!/usr/bin/env bash
+args=("$@")
+appdir=""
+for i in "${!args[@]}"; do
+  [[ "${args[$i]}" == "--appdir" ]] && appdir="${args[$((i + 1))]}"
+done
+[[ -n "$appdir" && -n "$LD_LOG" ]] || exit 1
+mkdir -p "$appdir/usr/lib"
+printf 'FAKECLOSURE\n' > "$appdir/usr/lib/libfakeclosure.so"
+printf 'carries the absolute WebKitGTK helper path /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1\n' > "$appdir/usr/lib/libwebkit2gtk-4.1.so.0"
+echo "linuxdeploy appdir=$appdir" >> "$LD_LOG"
+# Mimic the expected tauri-flow abort on the pinned static sidecars.
+exit 1
+STUB
+
+cat > "$tools/linuxdeploy-plugin-appimage.AppImage" <<'STUB'
+#!/usr/bin/env bash
+args=("$@")
+appdir=""
+for arg in "${args[@]}"; do
+  [[ "$arg" == --appdir=* ]] && appdir="${arg#--appdir=}"
+done
+[[ -n "$appdir" && -n "$OUTPUT" && -n "$AIT_LOG" ]] || exit 1
+printf 'FRESH appdir=%s output=%s\n' "$appdir" "$OUTPUT" >> "$AIT_LOG"
+printf 'FRESH\n' > "$OUTPUT"
+chmod +x "$OUTPUT"
+exit 0
+STUB
+
+printf '#!/bin/sh\nexit 0\n' > "$tools/AppRun-x86_64"
+chmod +x "$tools/linuxdeploy-x86_64.AppImage" "$tools/linuxdeploy-plugin-appimage.AppImage" "$tools/AppRun-x86_64"
+
+run_construct() {
+  rm -f "$LD_LOG" "$AIT_LOG"
+  ./packaging/linux/construct-appdir \
+    --appdir "$1" --release-bin "$release_bin" --sidecars "$sidecars" \
+    --components "$root/components/linux-x86_64" --tools "$tools" \
+    --output "$2" --no-webkit-prep
+}
+
+# --- CASE 1: normal path — an existing complete AppDir is located ------------
+case1_dir="$workdir/case1.AppDir"
+case1_out="$workdir/case1-out/EducAI_0.1.0_amd64.AppImage"
+mkdir -p "$case1_dir/usr/bin" "$case1_dir/usr/lib" "$case1_dir/usr/share/applications"
+printf '#!/bin/sh\nexit 0\n' > "$case1_dir/AppRun"
+cp "$release_bin" "$case1_dir/usr/bin/educai"
+printf '[Desktop Entry]\nName=EducAI\nExec=educai\nIcon=educai\nType=Application\n' \
+  > "$case1_dir/usr/share/applications/EducAI.desktop"
+printf 'NOTAREALPNG' > "$case1_dir/EducAI.png"
+touch "$case1_dir/PRESERVED_MARKER"
+run_construct "$case1_dir" "$case1_out"
+[[ -f "$case1_dir/PRESERVED_MARKER" ]] || fail "CASE 1: located AppDir was reconstructed"
+[[ ! -s "$LD_LOG" ]] || fail "CASE 1: linuxdeploy ran on a complete existing AppDir"
+assert_file "$case1_out"
+assert_contains "$AIT_LOG" "appdir=$case1_dir"
+echo "$SCRIPT: CASE 1 PASS (existing complete AppDir located and packaged)"
+
+# --- CASE 2: tauri failed / no bundle/appimage -> construct from release tree -
+case2_dir="$workdir/case2.AppDir"
+case2_out="$workdir/case2-out/EducAI_0.1.0_amd64.AppImage"
+run_construct "$case2_dir" "$case2_out"
+[[ -s "$LD_LOG" ]] || fail "CASE 2: dependency gathering (linuxdeploy) did not run"
+assert_exec "$case2_dir/usr/bin/educai"
+assert_exec "$case2_dir/usr/bin/opencode"
+assert_exec "$case2_dir/usr/bin/cloudflared"
+assert_exec "$case2_dir/AppRun"
+assert_file "$case2_dir/usr/share/applications/EducAI.desktop"
+assert_file "$case2_dir/usr/lib/educai/onnxruntime/libonnxruntime.so.1.22.0"
+assert_file "$case2_dir/EducAI.png"
+assert_true test -L "$case2_dir/.DirIcon"
+assert_true test -L "$case2_dir/educai.png"
+assert_true test -L "$case2_dir/EducAI.desktop"
+assert_file "$case2_out"
+assert_contains "$AIT_LOG" "appdir=$case2_dir"
+echo "$SCRIPT: CASE 2 PASS (AppDir constructed from release tree and packaged)"
+
+# --- CASE 3: missing release binary -> hard failure --------------------------
+if ./packaging/linux/construct-appdir \
+    --appdir "$workdir/case3.AppDir" --release-bin "$workdir/does-not-exist" \
+    --sidecars "$sidecars" --components "$root/components/linux-x86_64" \
+    --tools "$tools" --output "$workdir/case3-out/EducAI_0.1.0_amd64.AppImage" \
+    --no-webkit-prep >"$workdir/case3.log" 2>&1; then
+  fail "CASE 3: construct-appdir succeeded despite a missing release binary"
+fi
+assert_contains "$workdir/case3.log" "release binary"
+echo "$SCRIPT: CASE 3 PASS (missing release binary fails closed)"
+
+# --- CASE 4: missing required sidecar -> hard failure -------------------------
+sidecars_incomplete="$workdir/sidecars-incomplete"
+mkdir -p "$sidecars_incomplete"
+printf '#!/bin/sh\necho fake-cloudflared\n' > "$sidecars_incomplete/cloudflared-x86_64-unknown-linux-gnu"
+chmod +x "$sidecars_incomplete/cloudflared-x86_64-unknown-linux-gnu"
+if ./packaging/linux/construct-appdir \
+    --appdir "$workdir/case4.AppDir" --release-bin "$release_bin" \
+    --sidecars "$sidecars_incomplete" --components "$root/components/linux-x86_64" \
+    --tools "$tools" --output "$workdir/case4-out/EducAI_0.1.0_amd64.AppImage" \
+    --no-webkit-prep >"$workdir/case4.log" 2>&1; then
+  fail "CASE 4: construct-appdir succeeded despite a missing opencode sidecar"
+fi
+assert_contains "$workdir/case4.log" "opencode sidecar"
+echo "$SCRIPT: CASE 4 PASS (missing verified sidecar fails closed)"
+
+# --- CASE 5: stale AppImage is replaced, never mistaken for current output ----
+case5_dir="$workdir/case5.AppDir"
+case5_out="$workdir/case5-out/EducAI_0.1.0_amd64.AppImage"
+mkdir -p "$(dirname "$case5_out")"
+printf 'STALE-PREVIOUS-RUN\n' > "$case5_out"
+run_construct "$case5_dir" "$case5_out"
+assert_file "$case5_out"
+if rg -Fq 'STALE-PREVIOUS-RUN' "$case5_out"; then
+  fail "CASE 5: stale pre-existing AppImage was reported as this run's output"
+fi
+assert_contains "$case5_out" "FRESH"
+echo "$SCRIPT: CASE 5 PASS (stale AppImage replaced by the fresh artifact)"
+
+echo "$SCRIPT: PASS"

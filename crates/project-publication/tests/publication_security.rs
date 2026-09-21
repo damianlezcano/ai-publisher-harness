@@ -96,10 +96,10 @@ fn mixed_web_keeps_web_index_and_materials_page() {
     );
     h.manager.publish(&project.id).unwrap();
     let publish = publish_dir(h.temp.path(), &project.id);
-    assert_eq!(
-        fs::read(publish.join("index.html")).unwrap(),
-        b"<html>app</html>"
-    );
+    // Root is the generated version-history page; materials stay reachable.
+    let root_html = fs::read_to_string(publish.join("index.html")).unwrap();
+    assert!(root_html.contains("App"), "{root_html}");
+    assert!(!root_html.contains("<html>app</html>"), "{root_html}");
     assert!(publish.join("materials.html").exists());
     assert!(
         walk_files(&publish)

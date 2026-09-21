@@ -128,14 +128,58 @@ impl AsRef<Path> for PublishRoot {
 pub struct PublishedProject {
     pub route: PublicationRoute,
     pub publish_root: PublishRoot,
+    pub versions: PublishedVersions,
+}
+
+/// The immutable version ids a published project exposes, and which one is the
+/// authoritative current version. Only ids in `versions` may be addressed in a
+/// public URL; arbitrary URL text is never turned into a path.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublishedVersions {
+    pub current: Option<String>,
+    pub versions: Vec<String>,
+}
+
+impl PublishedVersions {
+    pub fn new(current: Option<String>, versions: Vec<String>) -> Self {
+        Self { current, versions }
+    }
+
+    /// True when `id` is a version this project actually exposes.
+    pub fn is_version(&self, id: &str) -> bool {
+        self.versions.iter().any(|v| v == id)
+    }
+
+    /// True when `id` is the authoritative current version.
+    pub fn is_current(&self, id: &str) -> bool {
+        self.current.as_deref() == Some(id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_none() && self.versions.is_empty()
+    }
 }
 
 impl PublishedProject {
-    /// Creates a new `PublishedProject` binding.
+    /// Creates a new `PublishedProject` binding without a version index.
     pub fn new(route: PublicationRoute, publish_root: PublishRoot) -> Self {
         Self {
             route,
             publish_root,
+            versions: PublishedVersions::default(),
+        }
+    }
+
+    /// Creates a binding with an explicit version index.
+    pub fn with_versions(
+        route: PublicationRoute,
+        publish_root: PublishRoot,
+        versions: PublishedVersions,
+    ) -> Self {
+        Self {
+            route,
+            publish_root,
+            versions,
         }
     }
 
@@ -147,6 +191,11 @@ impl PublishedProject {
     /// Returns the publish root capability.
     pub fn publish_root(&self) -> &PublishRoot {
         &self.publish_root
+    }
+
+    /// Returns the version index.
+    pub fn versions(&self) -> &PublishedVersions {
+        &self.versions
     }
 }
 

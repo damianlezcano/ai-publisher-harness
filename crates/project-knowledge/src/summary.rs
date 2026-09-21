@@ -100,6 +100,9 @@ pub enum SummaryFailure {
     ExecutionFailed,
     InvalidOutput,
     EmptyCorpus,
+    /// The owning summary operation was cancelled. This is operation state,
+    /// not a failed cached artifact.
+    Cancelled,
 }
 
 impl SummaryFailure {
@@ -109,6 +112,7 @@ impl SummaryFailure {
             Self::ExecutionFailed => "execution_failed",
             Self::InvalidOutput => "invalid_output",
             Self::EmptyCorpus => "empty_corpus",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -118,6 +122,7 @@ impl SummaryFailure {
             "execution_failed" => Ok(Self::ExecutionFailed),
             "invalid_output" => Ok(Self::InvalidOutput),
             "empty_corpus" => Ok(Self::EmptyCorpus),
+            "cancelled" => Ok(Self::Cancelled),
             _ => Err(KnowledgeError::IncompatibleSchema(-1)),
         }
     }
@@ -240,6 +245,22 @@ pub trait RemoteSummarizer {
         &self,
         request: &SummaryRequest,
     ) -> std::result::Result<SummaryOutput, SummaryFailure>;
+
+    /// Controlled execution keeps cancellation provider-independent. Adapters
+    /// may associate their own remote session with this control; generic K6
+    /// code never learns provider session mechanics.
+    fn summarize_controlled(
+        &self,
+        request: &SummaryRequest,
+        _control: &dyn SummaryExecutionControl,
+    ) -> std::result::Result<SummaryOutput, SummaryFailure> {
+        self.summarize(request)
+    }
+}
+
+/// Provider-neutral observation of a K6 execution owner's cancellation.
+pub trait SummaryExecutionControl: Send + Sync {
+    fn is_cancelled(&self) -> bool;
 }
 
 /// A bounded summarization request. The remote model receives `evidence`

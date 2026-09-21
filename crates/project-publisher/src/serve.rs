@@ -14,6 +14,7 @@ use axum::http::header::{self, HeaderValue};
 use axum::http::{Method, Response, StatusCode};
 use axum::response::Response as AxumResponse;
 
+use crate::model::PublishedProject;
 use crate::registry::RouteRegistry;
 
 /// Outcome of resolving a request against the route registry and filesystem.
@@ -160,18 +161,63 @@ fn resolve(raw_path: &str, registry: &RouteRegistry) -> ResolveOutcome {
             if route.is_empty() {
                 return ResolveOutcome::NotFound;
             }
-            let Some(root) = registry.lookup_by_str(route) else {
+            let Some(project) = registry.lookup_by_str(route) else {
                 return ResolveOutcome::NotFound;
             };
+            let root = project.publish_root().clone();
 
             let sub = &body[1..];
             let has_trailing_slash = sub.last() == Some(&"");
 
+            // Version routing: the first segment may be a reserved keyword
+            // (`latest`) or a version id belonging to this project. Anything
+            // else falls through to the root for backward compatibility.
+            let base: PathBuf = match sub.first().filter(|s| !s.is_empty()) {
+                Some(first) => {
+                    let decoded = match decode_segment(first) {
+                        Some(decoded) if is_safe_segment(&decoded) => decoded,
+                        _ => return ResolveOutcome::NotFound,
+                    };
+                    if decoded == "latest" {
+                        match latest_base(&project, root.as_path()) {
+                            Some(base) => base,
+                            None => return ResolveOutcome::NotFound,
+                        }
+                    } else if decoded == "versions" {
+                        // The internal `versions/` word is reserved and never
+                        // served directly.
+                        return ResolveOutcome::NotFound;
+                    } else if project.versions().is_version(&decoded) {
+                        root.as_path().join("versions").join(&decoded)
+                    } else {
+                        root.as_path().to_path_buf()
+                    }
+                }
+                _ => root.as_path().to_path_buf(),
+            };
+
+            // The version selector (if any) is consumed; the rest is the file
+            // path inside the selected snapshot.
+            let file_sub: &[&str] = match sub.first().filter(|s| !s.is_empty()) {
+                Some(first) => {
+                    let decoded = match decode_segment(first) {
+                        Some(decoded) if is_safe_segment(&decoded) => decoded,
+                        _ => return ResolveOutcome::NotFound,
+                    };
+                    if decoded == "latest" || project.versions().is_version(&decoded) {
+                        &sub[1..]
+                    } else {
+                        sub
+                    }
+                }
+                _ => sub,
+            };
+
             let mut file_segments: Vec<String> = Vec::new();
-            for (idx, seg) in sub.iter().enumerate() {
+            for (idx, seg) in file_sub.iter().enumerate() {
                 if seg.is_empty() {
                     // Only the final position may be empty (trailing slash marker).
-                    if idx != sub.len() - 1 {
+                    if idx != file_sub.len() - 1 {
                         return ResolveOutcome::NotFound;
                     }
                     continue;
@@ -193,7 +239,7 @@ fn resolve(raw_path: &str, registry: &RouteRegistry) -> ResolveOutcome {
                 return ResolveOutcome::NotFound;
             }
 
-            match resolve_file(root.as_path(), &file_segments) {
+            match resolve_file(&base, &file_segments) {
                 Ok(path) => {
                     let file_name = file_segments
                         .last()
@@ -205,6 +251,32 @@ fn resolve(raw_path: &str, registry: &RouteRegistry) -> ResolveOutcome {
             }
         }
     }
+}
+
+/// Resolves the base directory for `/slug/latest/`.
+///
+/// `latest` is the current version's own snapshot (`versions/<current>/`) when
+/// that snapshot is a servable web resource (it owns an `index.html`); this is
+/// the shared-lineage current. For non-web publications (documents/files) the
+/// current version is not a browsable resource, so `latest` falls back to the
+/// route root (materials landing). A project with no version index has no
+/// `latest` route. The current version id always comes from the registered
+/// index, never from arbitrary URL text.
+fn latest_base(project: &PublishedProject, root: &Path) -> Option<PathBuf> {
+    let versions = project.versions();
+    if versions.is_empty() {
+        return None;
+    }
+    if let Some(id) = versions.current.as_deref()
+        && versions.is_version(id)
+    {
+        let index = root.join("versions").join(id).join("index.html");
+        let meta = fs::symlink_metadata(&index).ok();
+        if meta.is_some_and(|m| !m.file_type().is_symlink() && m.is_file()) {
+            return Some(root.join("versions").join(id));
+        }
+    }
+    Some(root.to_path_buf())
 }
 
 /// Resolves `segments` below a canonical `root`, rejecting symlinks, escapes, and

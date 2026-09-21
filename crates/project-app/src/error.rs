@@ -38,6 +38,8 @@ pub enum ErrorCode {
     NoCompatibleModel,
     NetworkError,
     RecoveryNoTurn,
+    SummaryIncompatible,
+    SummaryArtifactCorrupt,
     Internal,
 }
 
@@ -68,6 +70,8 @@ impl ErrorCode {
             ErrorCode::NoCompatibleModel => "no_compatible_model",
             ErrorCode::NetworkError => "network_error",
             ErrorCode::RecoveryNoTurn => "recovery_no_turn",
+            ErrorCode::SummaryIncompatible => "summary_incompatible",
+            ErrorCode::SummaryArtifactCorrupt => "summary_artifact_corrupt",
             ErrorCode::Internal => "internal",
         }
     }

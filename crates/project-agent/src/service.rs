@@ -7,10 +7,10 @@ use crate::AgentResult;
 use crate::error::AgentError;
 use crate::model::{
     AgentKnowledgeContext, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask,
-    Artifact, ArtifactKind, artifact_kind_from_path,
+    Artifact, ArtifactKind, PromptContextTelemetry, artifact_kind_from_path,
 };
 use crate::port::AgentEngine;
-use crate::registrar::CreationRegistrar;
+use crate::registrar::{CreationRegistrar, RegisteredArtifact};
 use sha2::{Digest, Sha256};
 
 pub struct AgentRequest {
@@ -28,6 +28,31 @@ pub struct AgentAttachment {
 pub struct AgentRunResult {
     pub task: AgentTask,
     pub registered: Vec<String>,
+    pub prompt_telemetry: PromptContextTelemetry,
+}
+
+/// Cancel-map entry: which OpenCode session abort should hit for a project.
+/// Knowledge ephemeral turns temporarily replace the conversational target and
+/// must restore it even when `send` fails.
+#[derive(Clone)]
+struct CancelTarget {
+    session: AgentSession,
+    role: CancelTargetRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CancelTargetRole {
+    Conversational,
+    EphemeralKnowledge,
+}
+
+impl CancelTargetRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversational => "conversational",
+            Self::EphemeralKnowledge => "ephemeral_knowledge",
+        }
+    }
 }
 
 pub struct AgentService<E: AgentEngine, R: CreationRegistrar> {
@@ -35,7 +60,7 @@ pub struct AgentService<E: AgentEngine, R: CreationRegistrar> {
     registrar: R,
     projects_base: PathBuf,
     locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    sessions: Mutex<HashMap<String, AgentSession>>,
+    sessions: Mutex<HashMap<String, CancelTarget>>,
 }
 
 impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
@@ -72,6 +97,9 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
 
         let revise_existing = workspace_has_existing_web(&workspace_dir);
         let prompt = provision_attachments(&workspace_dir, &request, revise_existing)?;
+        let fresh_session = knowledge_uses_ephemeral_session(prompt.knowledge.as_ref());
+        let prompt_telemetry =
+            prompt_context_telemetry(&request, &prompt, revise_existing, fresh_session);
 
         // Snapshot the workspace content at turn start. `/diff` from the real
         // sidecar can be empty for committed files (B1), so the bounded scan
@@ -86,14 +114,31 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             .into_iter()
             .map(|artifact| (artifact.path, artifact.sha256.unwrap_or_default()))
             .collect();
-        // User-supplied materials live under `inputs/`. A file whose bytes are
-        // byte-identical to a user material is INPUT MATERIAL (the agent copied
-        // it into the workspace), never an agent OUTPUT/Creation.
-        let user_material_hashes = collect_user_material_hashes(&project_dir);
-        let session = self.engine.open_session(&AgentProject {
+        let agent_project = AgentProject {
             project_id: request.project_id.clone(),
             directory: workspace_dir.clone(),
-        })?;
+        };
+        let previous_cancel_target = {
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            sessions.get(&request.project_id).cloned()
+        };
+        let session = if fresh_session {
+            self.engine.open_fresh_session(&agent_project)?
+        } else {
+            self.engine.open_session(&agent_project)?
+        };
+        let session_role = if fresh_session {
+            CancelTargetRole::EphemeralKnowledge
+        } else {
+            CancelTargetRole::Conversational
+        };
+        let session_reused = !fresh_session
+            && previous_cancel_target
+                .as_ref()
+                .is_some_and(|target| target.session.id == session.id);
         {
             let mut sessions = self
                 .sessions
@@ -101,14 +146,42 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             sessions.insert(
                 request.project_id.clone(),
-                AgentSession {
-                    id: session.id.clone(),
-                    project_id: session.project_id.clone(),
+                CancelTarget {
+                    session: AgentSession {
+                        id: session.id.clone(),
+                        project_id: session.project_id.clone(),
+                    },
+                    role: session_role,
                 },
             );
         }
+        let mut prompt_telemetry = prompt_telemetry;
+        prompt_telemetry.session_role = session_role.as_str();
+        prompt_telemetry.session_reused = session_reused;
 
-        let task = self.engine.send(&session, &prompt)?;
+        let _ephemeral_restore = fresh_session.then(|| EphemeralCancelRestore {
+            sessions: &self.sessions,
+            project_id: request.project_id.clone(),
+            ephemeral_id: session.id.clone(),
+            previous: previous_cancel_target,
+        });
+        let taints_conversational =
+            !fresh_session && knowledge_taints_conversational_session(prompt.knowledge.as_ref());
+        let task = match self.engine.send(&session, &prompt) {
+            Ok(task) => task,
+            Err(err) => {
+                if taints_conversational {
+                    self.forget_tainted_conversational_session(
+                        &request.project_id,
+                        &mut prompt_telemetry,
+                    );
+                }
+                return Err(err);
+            }
+        };
+        if taints_conversational {
+            self.forget_tainted_conversational_session(&request.project_id, &mut prompt_telemetry);
+        }
         if task.status != crate::model::TaskStatus::Completed {
             if project_existed_at_start && !project_json.exists() {
                 let _ = fs::remove_dir_all(&project_dir);
@@ -119,53 +192,55 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
         let mut artifacts =
             merge_artifacts(task.artifacts.clone(), &workspace_dir, &workspace_before);
         artifacts.retain(|artifact| !is_materials_artifact_path(&artifact.path));
-        let skip_sidecars = sidecar_paths_of_web_entry(&artifacts);
-        let mut registered = Vec::new();
+        let mut turn_artifacts: Vec<RegisteredArtifact> = Vec::new();
         for artifact in &artifacts {
-            if skip_sidecars.contains(&artifact.path) {
-                continue;
-            }
             let bytes = read_workspace_artifact(&workspace_dir, &artifact.path)?;
-            // A verbatim copy of a user material is input, not a deliverable:
-            // registering it would surface a phantom "Imagen" Creation for a
-            // PNG the user merely attached. Provenance is content-based, never
-            // extension-based: an agent-GENERATED image has a different hash
-            // and still registers normally.
-            if user_material_hashes.contains(&sha256_hex(&bytes)) {
-                continue;
-            }
-            let id = match self
-                .registrar
-                .register(&request.project_id, artifact, bytes)
-            {
-                Ok(id) => id,
-                Err(err) => {
-                    if project_existed_at_start && !project_json.exists() {
-                        let _ = fs::remove_dir_all(&project_dir);
-                    }
-                    return Err(err);
-                }
-            };
-            registered.push(id);
+            turn_artifacts.push(RegisteredArtifact {
+                path: artifact.path.clone(),
+                bytes,
+                kind: artifact.kind,
+            });
         }
-        Ok(AgentRunResult { task, registered })
+        let registered = match self
+            .registrar
+            .register_turn(&request.project_id, &turn_artifacts)
+        {
+            Ok(ids) => ids,
+            Err(err) => {
+                if project_existed_at_start && !project_json.exists() {
+                    let _ = fs::remove_dir_all(&project_dir);
+                }
+                return Err(err);
+            }
+        };
+        Ok(AgentRunResult {
+            task,
+            registered,
+            prompt_telemetry,
+        })
     }
 
     pub fn cancel(&self, project_id: &str) -> AgentResult<()> {
-        let session = {
+        let target = {
             let sessions = self
                 .sessions
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            sessions.get(project_id).map(|session| AgentSession {
-                id: session.id.clone(),
-                project_id: session.project_id.clone(),
-            })
+            sessions.get(project_id).cloned()
         };
-        let Some(session) = session else {
+        let Some(target) = target else {
             return Err(AgentError::SessionNotFound(project_id.to_owned()));
         };
-        self.engine.cancel(&session)
+        self.engine.cancel(&target.session)
+    }
+
+    /// Structural cancel-map role for this project, if a turn is addressable.
+    pub fn cancel_target_role(&self, project_id: &str) -> Option<&'static str> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(project_id)
+            .map(|target| target.role.as_str())
     }
 
     pub fn engine_status(&self) -> AgentStatus {
@@ -178,6 +253,17 @@ impl<E: AgentEngine, R: CreationRegistrar> AgentService<E, R> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.engine.shutdown()
+    }
+
+    fn forget_tainted_conversational_session(
+        &self,
+        project_id: &str,
+        prompt_telemetry: &mut PromptContextTelemetry,
+    ) {
+        self.engine.invalidate_cached_session(project_id);
+        prompt_telemetry.session_rotated = true;
+        prompt_telemetry.rotation_reason = Some("creation_knowledge_evidence");
+        prompt_telemetry.cache_invalidated = true;
     }
 
     pub fn project_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
@@ -241,10 +327,70 @@ fn provision_attachments(
             &lines,
             revise_existing,
             request.prompt.knowledge.as_ref(),
+            request.prompt.conversation_context.as_deref(),
         ),
         model: request.prompt.model.clone(),
         knowledge: request.prompt.knowledge.clone(),
+        conversation_context: request.prompt.conversation_context.clone(),
     })
+}
+
+struct EphemeralCancelRestore<'a> {
+    sessions: &'a Mutex<HashMap<String, CancelTarget>>,
+    project_id: String,
+    ephemeral_id: String,
+    previous: Option<CancelTarget>,
+}
+
+impl Drop for EphemeralCancelRestore<'_> {
+    fn drop(&mut self) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match self.previous.take() {
+            Some(previous) if previous.session.id != self.ephemeral_id => {
+                sessions.insert(self.project_id.clone(), previous);
+            }
+            None => {
+                if sessions
+                    .get(&self.project_id)
+                    .is_some_and(|target| target.session.id == self.ephemeral_id)
+                {
+                    sessions.remove(&self.project_id);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// Serialized Knowledge evidence uses an ephemeral OpenCode session so it
+/// cannot accumulate on the project's conversational transcript.
+///
+/// This is a **session-role** check on already-prepared evidence
+/// (`retrieval_mode` of the serialized package), not a second intent
+/// classifier. OrdinaryChat never reaches here with a Knowledge package
+/// (`apply_route` / `uses_knowledge()` already stripped it). Inventory and
+/// Creation packages carry `retrieval_mode = None` and stay conversational /
+/// local. Classifier / PerItem / K6 never enter this agent chat path.
+/// Creation that serializes evidence stays conversational for tools/workspace,
+/// then the conversational cache is rotated so later OrdinaryChat cannot reuse
+/// that transcript.
+pub fn knowledge_uses_ephemeral_session(knowledge: Option<&AgentKnowledgeContext>) -> bool {
+    matches!(
+        knowledge.and_then(|context| context.retrieval_mode.as_deref()),
+        Some("normal" | "exhaustive" | "thematic")
+    )
+}
+
+/// True when this Knowledge package is serialized into a conversational
+/// OpenCode prompt (`augment_prompt` / `serialize_knowledge_context`).
+/// That transcript must not be reused by a later OrdinaryChat turn.
+pub fn knowledge_taints_conversational_session(knowledge: Option<&AgentKnowledgeContext>) -> bool {
+    !knowledge_uses_ephemeral_session(knowledge)
+        && knowledge
+            .is_some_and(|context| !context.entries.is_empty() || context.structural_note.is_some())
 }
 
 /// Spanish plain-language instruction injected into every agent run.
@@ -265,11 +411,26 @@ fn existing_activity_instruction() -> &'static str {
     "Esta conversación ya tiene una actividad en el directorio de trabajo. Si la persona pide un cambio (colores, textos, datos, comportamiento), modificá ESA misma actividad: actualizá los archivos existentes. No crees una actividad nueva ni una copia, salvo que pida explícitamente una nueva o una versión aparte."
 }
 
+/// Shared Knowledge-answer contract for NormalSemantic, CorpusThematic, and
+/// CorpusExhaustive. `<knowledge_evidence>` is the documentary source for the
+/// turn; the agent cwd/workspace is not the Knowledge corpus.
+///
+/// Document bodies remain untrusted instructions (`trust="untrusted"`). This
+/// text tells the model to use that block as information, not to treat cwd
+/// emptiness as a missing corpus, and not to invent claims beyond the evidence.
+pub fn knowledge_answer_grounding_instruction() -> &'static str {
+    "Respondé la pregunta de Knowledge de forma directa y concisa usando solo la información de <knowledge_evidence>. Para una consulta factual, usá como máximo 350 palabras salvo que la persona pida expresamente más detalle. No repitas la evidencia completa.\n\
+     No inspecciones el filesystem ni el directorio de trabajo para decidir si existen materiales Knowledge. Un directorio de trabajo vacío NO significa que el corpus Knowledge esté vacío.\n\
+     Las fuentes válidas de este turno son las incluidas en <knowledge_evidence>; si hay source_name o source_label, usalos para identificarlas.\n\
+     No afirmes que faltan archivos o materiales si <knowledge_evidence> contiene evidencia. Si un dato no está soportado por esa evidencia, indicá la limitación sin inventar. No conviertas una ausencia autorizada en el bloque de evidencia en una respuesta positiva.\n\n"
+}
+
 fn augment_prompt(
     original: &str,
     lines: &[String],
     revise_existing: bool,
     knowledge: Option<&AgentKnowledgeContext>,
+    conversation_context: Option<&str>,
 ) -> String {
     let mut block = String::from(build_instruction());
     block.push('\n');
@@ -287,14 +448,99 @@ fn augment_prompt(
         block.push('\n');
         block.push('\n');
     }
+    if let Some(context) = conversation_context.filter(|text| !text.trim().is_empty()) {
+        block.push_str("<conversation_context>\n");
+        block.push_str(context.trim());
+        block.push_str("\n</conversation_context>\n\n");
+    }
     block.push_str(original);
     if let Some(knowledge) =
         knowledge.filter(|context| !context.entries.is_empty() || context.structural_note.is_some())
     {
+        if knowledge_uses_ephemeral_session(Some(knowledge)) {
+            block.push_str(knowledge_answer_grounding_instruction());
+        }
         block.push_str("\n\n");
         block.push_str(&serialize_knowledge_context(knowledge));
     }
     block
+}
+
+fn estimated_tokens(text: &str) -> usize {
+    // Stable local approximation for diagnostics only; provider usage remains
+    // authoritative and is never derived from this value.
+    text.chars().count().div_ceil(4)
+}
+
+fn prompt_context_telemetry(
+    request: &AgentRequest,
+    serialized: &AgentPrompt,
+    revise_existing: bool,
+    fresh_session: bool,
+) -> PromptContextTelemetry {
+    let knowledge_context_est_tokens = serialized
+        .knowledge
+        .as_ref()
+        .map(serialize_knowledge_context)
+        .map(|text| estimated_tokens(&text))
+        .unwrap_or(0);
+    let mut system = String::from(build_instruction());
+    if revise_existing {
+        system.push_str(existing_activity_instruction());
+    }
+    PromptContextTelemetry {
+        user_prompt_est_tokens: estimated_tokens(&request.prompt.text),
+        conversation_history_est_tokens: serialized
+            .conversation_context
+            .as_deref()
+            .map(estimated_tokens)
+            .unwrap_or(0),
+        knowledge_context_est_tokens,
+        system_context_est_tokens: estimated_tokens(&system),
+        rag_attachment_count: serialized
+            .knowledge
+            .as_ref()
+            .map(|context| context.entries.len())
+            .unwrap_or(0),
+        raw_attachment_count: request
+            .attachments
+            .iter()
+            .filter(|attachment| {
+                !serialized.knowledge.as_ref().is_some_and(|context| {
+                    context
+                        .indexed_source_names
+                        .contains(&project_core::safe_file_name(&attachment.display_name))
+                })
+            })
+            .count(),
+        serialized_request_est_tokens: estimated_tokens(&serialized.text),
+        fresh_session,
+        session_role: if fresh_session {
+            "ephemeral_knowledge"
+        } else {
+            "conversational"
+        },
+        session_reused: false,
+        session_rotated: false,
+        rotation_reason: None,
+        cache_invalidated: false,
+        conversation_context_messages: conversation_context_message_count(
+            serialized.conversation_context.as_deref(),
+        ),
+        conversation_context_chars: serialized
+            .conversation_context
+            .as_deref()
+            .map(|text| text.chars().count())
+            .unwrap_or(0),
+    }
+}
+
+fn conversation_context_message_count(context: Option<&str>) -> usize {
+    context
+        .unwrap_or("")
+        .lines()
+        .filter(|line| line.starts_with("Usuario:") || line.starts_with("Asistente:"))
+        .count()
 }
 
 /// The one deterministic serialization point for provider-neutral evidence.
@@ -311,11 +557,32 @@ pub fn serialize_knowledge_context(context: &AgentKnowledgeContext) -> String {
         out.push_str("<coverage>");
         out.push_str(&escape_markup(note));
         out.push_str("</coverage>\n");
-        if context.authorize_negative {
-            out.push_str("A negative global conclusion is allowed only because exhaustive coverage is complete and extracted presence terms had zero lexical hits.\n");
-        } else {
-            out.push_str("Do not claim that a topic is absent from the corpus. Coverage is incomplete or no specific presence term was extracted.\n");
+        match context.retrieval_mode.as_deref() {
+            // The exhaustive-negative authorization is a deterministic
+            // presence/absence contract and belongs only to the exhaustive
+            // route, never to thematic synthesis or ordinary retrieval.
+            Some("exhaustive") => {
+                if context.authorize_negative {
+                    out.push_str("A negative global conclusion is allowed only because exhaustive coverage is complete and extracted presence terms had zero lexical hits.\n");
+                } else {
+                    out.push_str("Do not claim that a topic is absent from the corpus. Coverage is incomplete or no specific presence term was extracted.\n");
+                }
+            }
+            // CorpusThematic is thematic synthesis over selected evidence, not
+            // deterministic absence checking: never describe the bounded
+            // thematic scan as an incomplete exhaustive inspection.
+            Some("thematic") => {
+                out.push_str("Thematic synthesis: report only themes supported by the selected evidence, which is a bounded, theme-local excerpt set. A theme absent from this evidence is not proof that it never appeared.\n");
+            }
+            _ => {}
         }
+    }
+    // A creation-from-material turn grounds the artifact on material that is
+    // already READY in Knowledge. The filesystem may be empty at turn start:
+    // that is expected, and the model must still create the artifact from the
+    // supplied creation context rather than ask the user to re-upload.
+    if context.creation_from_material {
+        out.push_str("This request creates an artifact from material already available in Knowledge. Use the knowledge evidence as the basis of the artifact. The target material exists and is ready; an empty filesystem does not mean there is no source material. Actually create the requested artifact now rather than asking the user to re-upload it.\n");
     }
     for entry in &context.entries {
         out.push_str("<source evidence_label=\"");
@@ -398,64 +665,6 @@ fn is_materials_artifact_path(artifact_path: &str) -> bool {
     relative == "materials" || relative.starts_with("materials/")
 }
 
-fn is_standalone_document(kind: ArtifactKind) -> bool {
-    matches!(
-        kind,
-        ArtifactKind::Document
-            | ArtifactKind::Spreadsheet
-            | ArtifactKind::Presentation
-            | ArtifactKind::Pdf
-            | ArtifactKind::Text
-    )
-}
-
-fn workspace_dir_of(path: &str) -> String {
-    let normalized = path.replace('\\', "/");
-    let relative = normalized.trim_start_matches('/');
-    match Path::new(relative).parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => {
-            parent.to_string_lossy().replace('\\', "/")
-        }
-        _ => String::new(),
-    }
-}
-
-/// Paths that belong to a web bundle (same directory tree as the web entry)
-/// and should not be registered as separate Creations. Documents stay separate.
-fn sidecar_paths_of_web_entry(artifacts: &[Artifact]) -> HashSet<String> {
-    let web = artifacts
-        .iter()
-        .find(|a| {
-            a.kind == ArtifactKind::Web
-                && Path::new(&a.path)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.eq_ignore_ascii_case("index.html"))
-        })
-        .or_else(|| artifacts.iter().find(|a| a.kind == ArtifactKind::Web));
-    let Some(web) = web else {
-        return HashSet::new();
-    };
-    let web_dir = workspace_dir_of(&web.path);
-    let prefix = if web_dir.is_empty() {
-        String::new()
-    } else {
-        format!("{web_dir}/")
-    };
-    artifacts
-        .iter()
-        .filter(|a| a.path != web.path && !is_standalone_document(a.kind))
-        .filter(|a| {
-            if prefix.is_empty() {
-                workspace_dir_of(&a.path) == web_dir || a.path.starts_with("workspace/")
-            } else {
-                a.path == web_dir || a.path.starts_with(&prefix)
-            }
-        })
-        .map(|a| a.path.clone())
-        .collect()
-}
-
 const SKIP_WORKSPACE_DIR_NAMES: &[&str] = &[
     "materials",
     "node_modules",
@@ -527,7 +736,7 @@ fn merge_artifacts(
 /// of INPUT MATERIAL). Attachments are copied there verbatim on import, so a
 /// byte-identical file the agent drops anywhere in the workspace is a copy of
 /// user input, not a generated output.
-fn collect_user_material_hashes(project_dir: &Path) -> HashSet<String> {
+pub(crate) fn collect_user_material_hashes(project_dir: &Path) -> HashSet<String> {
     let mut hashes = HashSet::new();
     let mut pending = vec![(project_dir.join("inputs"), 0usize)];
     let mut files = 0usize;
@@ -572,6 +781,9 @@ fn sha256_hex(data: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+pub(crate) fn is_material_copy(hashes: &HashSet<String>, bytes: &[u8]) -> bool {
+    hashes.contains(&sha256_hex(bytes))
 }
 
 fn scan_workspace_artifacts(workspace_dir: &Path) -> Vec<Artifact> {
@@ -717,7 +929,7 @@ fn read_workspace_artifact(workspace_dir: &Path, artifact_path: &str) -> AgentRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Artifact, ArtifactKind};
+    use crate::model::{AgentEvidenceProvenance, AgentKnowledgeEntry, Artifact, ArtifactKind};
     use std::fs;
 
     #[test]
@@ -756,18 +968,113 @@ mod tests {
         }
     }
 
+    fn thematic_context() -> AgentKnowledgeContext {
+        AgentKnowledgeContext {
+            entries: vec![AgentKnowledgeEntry {
+                label: "E1".to_owned(),
+                source_label: "S1".to_owned(),
+                source_name: "reunion-01.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+                line_start: Some(12),
+                line_end: Some(14),
+                heading_path: vec!["Cierre".to_owned()],
+                text: "Se profundizó sobre el pasado continuo con ejercicios.".to_owned(),
+                source_id: Some("material-1".to_owned()),
+                evidence_kind: Some("thematic".to_owned()),
+            }],
+            evidence_budget_used: 120,
+            evidence_budget_limit: 7_600,
+            indexed_source_names: vec!["reunion-01.md".to_owned()],
+            citation_map: vec![AgentEvidenceProvenance {
+                label: "E1".to_owned(),
+                source_label: "S1".to_owned(),
+                chunk_label: "C1".to_owned(),
+            }],
+            retrieval_mode: Some("thematic".to_owned()),
+            exhaustive_coverage: Some("not_requested".to_owned()),
+            structural_note: Some(
+                "thematic_candidates=4 eligible_materials=15 contributing_sources=14 chunks_inspected=57 summaries_reused=0"
+                    .to_owned(),
+            ),
+            local_answer: None,
+            authorize_negative: false,
+            citation_source_names: vec!["reunion-01.md".to_owned()],
+            creation_from_material: false,
+        }
+    }
+
     #[test]
-    fn augment_prompt_always_includes_instruction() {
-        let text = augment_prompt("create an activity", &[], false, None);
-        assert!(text.starts_with(build_instruction()));
-        assert!(text.contains("create an activity"));
-        assert!(!text.contains(existing_activity_instruction()));
+    fn serialized_thematic_prompt_never_claims_exhaustive_incomplete_coverage() {
+        let serialized = serialize_knowledge_context(&thematic_context());
+        assert!(serialized.contains("<coverage>thematic_candidates=4"));
+        assert!(
+            serialized.contains(
+                "Thematic synthesis: report only themes supported by the selected evidence"
+            )
+        );
+        assert!(
+            !serialized.contains("Do not claim that a topic is absent"),
+            "thematic synthesis must not emit exhaustive-negative instructions: {serialized}"
+        );
+        assert!(
+            !serialized
+                .contains("Coverage is incomplete or no specific presence term was extracted"),
+            "thematic synthesis must not describe itself as an incomplete exhaustive scan: {serialized}"
+        );
+        assert!(serialized.contains("reunion-01.md"));
+    }
+
+    #[test]
+    fn serialized_exhaustive_prompt_keeps_negative_authorization_contract() {
+        let mut context = thematic_context();
+        context.retrieval_mode = Some("exhaustive".to_owned());
+        context.exhaustive_coverage = Some("complete".to_owned());
+        context.structural_note = Some("exhaustive_coverage=complete".to_owned());
+        context.authorize_negative = false;
+        let serialized = serialize_knowledge_context(&context);
+        assert!(
+            serialized.contains("Do not claim that a topic is absent"),
+            "exhaustive-incomplete route must keep the absence guard: {serialized}"
+        );
+
+        context.authorize_negative = true;
+        let serialized = serialize_knowledge_context(&context);
+        assert!(
+            serialized.contains("A negative global conclusion is allowed only because exhaustive coverage is complete"),
+            "exhaustive-complete route may authorize a negative conclusion: {serialized}"
+        );
+    }
+
+    #[test]
+    fn serialized_creation_context_grounds_the_artifact_on_knowledge() {
+        let mut context = thematic_context();
+        context.retrieval_mode = None;
+        context.exhaustive_coverage = Some("not_requested".to_owned());
+        context.structural_note =
+            Some("creation_from_material=true target_count=1 source_names=README.md".to_owned());
+        context.creation_from_material = true;
+        let serialized = serialize_knowledge_context(&context);
+        assert!(
+            serialized.contains("material already available in Knowledge"),
+            "creation context must tell the model the source material exists: {serialized}"
+        );
+        assert!(
+            serialized.contains("empty filesystem does not mean there is no source material"),
+            "creation context must neutralize the empty-workspace false signal: {serialized}"
+        );
+        assert!(
+            serialized.contains("Actually create the requested artifact"),
+            "creation context must forbid asking the user to re-upload: {serialized}"
+        );
+        // Ordinary retrieval contexts never carry the creation directive.
+        let ordinary = serialize_knowledge_context(&thematic_context());
+        assert!(!ordinary.contains("material already available in Knowledge"));
     }
 
     #[test]
     fn augment_prompt_keeps_materials_block_after_instruction() {
         let lines = vec!["- manual.pdf (pdf)".to_owned()];
-        let text = augment_prompt("create an activity", &lines, false, None);
+        let text = augment_prompt("create an activity", &lines, false, None, None);
         let instruction = build_instruction();
         let inst_end = text.find(instruction).unwrap() + instruction.len();
         let materials_start = text.find("Materiales adjuntos").unwrap();
@@ -780,10 +1087,258 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_session_policy_covers_knowledge_synthesis_modes() {
+        let mut context = thematic_context();
+        assert!(knowledge_uses_ephemeral_session(Some(&context)));
+        context.retrieval_mode = Some("exhaustive".to_owned());
+        assert!(knowledge_uses_ephemeral_session(Some(&context)));
+        context.retrieval_mode = Some("normal".to_owned());
+        assert!(knowledge_uses_ephemeral_session(Some(&context)));
+        context.retrieval_mode = None;
+        assert!(!knowledge_uses_ephemeral_session(Some(&context)));
+        assert!(knowledge_taints_conversational_session(Some(&context)));
+        assert!(!knowledge_uses_ephemeral_session(None));
+        assert!(!knowledge_taints_conversational_session(None));
+        context.creation_from_material = true;
+        context.retrieval_mode = None;
+        assert!(
+            !knowledge_uses_ephemeral_session(Some(&context)),
+            "Creation material packages stay conversational"
+        );
+        assert!(
+            knowledge_taints_conversational_session(Some(&context)),
+            "serialized Creation evidence taints the conversational session"
+        );
+        let mut empty = context.clone();
+        empty.entries.clear();
+        empty.structural_note = None;
+        assert!(!knowledge_taints_conversational_session(Some(&empty)));
+        context.local_answer = Some("Tenés 3 materiales.".to_owned());
+        assert!(
+            !knowledge_uses_ephemeral_session(Some(&context)),
+            "Inventory/local packages are not ephemeral Knowledge sessions"
+        );
+    }
+
+    #[test]
+    fn augment_prompt_keeps_visible_history_out_of_knowledge_evidence() {
+        let text = augment_prompt(
+            "¿Y cómo se relaciona eso con OpenShift?",
+            &[],
+            false,
+            Some(&thematic_context()),
+            Some("Usuario: ¿Qué dijeron sobre Kubernetes?\nAsistente: Hablaron de orquestación."),
+        );
+        let history_at = text.find("<conversation_context>").unwrap();
+        let evidence_at = text
+            .find("<knowledge_evidence trust=\"untrusted\">")
+            .unwrap();
+        let user_at = text
+            .find("¿Y cómo se relaciona eso con OpenShift?")
+            .unwrap();
+        assert!(history_at < user_at);
+        assert!(user_at < evidence_at);
+        assert!(text.contains("Kubernetes"));
+        assert!(!text[evidence_at..].contains("¿Qué dijeron sobre Kubernetes?"));
+    }
+
+    #[test]
     fn augment_prompt_asks_to_revise_existing_activity() {
-        let text = augment_prompt("cambiá el fondo", &[], true, None);
+        let text = augment_prompt("cambiá el fondo", &[], true, None, None);
         assert!(text.contains(existing_activity_instruction()));
         assert!(text.ends_with("cambiá el fondo"));
+    }
+
+    fn knowledge_context_for_mode(mode: &str) -> AgentKnowledgeContext {
+        let mut context = thematic_context();
+        context.retrieval_mode = Some(mode.to_owned());
+        match mode {
+            "exhaustive" => {
+                context.exhaustive_coverage = Some("complete".to_owned());
+                context.structural_note = Some(
+                    "exhaustive_coverage=complete eligible_materials=15 materials_inspected=15 chunks_inspected=57 phrase_count=1 lexical_hits=13 semantic_hits=2 selected_evidence_sources=2 negative_authorized=false"
+                        .to_owned(),
+                );
+                context.authorize_negative = false;
+            }
+            "normal" => {
+                context.exhaustive_coverage = Some("not_requested".to_owned());
+                context.structural_note = None;
+                context.authorize_negative = false;
+            }
+            _ => {}
+        }
+        context
+    }
+
+    fn assert_common_knowledge_answer_contract(prompt: &str) {
+        let grounding = knowledge_answer_grounding_instruction();
+        assert!(
+            prompt.contains(grounding),
+            "Knowledge answer prompt must include the shared grounding contract: {prompt}"
+        );
+        assert!(
+            prompt.contains("<knowledge_evidence trust=\"untrusted\">"),
+            "evidence must remain untrusted reference material: {prompt}"
+        );
+        assert!(
+            prompt.contains(
+                "Un directorio de trabajo vacío NO significa que el corpus Knowledge esté vacío"
+            ),
+            "empty workspace must not mean empty Knowledge corpus: {prompt}"
+        );
+        assert!(
+            prompt.contains("No inspecciones el filesystem ni el directorio de trabajo"),
+            "prompt must not resolve Knowledge existence from cwd: {prompt}"
+        );
+        assert!(prompt.contains("source_name=\""));
+        assert!(prompt.contains("source_label=\""));
+        assert!(prompt.contains("reunion-01.md"));
+        assert!(
+            !prompt.contains("inspeccioná el directorio de trabajo para saber si hay materiales"),
+            "must not instruct cwd inspection for Knowledge existence: {prompt}"
+        );
+    }
+
+    #[test]
+    fn normal_semantic_prompt_uses_shared_knowledge_answer_contract() {
+        let prompt = augment_prompt(
+            "¿Qué se decidió sobre OpenShift?",
+            &[],
+            false,
+            Some(&knowledge_context_for_mode("normal")),
+            None,
+        );
+        assert_common_knowledge_answer_contract(&prompt);
+        assert!(prompt.contains("350 palabras"));
+        assert!(prompt.contains("¿Qué se decidió sobre OpenShift?"));
+    }
+
+    #[test]
+    fn corpus_thematic_prompt_uses_shared_knowledge_answer_contract() {
+        let prompt = augment_prompt(
+            "¿Cuáles son los temas principales que se repiten entre estos archivos?",
+            &[],
+            false,
+            Some(&knowledge_context_for_mode("thematic")),
+            None,
+        );
+        assert_common_knowledge_answer_contract(&prompt);
+        assert!(prompt.contains("<coverage>thematic_candidates=4"));
+        assert!(
+            prompt.contains(
+                "Thematic synthesis: report only themes supported by the selected evidence"
+            )
+        );
+        assert!(!prompt.contains("Do not claim that a topic is absent"));
+    }
+
+    #[test]
+    fn corpus_exhaustive_prompt_uses_shared_knowledge_answer_contract() {
+        let prompt = augment_prompt(
+            "¿Qué archivos mencionan preposiciones?",
+            &[],
+            false,
+            Some(&knowledge_context_for_mode("exhaustive")),
+            None,
+        );
+        assert_common_knowledge_answer_contract(&prompt);
+        assert!(prompt.contains("<coverage>exhaustive_coverage=complete"));
+        assert!(prompt.contains("lexical_hits=13"));
+    }
+
+    #[test]
+    fn ordinary_chat_prompt_does_not_use_knowledge_answer_contract() {
+        let prompt = augment_prompt("Hola, ¿cómo estás?", &[], false, None, None);
+        assert!(!prompt.contains(knowledge_answer_grounding_instruction()));
+        assert!(!prompt.contains("<knowledge_evidence"));
+        assert!(!prompt.contains("corpus Knowledge"));
+    }
+
+    #[test]
+    fn exhaustive_true_negative_keeps_authorized_absence_and_does_not_force_a_positive() {
+        let mut context = knowledge_context_for_mode("exhaustive");
+        context.entries.clear();
+        context.authorize_negative = true;
+        context.structural_note = Some(
+            "exhaustive_coverage=complete eligible_materials=15 lexical_hits=0 negative_authorized=true"
+                .to_owned(),
+        );
+        let prompt = augment_prompt(
+            "¿Algún archivo menciona unicornios rosados?",
+            &[],
+            false,
+            Some(&context),
+            None,
+        );
+        assert!(prompt.contains(knowledge_answer_grounding_instruction()));
+        assert!(prompt.contains("<knowledge_evidence trust=\"untrusted\">"));
+        assert!(
+            prompt.contains("A negative global conclusion is allowed only because exhaustive coverage is complete"),
+            "true-negative authorization must remain: {prompt}"
+        );
+        assert!(
+            prompt.contains("No conviertas una ausencia autorizada en el bloque de evidencia en una respuesta positiva"),
+            "grounding must not force a positive: {prompt}"
+        );
+    }
+
+    #[test]
+    fn creation_prompt_keeps_creation_grounding_and_skips_knowledge_answer_contract() {
+        let mut context = thematic_context();
+        context.retrieval_mode = None;
+        context.exhaustive_coverage = Some("not_requested".to_owned());
+        context.structural_note =
+            Some("creation_from_material=true target_count=1 source_names=README.md".to_owned());
+        context.creation_from_material = true;
+        let prompt = augment_prompt(
+            "armá una presentación interactiva",
+            &[],
+            false,
+            Some(&context),
+            None,
+        );
+        assert!(
+            !prompt.contains(knowledge_answer_grounding_instruction()),
+            "Creation must not receive the Knowledge-answer contract: {prompt}"
+        );
+        assert!(prompt.contains("<knowledge_evidence trust=\"untrusted\">"));
+        assert!(prompt.contains("material already available in Knowledge"));
+        assert!(prompt.contains("empty filesystem does not mean there is no source material"));
+        assert!(prompt.contains("Actually create the requested artifact"));
+    }
+
+    #[test]
+    fn exhaustive_positive_regression_does_not_resolve_materials_from_cwd() {
+        let prompt = augment_prompt(
+            "¿Qué archivos mencionan preposiciones?",
+            &[],
+            false,
+            Some(&knowledge_context_for_mode("exhaustive")),
+            None,
+        );
+        assert!(prompt.contains("¿Qué archivos mencionan preposiciones?"));
+        assert!(prompt.contains(knowledge_answer_grounding_instruction()));
+        assert!(prompt.contains("<knowledge_evidence trust=\"untrusted\">"));
+        assert!(prompt.contains("source_name=\"reunion-01.md\""));
+        assert!(prompt.contains("No inspecciones el filesystem ni el directorio de trabajo para decidir si existen materiales Knowledge"));
+    }
+
+    #[test]
+    fn thematic_regression_does_not_resolve_materials_from_cwd() {
+        let prompt = augment_prompt(
+            "¿Cuáles son los temas principales que se repiten entre estos archivos?",
+            &[],
+            false,
+            Some(&knowledge_context_for_mode("thematic")),
+            None,
+        );
+        assert!(prompt.contains(knowledge_answer_grounding_instruction()));
+        assert!(prompt.contains("<knowledge_evidence trust=\"untrusted\">"));
+        assert!(prompt.contains("Se profundizó sobre el pasado continuo"));
+        assert!(prompt.contains(
+            "Un directorio de trabajo vacío NO significa que el corpus Knowledge esté vacío"
+        ));
     }
 
     #[test]

@@ -49,6 +49,7 @@ pub fn run() {
             commands::agent_send,
             commands::agent_send_staged,
             commands::agent_resume_import,
+            commands::agent_retry_summary,
             commands::agent_cancel,
             commands::agent_status,
             commands::publish,
@@ -74,6 +75,7 @@ pub fn run() {
             commands::session_logs_clear,
             commands::session_log_record,
             commands::conversation_last_turn_metrics,
+            commands::conversation_accumulated_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

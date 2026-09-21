@@ -6,12 +6,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use project_agent::model::{
-    AgentBackendInfo, AgentProject, AgentPrompt, AgentSession, AgentStatus, AgentTask, Artifact,
-    ArtifactKind, TaskStatus,
+    AgentBackendInfo, AgentKnowledgeContext, AgentProject, AgentPrompt, AgentSession, AgentStatus,
+    AgentTask, Artifact, ArtifactKind, TaskStatus,
 };
 use project_agent::{
     AgentEngine, AgentError, AgentRequest, AgentService, CreationRegistrar, FakeAgentEngine,
-    FakeCall,
+    FakeCall, knowledge_answer_grounding_instruction,
 };
 
 #[derive(Clone, Debug)]
@@ -52,37 +52,64 @@ impl FakeRegistrar {
 }
 
 impl CreationRegistrar for FakeRegistrar {
-    fn register(
+    fn register_turn(
         &self,
         _project_id: &str,
-        artifact: &Artifact,
-        bytes: Vec<u8>,
-    ) -> project_agent::AgentResult<String> {
+        artifacts: &[project_agent::RegisteredArtifact],
+    ) -> project_agent::AgentResult<Vec<String>> {
         if *self.fail.lock().unwrap_or_else(|e| e.into_inner()) {
             return Err(AgentError::RegistrationFailed("injected".into()));
         }
-        let file_name = std::path::Path::new(&artifact.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_owned();
-        let display_name = std::path::Path::new(&file_name)
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&file_name)
-            .to_owned();
-        self.records
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(RecordedCreation {
-                kind: artifact.kind,
-                visibility: "private",
-                display_name,
-                file_name,
-                bytes,
+        // Mirror the real registrar's grouping contract at the service
+        // boundary: changed assets in the same workspace directory as a web
+        // entry belong to that web lineage and are not separate Creations.
+        let web_dir = artifacts
+            .iter()
+            .find(|a| a.kind == ArtifactKind::Web)
+            .and_then(|a| std::path::Path::new(&a.path).parent())
+            .map(|p| p.to_path_buf());
+        let mut ids = Vec::new();
+        for artifact in artifacts {
+            let in_web_dir = web_dir.as_deref().is_some_and(|dir| {
+                std::path::Path::new(&artifact.path)
+                    .parent()
+                    .is_some_and(|p| p == dir)
             });
-        let n = self.next_id.fetch_add(1, Ordering::SeqCst);
-        Ok(format!("creation-{n}"))
+            let standalone_doc = matches!(
+                artifact.kind,
+                ArtifactKind::Document
+                    | ArtifactKind::Spreadsheet
+                    | ArtifactKind::Presentation
+                    | ArtifactKind::Pdf
+                    | ArtifactKind::Text
+            );
+            if in_web_dir && !standalone_doc && artifact.kind != ArtifactKind::Web {
+                continue;
+            }
+            let file_name = std::path::Path::new(&artifact.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_owned();
+            let display_name = std::path::Path::new(&file_name)
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&file_name)
+                .to_owned();
+            self.records
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(RecordedCreation {
+                    kind: artifact.kind,
+                    visibility: "private",
+                    display_name,
+                    file_name,
+                    bytes: artifact.bytes.clone(),
+                });
+            let n = self.next_id.fetch_add(1, Ordering::SeqCst);
+            ids.push(format!("creation-{n}"));
+        }
+        Ok(ids)
     }
 }
 
@@ -109,6 +136,10 @@ impl AgentEngine for SlowEngine {
 
     fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
         self.inner.open_session(project)
+    }
+
+    fn invalidate_cached_session(&self, project_id: &str) {
+        self.inner.invalidate_cached_session(project_id);
     }
 
     fn send(
@@ -157,6 +188,7 @@ fn prompt() -> AgentPrompt {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     }
 }
 
@@ -472,6 +504,9 @@ impl AgentEngine for ModifyDuringSendEngine {
     fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
         self.inner.open_session(project)
     }
+    fn invalidate_cached_session(&self, project_id: &str) {
+        self.inner.invalidate_cached_session(project_id);
+    }
     fn send(
         &self,
         session: &AgentSession,
@@ -595,4 +630,635 @@ fn attached_image_copy_reported_by_diff_is_still_input_not_a_creation() {
     );
     assert_eq!(records[0].kind, ArtifactKind::Web);
     assert_eq!(result.registered.len(), 1);
+}
+
+#[derive(Clone)]
+struct SessionKindEngine {
+    inner: FakeAgentEngine,
+    kinds: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl AgentEngine for SessionKindEngine {
+    fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+        self.inner.ensure_ready()
+    }
+
+    fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+        self.kinds.lock().unwrap().push("conversational");
+        self.inner.open_session(project)
+    }
+
+    fn invalidate_cached_session(&self, project_id: &str) {
+        self.inner.invalidate_cached_session(project_id);
+    }
+
+    fn open_fresh_session(
+        &self,
+        project: &AgentProject,
+    ) -> project_agent::AgentResult<AgentSession> {
+        self.kinds.lock().unwrap().push("ephemeral");
+        Ok(AgentSession {
+            id: format!("fresh-{}", project.project_id),
+            project_id: project.project_id.clone(),
+        })
+    }
+
+    fn send(
+        &self,
+        session: &AgentSession,
+        req: &AgentPrompt,
+    ) -> project_agent::AgentResult<AgentTask> {
+        self.inner.send(session, req)
+    }
+
+    fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+        self.inner.cancel(session)
+    }
+
+    fn status(&self) -> AgentStatus {
+        self.inner.status()
+    }
+
+    fn shutdown(&self) -> project_agent::AgentResult<()> {
+        self.inner.shutdown()
+    }
+}
+
+fn knowledge_prompt(mode: Option<&str>) -> AgentPrompt {
+    AgentPrompt {
+        text: "pregunta".into(),
+        model: None,
+        knowledge: mode.map(|mode| AgentKnowledgeContext {
+            entries: Vec::new(),
+            evidence_budget_used: 0,
+            evidence_budget_limit: 100,
+            indexed_source_names: Vec::new(),
+            citation_map: Vec::new(),
+            retrieval_mode: Some(mode.to_owned()),
+            exhaustive_coverage: Some("not_requested".to_owned()),
+            structural_note: None,
+            local_answer: None,
+            authorize_negative: false,
+            citation_source_names: Vec::new(),
+            creation_from_material: false,
+        }),
+        conversation_context: None,
+    }
+}
+
+fn creation_evidence_prompt() -> AgentPrompt {
+    AgentPrompt {
+        text: "armá una presentación interactiva".into(),
+        model: None,
+        knowledge: Some(AgentKnowledgeContext {
+            entries: vec![project_agent::model::AgentKnowledgeEntry {
+                label: "E1".to_owned(),
+                source_label: "S1".to_owned(),
+                source_name: "README.md".to_owned(),
+                chunk_label: "C1".to_owned(),
+                line_start: None,
+                line_end: None,
+                heading_path: Vec::new(),
+                text: "contenido del material".to_owned(),
+                source_id: Some("material-1".to_owned()),
+                evidence_kind: Some("creation_material".to_owned()),
+            }],
+            evidence_budget_used: 40,
+            evidence_budget_limit: 1200,
+            indexed_source_names: vec!["README.md".to_owned()],
+            citation_map: Vec::new(),
+            retrieval_mode: None,
+            exhaustive_coverage: Some("not_requested".to_owned()),
+            structural_note: Some("creation_from_material=true".to_owned()),
+            local_answer: None,
+            authorize_negative: false,
+            citation_source_names: vec!["README.md".to_owned()],
+            creation_from_material: true,
+        }),
+        conversation_context: None,
+    }
+}
+
+fn populated_knowledge_prompt(mode: &str) -> AgentPrompt {
+    let mut prompt = creation_evidence_prompt();
+    if let Some(knowledge) = prompt.knowledge.as_mut() {
+        knowledge.retrieval_mode = Some(mode.to_owned());
+        knowledge.creation_from_material = false;
+        knowledge.structural_note = Some(format!("retrieval_mode={mode} coverage=complete"));
+        knowledge.authorize_negative = false;
+    }
+    prompt.text = match mode {
+        "exhaustive" => "¿Qué archivos mencionan preposiciones?".into(),
+        "thematic" => {
+            "¿Cuáles son los temas principales que se repiten entre estos archivos?".into()
+        }
+        _ => "¿Qué se decidió?".into(),
+    };
+    prompt
+}
+
+#[test]
+fn knowledge_answer_grounding_is_shared_and_ordinary_chat_stays_ungrounded() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    let service = AgentService::new(
+        engine.clone(),
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    );
+    for mode in ["normal", "thematic", "exhaustive"] {
+        service
+            .run(AgentRequest {
+                project_id: format!("proj-{mode}"),
+                prompt: populated_knowledge_prompt(mode),
+                attachments: Vec::new(),
+            })
+            .expect(mode);
+        let prompt = engine.last_prompt_text().expect(mode);
+        assert!(
+            prompt.contains(knowledge_answer_grounding_instruction()),
+            "{mode} must carry the shared Knowledge grounding"
+        );
+        assert!(prompt.contains("<knowledge_evidence trust=\"untrusted\">"));
+    }
+}
+
+#[test]
+fn knowledge_answer_is_one_send_per_turn() {
+    for mode in ["normal", "thematic", "exhaustive"] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let engine = FakeAgentEngine::new();
+        let service = AgentService::new(
+            engine.clone(),
+            FakeRegistrar::new(),
+            tmp.path().to_path_buf(),
+        );
+        service
+            .run(AgentRequest {
+                project_id: format!("proj-once-{mode}"),
+                prompt: populated_knowledge_prompt(mode),
+                attachments: Vec::new(),
+            })
+            .expect(mode);
+        let sends = engine
+            .calls()
+            .into_iter()
+            .filter(|call| *call == FakeCall::Send)
+            .count();
+        assert_eq!(
+            sends, 1,
+            "{mode} must not add a retry or extra provider send"
+        );
+    }
+}
+
+#[test]
+fn ordinary_and_creation_prompts_do_not_use_knowledge_answer_grounding() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    let service = AgentService::new(
+        engine.clone(),
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    );
+    service
+        .run(AgentRequest {
+            project_id: "proj-ordinary-grounding".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary");
+    let ordinary = engine.last_prompt_text().expect("ordinary prompt");
+    assert!(!ordinary.contains(knowledge_answer_grounding_instruction()));
+    service
+        .run(AgentRequest {
+            project_id: "proj-creation-grounding".into(),
+            prompt: creation_evidence_prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("creation");
+    let creation = engine.last_prompt_text().expect("creation prompt");
+    assert!(!creation.contains(knowledge_answer_grounding_instruction()));
+    assert!(creation.contains("material already available in Knowledge"));
+}
+
+#[test]
+fn knowledge_synthesis_opens_ephemeral_sessions_ordinary_chat_reuses_conversation() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let inner = FakeAgentEngine::new();
+    let engine = SessionKindEngine {
+        inner,
+        kinds: Arc::clone(&kinds),
+    };
+    let service = AgentService::new(engine, FakeRegistrar::new(), tmp.path().to_path_buf());
+    for mode in ["normal", "exhaustive", "thematic"] {
+        service
+            .run(AgentRequest {
+                project_id: format!("proj-{mode}"),
+                prompt: knowledge_prompt(Some(mode)),
+                attachments: Vec::new(),
+            })
+            .expect(mode);
+    }
+    service
+        .run(AgentRequest {
+            project_id: "proj-chat".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary");
+    assert_eq!(
+        *kinds.lock().unwrap(),
+        vec!["ephemeral", "ephemeral", "ephemeral", "conversational"]
+    );
+}
+
+#[test]
+fn ephemeral_send_failure_restores_conversational_cancel_target() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let inner = FakeAgentEngine::new();
+    inner.set_artifacts(vec![]);
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let engine = SessionKindEngine {
+        inner: inner.clone(),
+        kinds,
+    };
+    let service = AgentService::new(engine, FakeRegistrar::new(), tmp.path().to_path_buf());
+    service
+        .run(AgentRequest {
+            project_id: "proj-restore".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary");
+    assert_eq!(
+        service.cancel_target_role("proj-restore"),
+        Some("conversational")
+    );
+    inner.fail_send();
+    let err = match service.run(AgentRequest {
+        project_id: "proj-restore".into(),
+        prompt: knowledge_prompt(Some("normal")),
+        attachments: Vec::new(),
+    }) {
+        Err(err) => err,
+        Ok(_) => panic!("ephemeral send must fail"),
+    };
+    assert!(matches!(err, AgentError::TaskFailed(_)));
+    assert_eq!(
+        service.cancel_target_role("proj-restore"),
+        Some("conversational")
+    );
+    service
+        .cancel("proj-restore")
+        .expect("cancel conversational");
+    assert_eq!(
+        inner.cancelled_session_ids(),
+        vec!["session-proj-restore".to_owned()]
+    );
+}
+
+#[test]
+fn cancel_during_ephemeral_send_targets_ephemeral_then_restores() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let started = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(Mutex::new(Vec::new()));
+    let engine = HoldingEngine {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+        cancelled: Arc::clone(&cancelled),
+    };
+    let service = Arc::new(AgentService::new(
+        engine,
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    ));
+    service
+        .run(AgentRequest {
+            project_id: "proj-hold".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary");
+    let service_thread = Arc::clone(&service);
+    let handle = thread::spawn(move || {
+        service_thread.run(AgentRequest {
+            project_id: "proj-hold".into(),
+            prompt: knowledge_prompt(Some("normal")),
+            attachments: Vec::new(),
+        })
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !started.load(Ordering::SeqCst) {
+        assert!(std::time::Instant::now() < deadline, "send did not start");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        service.cancel_target_role("proj-hold"),
+        Some("ephemeral_knowledge")
+    );
+    service.cancel("proj-hold").expect("cancel ephemeral");
+    release.store(true, Ordering::SeqCst);
+    handle.join().expect("join").expect("ephemeral completed");
+    assert_eq!(
+        *cancelled.lock().unwrap(),
+        vec!["fresh-proj-hold".to_owned()]
+    );
+    assert_eq!(
+        service.cancel_target_role("proj-hold"),
+        Some("conversational")
+    );
+}
+
+#[derive(Clone)]
+struct HoldingEngine {
+    started: Arc<std::sync::atomic::AtomicBool>,
+    release: Arc<std::sync::atomic::AtomicBool>,
+    cancelled: Arc<Mutex<Vec<String>>>,
+}
+
+impl AgentEngine for HoldingEngine {
+    fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+        Ok(AgentBackendInfo {
+            version: "hold".into(),
+        })
+    }
+
+    fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+        Ok(AgentSession {
+            id: format!("session-{}", project.project_id),
+            project_id: project.project_id.clone(),
+        })
+    }
+
+    fn open_fresh_session(
+        &self,
+        project: &AgentProject,
+    ) -> project_agent::AgentResult<AgentSession> {
+        Ok(AgentSession {
+            id: format!("fresh-{}", project.project_id),
+            project_id: project.project_id.clone(),
+        })
+    }
+
+    fn send(
+        &self,
+        session: &AgentSession,
+        _req: &AgentPrompt,
+    ) -> project_agent::AgentResult<AgentTask> {
+        if session.id.starts_with("fresh-") {
+            self.started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !self.release.load(std::sync::atomic::Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        Ok(AgentTask {
+            id: format!("{}-task", session.id),
+            status: project_agent::TaskStatus::Completed,
+            artifacts: Vec::new(),
+            message: Some("ok".into()),
+            usage: project_agent::RemoteUsage::default(),
+        })
+    }
+
+    fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+        self.cancelled.lock().unwrap().push(session.id.clone());
+        Ok(())
+    }
+
+    fn status(&self) -> AgentStatus {
+        AgentStatus::Ready
+    }
+
+    fn shutdown(&self) -> project_agent::AgentResult<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn creation_serialized_evidence_rotates_cached_session_before_ordinary_chat() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    let service = AgentService::new(
+        engine.clone(),
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    );
+    service
+        .run(AgentRequest {
+            project_id: "proj-create".into(),
+            prompt: creation_evidence_prompt(),
+            attachments: Vec::new(),
+        })
+        .expect("creation");
+    let creation_id = engine
+        .sent_session_ids()
+        .last()
+        .cloned()
+        .expect("creation session");
+    assert_eq!(creation_id, "session-proj-create");
+    let prompt = engine.last_prompt_text().expect("creation prompt");
+    assert!(prompt.contains("<knowledge_evidence"));
+    service
+        .run(AgentRequest {
+            project_id: "proj-create".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary");
+    let ordinary_id = engine
+        .sent_session_ids()
+        .last()
+        .cloned()
+        .expect("ordinary session");
+    assert_ne!(creation_id, ordinary_id);
+    assert_eq!(ordinary_id, "session-proj-create-2");
+    let ordinary_prompt = engine.last_prompt_text().expect("ordinary prompt");
+    assert!(!ordinary_prompt.contains("<knowledge_evidence"));
+}
+
+#[test]
+fn creation_serialized_evidence_failure_does_not_reuse_tainted_session() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    engine.fail_send();
+    let service = AgentService::new(
+        engine.clone(),
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    );
+    assert!(
+        service
+            .run(AgentRequest {
+                project_id: "proj-fail".into(),
+                prompt: creation_evidence_prompt(),
+                attachments: Vec::new(),
+            })
+            .is_err()
+    );
+    let tainted = engine
+        .sent_session_ids()
+        .last()
+        .cloned()
+        .expect("tainted session");
+    service
+        .run(AgentRequest {
+            project_id: "proj-fail".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary after failure");
+    let next = engine
+        .sent_session_ids()
+        .last()
+        .cloned()
+        .expect("next session");
+    assert_ne!(tainted, next);
+    assert!(
+        !engine
+            .last_prompt_text()
+            .unwrap()
+            .contains("<knowledge_evidence")
+    );
+}
+
+#[test]
+fn creation_without_serialized_evidence_keeps_conversational_reuse() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let engine = FakeAgentEngine::new();
+    let service = AgentService::new(
+        engine.clone(),
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    );
+    service
+        .run(AgentRequest {
+            project_id: "proj-plain".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("first");
+    let first = engine.sent_session_ids().last().cloned().unwrap();
+    service
+        .run(AgentRequest {
+            project_id: "proj-plain".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("second");
+    let second = engine.sent_session_ids().last().cloned().unwrap();
+    assert_eq!(first, second);
+}
+
+#[derive(Clone)]
+struct HoldingConversationalEngine {
+    inner: FakeAgentEngine,
+    started: Arc<std::sync::atomic::AtomicBool>,
+    release: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AgentEngine for HoldingConversationalEngine {
+    fn ensure_ready(&self) -> project_agent::AgentResult<AgentBackendInfo> {
+        self.inner.ensure_ready()
+    }
+
+    fn open_session(&self, project: &AgentProject) -> project_agent::AgentResult<AgentSession> {
+        self.inner.open_session(project)
+    }
+
+    fn invalidate_cached_session(&self, project_id: &str) {
+        self.inner.invalidate_cached_session(project_id);
+    }
+
+    fn send(
+        &self,
+        session: &AgentSession,
+        req: &AgentPrompt,
+    ) -> project_agent::AgentResult<AgentTask> {
+        self.started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !self.release.load(std::sync::atomic::Ordering::SeqCst) {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        self.inner.send(session, req)
+    }
+
+    fn cancel(&self, session: &AgentSession) -> project_agent::AgentResult<()> {
+        self.inner.cancel(session)
+    }
+
+    fn status(&self) -> AgentStatus {
+        self.inner.status()
+    }
+
+    fn shutdown(&self) -> project_agent::AgentResult<()> {
+        self.inner.shutdown()
+    }
+}
+
+#[test]
+fn creation_serialized_evidence_cancel_does_not_reuse_tainted_session() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let inner = FakeAgentEngine::new();
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let engine = HoldingConversationalEngine {
+        inner: inner.clone(),
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+    };
+    let service = Arc::new(AgentService::new(
+        engine,
+        FakeRegistrar::new(),
+        tmp.path().to_path_buf(),
+    ));
+    let handle = thread::spawn({
+        let service = Arc::clone(&service);
+        move || {
+            service.run(AgentRequest {
+                project_id: "proj-cancel".into(),
+                prompt: creation_evidence_prompt(),
+                attachments: Vec::new(),
+            })
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !started.load(Ordering::SeqCst) {
+        if Instant::now() >= deadline {
+            panic!("send never started");
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let _ = service.cancel("proj-cancel");
+    release.store(true, Ordering::SeqCst);
+    let _ = handle.join().expect("join");
+    let tainted = inner
+        .sent_session_ids()
+        .first()
+        .cloned()
+        .expect("tainted session");
+    service
+        .run(AgentRequest {
+            project_id: "proj-cancel".into(),
+            prompt: knowledge_prompt(None),
+            attachments: Vec::new(),
+        })
+        .expect("ordinary after cancel/send");
+    let next = inner.sent_session_ids().last().cloned().unwrap();
+    assert_ne!(tainted, next);
 }

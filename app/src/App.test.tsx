@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
@@ -55,6 +55,11 @@ const incompleteImport: NonNullable<ProjectView["acceptedImport"]> = {
   failed: 0,
   embeddingsCreated: 0,
   embeddingsReused: 0,
+  chunksTotal: 0,
+  embeddingsTotal: 0,
+  materialsReady: 0,
+  elapsedMs: 0,
+  throughputEmbeddingsPerSec: null,
 };
 
 const freeModel = {
@@ -211,6 +216,7 @@ beforeEach(() => {
   listenMock.mockReset();
   listenMock.mockResolvedValue(() => {});
   taskHandler = null;
+  localStorage.clear();
 });
 
 describe("App", () => {
@@ -1050,6 +1056,11 @@ describe("App", () => {
       failed: 0,
       embeddingsCreated: 0,
       embeddingsReused: 0,
+      chunksTotal: 0,
+      embeddingsTotal: 0,
+      materialsReady: 0,
+      elapsedMs: 0,
+      throughputEmbeddingsPerSec: null,
     };
 
     render(<App />);
@@ -1126,6 +1137,11 @@ describe("App", () => {
             failed: 0,
             embeddingsCreated: 0,
             embeddingsReused: 0,
+            chunksTotal: 0,
+            embeddingsTotal: 0,
+            materialsReady: 0,
+            elapsedMs: 0,
+            throughputEmbeddingsPerSec: null,
           },
         },
       },
@@ -1221,7 +1237,9 @@ describe("App", () => {
     render(<App />);
     await waitForWorkspace();
     expect(invokeMock.mock.calls.some((call) => call[0] === "agent_resume_import")).toBe(false);
-    expect(screen.getByText("Procesando 52 archivos")).toBeInTheDocument();
+    expect(
+      screen.getByText("Procesando tu solicitud · 0 de 52 archivos listos"),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a typed recoverable state when auto-resume fails and retries the same operation", async () => {
@@ -1313,5 +1331,311 @@ describe("App", () => {
     expect(messages_.some((m) => m.startsWith("[recovery-ui] invoking agent_resume_import"))).toBe(
       true,
     );
+  });
+});
+
+describe("per-conversation drafts and scroll restoration", () => {
+  const scrollState = { scrollHeight: 1000, clientHeight: 100 };
+
+  function installScrollMetrics() {
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => scrollState.scrollHeight,
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get: () => scrollState.clientHeight,
+    });
+  }
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+    delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight;
+    scrollState.scrollHeight = 1000;
+    scrollState.clientHeight = 100;
+    localStorage.clear();
+  });
+
+  function message(text: string, id: string): ProjectView["messages"][number] {
+    return {
+      id,
+      role: "assistant",
+      text,
+      status: "ok",
+      createdAt: "2026-08-31T10:00:00Z",
+      materialIds: [],
+      creationIds: [],
+    };
+  }
+
+  function manyMessages(): ProjectView["messages"] {
+    return Array.from({ length: 30 }, (_, index) =>
+      message(`respuesta ${index}`, `scroll-msg-${index}`),
+    );
+  }
+
+  it("keeps the unsent draft of the previously active conversation (CASE 1)", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: { [baseSummary.id]: { messages: [] }, [otherSummary.id]: { messages: [] } },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(
+      screen.getByLabelText("Pedido a la IA"),
+      "explicame nuevamente el punto 3",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("explicame nuevamente el punto 3");
+  });
+
+  it("keeps drafts strictly isolated between conversations (CASE 2)", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: { [baseSummary.id]: { messages: [] }, [otherSummary.id]: { messages: [] } },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "draft A");
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "draft B");
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("draft A");
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("draft B");
+  });
+
+  it("clears only the sent conversation's draft on a successful send (CASE 3)", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: { [baseSummary.id]: { messages: [] }, [otherSummary.id]: { messages: [] } },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "message A");
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "draft B");
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("message A");
+
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toHaveValue(""));
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("draft B");
+  });
+
+  it("restores the draft after a failed send instead of destroying it", async () => {
+    mockBackend({
+      projects: [baseSummary],
+      agentSendError: { code: "credential_revoked", message: "raw" },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "texto a preservar");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("texto a preservar");
+  });
+
+  it("restores a pre-accept failed draft only into its own conversation and allows a manual retry", async () => {
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      agentSendError: { code: "ai_task_failed", message: "raw" },
+    });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "texto de A");
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("texto de A");
+
+    // The failed draft is isolated to A: B never receives it.
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
+
+    // Returning to A keeps the failed draft for a manual retry.
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("texto de A");
+
+    await userEvent.click(screen.getByRole("button", { name: messages.common.send }));
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.filter((call) => call[0] === "agent_send_staged")).toHaveLength(
+        2,
+      ),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Pedido a la IA")).toBeEnabled());
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("texto de A");
+  });
+
+  it("starts a newly created conversation with an empty independent draft (CASE 4)", async () => {
+    mockBackend({ projects: [baseSummary] });
+    render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "borrador existente");
+
+    await userEvent.click(screen.getByRole("button", { name: messages.conversations.newButton }));
+    await waitForWorkspace(messages.conversation.defaultName);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
+  });
+
+  it("removes the draft of a deleted conversation and it never reappears", async () => {
+    mockBackend({ projects: [baseSummary, otherSummary] });
+    const first = render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "borrador que debe desaparecer");
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("educai.drafts.v1") ?? "{}");
+      expect(stored[baseSummary.id]).toBe("borrador que debe desaparecer");
+    });
+
+    const menuButton = screen.getAllByRole("button", {
+      name: messages.conversations.menuAriaLabel,
+    })[0];
+    await userEvent.click(menuButton);
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: messages.conversations.deleteAction }),
+    );
+    const confirmInput = screen.getByLabelText(messages.common.confirmNameLabel);
+    await userEvent.type(confirmInput, messages.common.confirmYes);
+    await userEvent.click(screen.getByRole("button", { name: messages.common.delete }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("project_delete", { projectId: baseSummary.id }),
+    );
+
+    // The deleted conversation's draft key is gone from durable localStorage
+    // state, and the stale text is not present anywhere in the UI.
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("educai.drafts.v1") ?? "{}");
+      expect(stored[baseSummary.id]).toBeUndefined();
+      expect(Object.values(stored)).not.toContain("borrador que debe desaparecer");
+    });
+    expect(screen.queryByDisplayValue("borrador que debe desaparecer")).not.toBeInTheDocument();
+
+    // Recreate the application state: no stale draft can reappear in the
+    // remaining or any recreated conversation.
+    await waitForWorkspace(otherSummary.name);
+    first.unmount();
+
+    mockBackend({ projects: [otherSummary] });
+    render(<App />);
+    await waitForWorkspace(otherSummary.name);
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("");
+    expect(screen.queryByDisplayValue("borrador que debe desaparecer")).not.toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem("educai.drafts.v1") ?? "{}");
+    expect(stored[baseSummary.id]).toBeUndefined();
+    expect(Object.values(stored)).not.toContain("borrador que debe desaparecer");
+  });
+
+  it("scrolls the newly selected conversation to its latest message (CASE 5)", async () => {
+    installScrollMetrics();
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: { messages: manyMessages() },
+        [otherSummary.id]: { messages: manyMessages() },
+      },
+    });
+    const { container } = render(<App />);
+    await waitForWorkspace();
+
+    const initial = container.querySelector(".workspace-timeline") as HTMLElement;
+    await waitFor(() => expect(initial.scrollTop).toBe(scrollState.scrollHeight));
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+
+    const switched = container.querySelector(".workspace-timeline") as HTMLElement;
+    await waitFor(() => expect(switched.scrollTop).toBe(scrollState.scrollHeight));
+  });
+
+  it("overrides an old upper scroll when returning to a conversation (CASE 8)", async () => {
+    installScrollMetrics();
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: { messages: manyMessages() },
+        [otherSummary.id]: { messages: manyMessages() },
+      },
+    });
+    const { container } = render(<App />);
+    await waitForWorkspace();
+
+    const initial = container.querySelector(".workspace-timeline") as HTMLElement;
+    await waitFor(() => expect(initial.scrollTop).toBe(scrollState.scrollHeight));
+
+    // User scrolls upward to read older content.
+    initial.scrollTop = 200;
+    fireEvent.scroll(initial);
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+
+    const returned = container.querySelector(".workspace-timeline") as HTMLElement;
+    await waitFor(() => expect(returned.scrollTop).toBe(scrollState.scrollHeight));
+  });
+
+  it("restores the draft and shows the latest content on return (CASE 9)", async () => {
+    installScrollMetrics();
+    mockBackend({
+      projects: [baseSummary, otherSummary],
+      views: {
+        [baseSummary.id]: { messages: manyMessages() },
+        [otherSummary.id]: { messages: [] },
+      },
+    });
+    const { container } = render(<App />);
+    await waitForWorkspace();
+
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "borrador de A");
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(otherSummary.name) }));
+    await waitForWorkspace(otherSummary.name);
+
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(baseSummary.name) }));
+    await waitForWorkspace(baseSummary.name);
+
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("borrador de A");
+    const timeline = container.querySelector(".workspace-timeline") as HTMLElement;
+    await waitFor(() => expect(timeline.scrollTop).toBe(scrollState.scrollHeight));
+  });
+
+  it("restores a persisted draft after the app is recreated (CASE 10)", async () => {
+    mockBackend({ projects: [baseSummary] });
+    const first = render(<App />);
+    await waitForWorkspace();
+    await userEvent.type(screen.getByLabelText("Pedido a la IA"), "borrador persistente");
+    first.unmount();
+
+    mockBackend({ projects: [baseSummary] });
+    render(<App />);
+    await waitForWorkspace();
+    expect(screen.getByLabelText("Pedido a la IA")).toHaveValue("borrador persistente");
   });
 });

@@ -1,7 +1,18 @@
+import { useState } from "react";
 import { CreationCard, type CreationCardShareProps } from "./CreationsPanel";
 import { MaterialChip } from "./MaterialsPanel";
-import type { AgentPhase, CreationView, MaterialView, MessageView } from "../types";
+import AssistantMetrics from "./AssistantMetrics";
+import { turnMetricsByAssistantId } from "../turnMetricsBinding";
+import type { AgentPhase, CreationView, MaterialView, MessageView, TurnMetrics } from "../types";
 import { messages } from "../messages";
+
+/**
+ * A multi-file selection must not dominate the conversation with dozens of
+ * expanded attachment cards. Above this threshold the attachment list is
+ * collapsed into a compact "📎 N archivos adjuntos · Ver archivos" summary and
+ * only expands on demand. Small selections keep the natural per-file display.
+ */
+const ATTACHMENT_COLLAPSE_THRESHOLD = 5;
 
 interface ChatPanelProps {
   projectId: string;
@@ -12,6 +23,13 @@ interface ChatPanelProps {
   agentMessage: string | null;
   onRefresh?: () => void | Promise<void>;
   share?: CreationCardShareProps;
+  /** True when the accepted-import progress line already owns the in-flight
+   * status (single merged "Procesando tu solicitud · …" line), so this panel
+   * must not render its own duplicate "Procesando tu solicitud…" line. */
+  suppressWorkingStatus?: boolean;
+  /** True while a compact/generic per-item summary synthesis is running for a
+   * no-attachment turn, so the working line shows a truthful synthesis label. */
+  synthesizingSummaries?: boolean;
 }
 
 type TimelineItem = { kind: "message"; key: string; at: string; message: MessageView };
@@ -30,6 +48,65 @@ function buildTimeline(messageList: MessageView[]): TimelineItem[] {
   return items;
 }
 
+function MessageAttachments({
+  materialIds,
+  materialById,
+  projectId,
+}: {
+  materialIds: string[];
+  materialById: Map<string, MaterialView>;
+  projectId: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = materialIds.length > ATTACHMENT_COLLAPSE_THRESHOLD;
+  const collapsed = collapsible && !expanded;
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        className="attachment-summary"
+        aria-expanded={false}
+        onClick={() => setExpanded(true)}
+      >
+        <span className="attachment-summary-label">
+          {messages.timeline.attachmentsSummary(materialIds.length)}
+        </span>
+        <span className="attachment-summary-action">{messages.timeline.showAttachments}</span>
+      </button>
+    );
+  }
+
+  return (
+    <>
+      {collapsible && (
+        <button
+          type="button"
+          className="attachment-summary-toggle"
+          aria-expanded={true}
+          onClick={() => setExpanded(false)}
+        >
+          {messages.timeline.hideAttachments}
+        </button>
+      )}
+      <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
+        {materialIds.map((id) => {
+          const material = materialById.get(id);
+          return material ? (
+            <li key={id}>
+              <MaterialChip projectId={projectId} material={material} />
+            </li>
+          ) : (
+            <li key={id} className="chip">
+              {messages.assistant.attachmentFallback}
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
 function MessageBubble({
   message,
   materialById,
@@ -37,6 +114,7 @@ function MessageBubble({
   projectId,
   onRefresh,
   share,
+  turnMetrics,
 }: {
   message: MessageView;
   materialById: Map<string, MaterialView>;
@@ -44,6 +122,7 @@ function MessageBubble({
   projectId: string;
   onRefresh?: () => void | Promise<void>;
   share?: CreationCardShareProps;
+  turnMetrics?: TurnMetrics | null;
 }) {
   if (message.role === "user") {
     return (
@@ -53,20 +132,11 @@ function MessageBubble({
         </div>
         <p className="message-text">{message.text}</p>
         {message.materialIds.length > 0 && (
-          <ul className="chip-list" aria-label={messages.assistant.attachmentsAriaLabel}>
-            {message.materialIds.map((id) => {
-              const material = materialById.get(id);
-              return material ? (
-                <li key={id}>
-                  <MaterialChip projectId={projectId} material={material} />
-                </li>
-              ) : (
-                <li key={id} className="chip">
-                  {messages.assistant.attachmentFallback}
-                </li>
-              );
-            })}
-          </ul>
+          <MessageAttachments
+            materialIds={message.materialIds}
+            materialById={materialById}
+            projectId={projectId}
+          />
         )}
       </div>
     );
@@ -108,6 +178,13 @@ function MessageBubble({
               })}
             </div>
           )}
+          {turnMetrics && (
+            <AssistantMetrics
+              messageId={message.id}
+              createdAt={message.createdAt}
+              turnMetrics={turnMetrics}
+            />
+          )}
         </>
       )}
     </div>
@@ -123,10 +200,13 @@ export default function ChatPanel({
   agentMessage,
   onRefresh,
   share,
+  suppressWorkingStatus = false,
+  synthesizingSummaries = false,
 }: ChatPanelProps) {
   const materialById = new Map(materials.map((m) => [m.id, m]));
   const creationById = new Map(creations.map((c) => [c.id, c]));
   const timeline = buildTimeline(messageList);
+  const metricsByAssistant = turnMetricsByAssistantId(messageList);
 
   const isEmpty = messageList.length === 0 && agentPhase === "idle";
 
@@ -152,13 +232,16 @@ export default function ChatPanel({
               projectId={projectId}
               onRefresh={onRefresh}
               share={share}
+              turnMetrics={metricsByAssistant.get(item.message.id)}
             />
           ) : null,
         )}
-        {agentPhase === "working" && (
+        {agentPhase === "working" && !suppressWorkingStatus && (
           <p className="chat-status">
             <span className="spinner" aria-hidden="true" />
-            {messages.agent.creating}
+            {synthesizingSummaries
+              ? messages.compactProgress.generatingSummariesIndeterminate
+              : messages.agent.creating}
           </p>
         )}
         {agentPhase === "failed" && agentMessage && !hasPersistedFailure && (

@@ -38,23 +38,26 @@ impl FakeRegistrar {
 }
 
 impl CreationRegistrar for FakeRegistrar {
-    fn register(
+    fn register_turn(
         &self,
         _project_id: &str,
-        artifact: &Artifact,
-        _bytes: Vec<u8>,
-    ) -> project_agent::AgentResult<String> {
-        let file_name = std::path::Path::new(&artifact.path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_owned();
-        self.records
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(RecordedCreation { file_name });
-        let n = self.next_id.fetch_add(1, Ordering::SeqCst);
-        Ok(format!("creation-{n}"))
+        artifacts: &[project_agent::RegisteredArtifact],
+    ) -> project_agent::AgentResult<Vec<String>> {
+        let mut ids = Vec::new();
+        for artifact in artifacts {
+            let file_name = std::path::Path::new(&artifact.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_owned();
+            self.records
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(RecordedCreation { file_name });
+            let n = self.next_id.fetch_add(1, Ordering::SeqCst);
+            ids.push(format!("creation-{n}"));
+        }
+        Ok(ids)
     }
 }
 
@@ -72,6 +75,7 @@ fn prompt() -> AgentPrompt {
         text: "create an activity".into(),
         model: None,
         knowledge: None,
+        conversation_context: None,
     }
 }
 

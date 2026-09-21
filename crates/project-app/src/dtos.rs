@@ -43,6 +43,18 @@ pub struct CreationView {
     pub byte_size: u64,
     pub created_at: String,
     pub revision: u32,
+    /// Stable lineage identity of this logical interactive resource. Every
+    /// version of the same resource shares this id.
+    pub lineage_id: String,
+    /// 1-based version number inside the lineage.
+    pub version_number: u32,
+    /// The version this one derives from, when it is not the first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_version_id: Option<String>,
+    /// Whether this version is the authoritative current one of its lineage.
+    pub is_current: bool,
+    /// Every version id of this lineage, for exact-version addressing.
+    pub available_version_ids: Vec<String>,
 }
 
 /// Deterministic per-file result for a multi-file import batch (M8 §5).
@@ -123,9 +135,19 @@ pub struct WebPreview {
 pub struct PublicationView {
     /// `local` or `published`.
     pub state: String,
-    /// Public URL when `state` is `published`; always runtime-only and never
-    /// persisted.
+    /// Authoritative share URL when `state` is `published`. For a shared web
+    /// lineage this is the immutable current-version URL
+    /// (`/<slug>/<current-version-id>/`); for non-web publications it is the
+    /// route root. Copy / Open / QR all consume exactly this value. Always
+    /// runtime-only and never persisted.
     pub public_url: Option<String>,
+    /// Version-history landing page URL (`/<slug>/`).
+    pub root_url: Option<String>,
+    /// Current-version alias URL (`/<slug>/latest/`).
+    pub latest_url: Option<String>,
+    /// The immutable version id the share URL currently targets; `None` when
+    /// the share URL is the route root (non-web publications).
+    pub current_version_id: Option<String>,
 }
 
 /// Turn metrics exposed to the UI. All numeric fields are Option so that
@@ -172,6 +194,44 @@ pub struct TurnMetricsView {
     pub lexical_hits: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_hits: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contextual_followup: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referent_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referent_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_kind: Option<String>,
+    /// Exact grounded source display names for this turn. Never paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_names: Vec<String>,
+}
+
+/// Durable additive provider telemetry across completed turns in one
+/// conversation. Provider/model are the latest reported identity; numeric
+/// fields are sums only when every provider-using turn reported that field.
+/// It intentionally contains no retrieval/corpus fields because those are
+/// turn-context snapshots, not additive quantities.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUsageTotalsView {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub turn_duration_ms: Option<u64>,
+    pub source: Option<String>,
+    pub remote_calls: Option<usize>,
 }
 
 impl From<project_core::TurnMetrics> for TurnMetricsView {
@@ -207,6 +267,14 @@ impl From<project_core::TurnMetrics> for TurnMetricsView {
             exhaustive_coverage: m.exhaustive_coverage,
             lexical_hits: m.lexical_hits,
             semantic_hits: m.semantic_hits,
+            local_mode: m.local_mode,
+            contextual_followup: m.contextual_followup,
+            referent_type: m.referent_type,
+            referent_count: m.referent_count,
+            origin_turn_id: m.origin_turn_id,
+            base_intent: m.base_intent,
+            turn_kind: m.turn_kind,
+            source_names: m.source_names,
         }
     }
 }
@@ -223,6 +291,10 @@ pub struct MessageView {
     pub creation_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_metrics: Option<TurnMetricsView>,
+    /// Durable id of the owning user turn (the user message id), present on
+    /// assistant messages. Legacy records lack this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -239,7 +311,7 @@ pub struct ProjectView {
     pub accepted_import: Option<AcceptedImportProgressView>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedImportProgressView {
     /// Opaque identity of the durable accepted-import operation. This is how
@@ -251,6 +323,10 @@ pub struct AcceptedImportProgressView {
     /// `not_started`, `started_outcome_unknown`, `completed`,
     /// `failed_retryable`, or `failed_terminal`.
     pub agent_state: String,
+    /// True when a durable K6 operation for this turn is `retry_required` or
+    /// retryable `failed`. The UI uses this for an explicit retry action, never
+    /// for ordinary resume.
+    pub summary_retryable: bool,
     pub total: usize,
     pub copied: usize,
     pub lexical_completed: usize,
@@ -258,6 +334,29 @@ pub struct AcceptedImportProgressView {
     pub failed: usize,
     pub embeddings_created: usize,
     pub embeddings_reused: usize,
+    /// Fully usable materials of this accepted operation for the currently
+    /// active Knowledge embedding generation: lexically ready AND every
+    /// reachable chunk has a ready embedding for the active generation (zero
+    /// chunk materials count once lexically ready). Never a lexical-only count.
+    pub materials_ready: usize,
+    /// Corpus chunks reachable from this operation (0 until the embedding
+    /// phase resolves them). Counts only, never content.
+    pub chunks_total: usize,
+    /// Chunks that still need an embedding for the active generation (0 until
+    /// the embedding phase resolves them). The embedding progress denominator.
+    pub embeddings_total: usize,
+    /// Wall-clock milliseconds since the operation was created. Structural,
+    /// never a misleading ETA.
+    pub elapsed_ms: u64,
+    /// Smoothed embeddings-per-second over the embedding phase, once a stable
+    /// sample exists. `None` while there is no trustworthy rate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throughput_embeddings_per_sec: Option<f64>,
+    /// True while the turn's post-embedding compact/generic per-item summary
+    /// synthesis is running. The frontend uses this to replace the misleading
+    /// "99% · N de N archivos listos" import line with a truthful synthesis
+    /// phase. Never set for the K6 deep route.
+    pub synthesizing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

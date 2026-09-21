@@ -1,10 +1,17 @@
-import type { SessionKnowledgeMetrics, SessionLogEntry, SessionUsage, TurnMetrics } from "../types";
+import type {
+  ConversationUsageTotals,
+  SessionKnowledgeMetrics,
+  SessionLogEntry,
+  SessionUsage,
+  TurnMetrics,
+} from "../types";
 import { messages } from "../messages";
 
 interface Props {
   conversationId: string;
   logs: SessionLogEntry[];
   durableMetrics: TurnMetrics | null;
+  accumulatedUsage: ConversationUsageTotals | null;
 }
 
 function latest<T>(
@@ -47,7 +54,13 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ProviderMetrics({ usage }: { usage: SessionUsage | null }) {
+function ProviderMetrics({
+  usage,
+  heading = messages.conversationDetails.metrics.realProvider,
+}: {
+  usage: SessionUsage | null;
+  heading?: string;
+}) {
   const unavailableText = messages.conversationDetails.metrics.unavailable;
   // Provider token/cost fields are only truthful when the backend explicitly
   // identified them as provider telemetry. Local estimates never appear in
@@ -58,7 +71,7 @@ function ProviderMetrics({ usage }: { usage: SessionUsage | null }) {
       className="conversation-metrics-subsection"
       aria-label={messages.conversationDetails.metrics.realProvider}
     >
-      <h4>{messages.conversationDetails.metrics.realProvider}</h4>
+      <h4>{heading}</h4>
       <dl className="conversation-metrics-grid">
         <Metric
           label={messages.conversationDetails.metrics.provider}
@@ -167,6 +180,12 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
           label={messages.conversationDetails.metrics.retrievalMode}
           value={knowledge?.retrievalMode || unavailableText}
         />
+        {knowledge?.localMode && (
+          <Metric
+            label={messages.conversationDetails.metrics.localMode}
+            value={knowledge.localMode}
+          />
+        )}
         <Metric
           label={messages.conversationDetails.metrics.exhaustiveCoverage}
           value={knowledge?.exhaustiveCoverage || unavailableText}
@@ -195,18 +214,64 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
             />
           </>
         )}
+        {knowledge?.retrievalMode === "thematic" && (
+          <>
+            <Metric
+              label={messages.conversationDetails.metrics.eligibleMaterials}
+              value={unavailable(knowledge.eligibleMaterials ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.thematicContributingSources}
+              value={unavailable(knowledge.materialsInspected ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.thematicCandidates}
+              value={unavailable(knowledge.retrievalCandidateCount ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.selectedEvidenceCount}
+              value={unavailable(knowledge.selectedEvidenceCount ?? null)}
+            />
+            <Metric
+              label={messages.conversationDetails.metrics.evidenceTokens}
+              value={unavailable(knowledge.evidenceEstTokens ?? null)}
+            />
+          </>
+        )}
       </dl>
       <p className="muted">{messages.conversationDetails.metrics.estimateNotice}</p>
     </section>
   );
 }
 
-export default function ConversationMetrics({ conversationId, logs, durableMetrics }: Props) {
+export default function ConversationMetrics({
+  conversationId,
+  logs,
+  durableMetrics,
+  accumulatedUsage,
+}: Props) {
   // Durable metrics (persisted in project.json) are the authoritative source.
   // Fall back to session_logs when durable metrics are unavailable
   // (old projects, in-flight sessions before restart).
   const usage = durableUsage(durableMetrics, logs, conversationId);
   const knowledge = durableKnowledge(durableMetrics, logs, conversationId);
+  const accumulated = accumulatedUsage
+    ? {
+        conversationId,
+        turnId: "",
+        provider: accumulatedUsage.provider || "",
+        model: accumulatedUsage.model || "",
+        inputTokens: accumulatedUsage.inputTokens,
+        outputTokens: accumulatedUsage.outputTokens,
+        cacheReadTokens: accumulatedUsage.cacheReadTokens,
+        cacheWriteTokens: accumulatedUsage.cacheWriteTokens,
+        totalTokens: accumulatedUsage.totalTokens,
+        costUsd: accumulatedUsage.costUsd,
+        turnDurationMs: accumulatedUsage.turnDurationMs,
+        source: accumulatedUsage.source || "unavailable",
+        remoteCalls: accumulatedUsage.remoteCalls,
+      }
+    : null;
 
   return (
     <section
@@ -217,6 +282,11 @@ export default function ConversationMetrics({ conversationId, logs, durableMetri
       <h4>{messages.conversationDetails.metrics.lastTurn}</h4>
       <ProviderMetrics usage={usage} />
       <KnowledgeMetrics knowledge={knowledge} />
+      <h4>{messages.conversationDetails.metrics.accumulated}</h4>
+      <ProviderMetrics
+        usage={accumulated}
+        heading={messages.conversationDetails.metrics.accumulatedProvider}
+      />
     </section>
   );
 }
@@ -290,6 +360,7 @@ function durableKnowledge(
       exhaustiveCoverage: durable.exhaustiveCoverage ?? null,
       lexicalHits: durable.lexicalHits ?? null,
       semanticHits: durable.semanticHits ?? null,
+      localMode: durable.localMode ?? null,
     };
   }
   // A partial durable record is authoritative but incomplete. Never fill it

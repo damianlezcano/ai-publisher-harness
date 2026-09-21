@@ -92,9 +92,96 @@ The FTS query builder must escape/tokenize raw user text rather than interpolate
 
 ## 11. Question answering vs corpus summarization
 
-**Question answering:** user question → intent detection (`NormalSemantic` vs `CorpusExhaustive`) → either bounded K3/K4 top-k hybrid retrieval **or** a local exhaustive presence scan of every READY chunk → ranked/compact evidence → remote LLM answer (with locally appended source filenames). Inspection metrics (`eligible_materials`, `materials_inspected`, `lexical_hits`, `semantic_hits`) describe retrieval activity and must not be copied into user-visible `Fuentes`. `Fuentes` lists only selected K4 evidence that actually entered the final answer context: lexical supporting sources on the exhaustive path, and retrieved evidence on the compact path. Budget-dropped and semantic-only exhaustive candidates are never citations. A corpus-wide negative answer is produced locally only when `exhaustive_coverage=complete` and extracted presence terms had zero lexical hits after inspecting the full eligible READY inventory; top-k emptiness and semantic near-misses are never treated as global absence, and they must not fabricate citations.
+**Question answering:** user question → per-turn `BoundRoute` (typed follow-up
+and creation pre-gates, then the multilingual semantic classifier when the
+intent is still open, then exclusive deterministic fallback, then the compact/K6
+clamp) → one of the bounded engines below → remote LLM answer **or** a fully
+local inventory/exhaustive-negative answer. The ES/EN keyword detectors
+(`detect_retrieval_intent`, `detect_summary_intent`) are the **fallback and
+execution helpers**, not a competing production classifier and not a general
+multilingual parser. `CorpusExhaustive` requires a presence/absence cue, a concrete extracted presence term, and a global, inventory, or numeric corpus scope marker. Open-content questions asking for abstract topics/themes without corpus scope, and presence questions whose extracted terms are empty, remain `NormalSemantic` even when they include broad or numeric scope words, so an exhaustive scan can never run with an empty needle. Inspection metrics (`eligible_materials`, `materials_inspected`, `lexical_hits`, `semantic_hits`) describe retrieval activity and must not be copied into user-visible sources. The grounded source list (`TurnMetrics.source_names`, formerly the text-appended `Fuentes:` block) lists only selected K4 evidence that actually entered the final answer context: lexical supporting sources on the exhaustive path, retrieved evidence on the compact path, and contributing thematic evidence on the thematic path. Budget-dropped and semantic-only exhaustive candidates are never citations. The source list is persisted as structured per-turn provenance and surfaced in the per-turn detail popover, never concatenated into the visible assistant answer text. A corpus-wide negative answer is produced locally only when `exhaustive_coverage=complete` and extracted presence terms had zero lexical hits after inspecting the full eligible READY inventory; top-k emptiness and semantic near-misses are never treated as global absence, and they must not fabricate citations.
 
 **Corpus summarization:** local extraction/chunking → cached per-document summaries or structured facts → topic/cluster summaries → hierarchical collection summary → optional remote synthesis of only intermediate summaries. Embeddings alone cannot produce faithful prose. V1 should use extractive/structured local aggregation and cache boundaries; a small local generative model is a later opt-in due to packaging and CPU cost. Remote synthesis is optional and auditable.
+
+### Four semantic behaviors
+
+- **Normal semantic retrieval:** ordinary K3/K4 top-k hybrid retrieval over a bounded handful of chunks/sources. Appropriate for ordinary question answering ("¿Qué explicó Delfina sobre pasado simple?", "¿Qué se acordó respecto del aumento del precio de las clases?").
+- **Concrete corpus exhaustive presence/inventory:** a local exhaustive scan of every READY chunk with a real extracted search needle ("¿Qué reuniones mencionan presente continuo?", "¿Se habló en alguna de las 15 reuniones de Kubernetes u OpenShift?"). Supports locally produced negative answers only when coverage is complete and the needle had zero lexical hits.
+- **Corpus-wide thematic synthesis:** "¿Cuáles son los temas principales que aparecen repetidamente en las 15 reuniones?", "¿Qué temas se repiten en todas las reuniones?", "Resumí los temas recurrentes en estos 15 archivos.", "What recurring themes appear across all meetings?". This is a third intent (`CorpusThematic`), recognized as a thematic content head ("temas", "acuerdos", "dificultades", "themes", "topics", ...) plus corpus-wide scope (global marker, numeric corpus unit, a corpus-wide scope phrase, or recurrence wording such as "recurrentes", "se repiten", "repetidamente", "recurring", "recur"). Recurrence is inherently corpus-wide, so an unscoped "¿Cuáles son los temas recurrentes?" or "What themes recur?" qualifies without an explicit scope phrase. It is neither ordinary top-k Q&A nor concrete presence search, and it never routes to the exhaustive presence scanner. "¿Cuáles son las 5 ideas principales?" (no corpus scope) and "¿Qué ocurrió el 15 de julio?" (a date) stay `NormalSemantic`.
+- **Knowledge inventory:** a fourth intent (`KnowledgeInventory`) that is deliberately **not** a RAG retrieval mode. It is a local metadata command over the persisted KnowledgeStore ("listame los archivos", "cuántos documentos tengo", "¿tengo el archivo X?"), answered entirely from `knowledge.sqlite` with `remote_calls = 0`. It must never be used for content-presence questions (see §11b).
+
+## 11b. Knowledge inventory — local metadata command (implemented)
+
+`KnowledgeInventory` is a fourth `RetrievalIntent` classification but **not** a fourth `RetrievalMode`/RAG mode. It reuses the existing local-answer short-circuit in the send flow and never touches semantic retrieval, lexical evidence, query embeddings, context budgets, top-K, provider synthesis, or the OpenCode agent.
+
+### Boundaries
+
+| Question | Intent | Why |
+|---|---|---|
+| "listame todos los archivos", "cuántos documentos tengo" | KnowledgeInventory | inventory action over the persisted store |
+| "¿tengo el archivo X?", "¿está cargado X?" | KnowledgeInventory | deterministic metadata membership lookup |
+| "qué archivos hablan de presente continuo?", "¿Qué archivos contienen Kubernetes?" | CorpusExhaustive | content-presence needle (never inventory) |
+| "qué se decidió sobre Google Workspace?" | NormalSemantic | ordinary open question |
+| "resumime todos los archivos" | K6 summary | summary verb gate precedes inventory |
+| "cuáles son los temas recurrentes?" | CorpusThematic | thematic content head + corpus scope |
+| "cuánto mide el archivo X?" | NormalSemantic | measure query, never inventory |
+
+Classification priority is `CorpusThematic` → K6 summary gate → `KnowledgeInventory` → `CorpusExhaustive`/presence → `NormalSemantic`. The inventory detector is rule-based and deterministic; it **vetoes** any phrasing that carries a presence cue ("hablan de", "mencionan", "contain", "contiene", ...) or a measure cue ("mide", "pesa", ...). Corpus nouns alone ("archivo", "documento", "file", ...) are never sufficient — an inventory action (list verb, count cue, possession/location phrasing, recent/added wording, or a membership phrase) must also be present.
+
+### Local read path
+
+- `KnowledgeStore::inventory_snapshot(state, sort)` reads `material_sources` JOIN `material_index_state` JOIN `documents` and returns `KnowledgeMaterialRecord { material_id, source_name, media_type, state, indexed_at }`. **No filesystem scan and no agent workspace is ever consulted.**
+- `inventory_count(state)` returns the exact persisted count for a state filter.
+- `find_material_by_source_name(needle, state)` performs deterministic equality matching only: normalized basename first, then exact case-insensitive `source_name`. Outcomes: exact match, not found, or ambiguous multiple normalized matches. No fuzzy/semantic matching.
+- Default status semantics are READY: a plain "listame los archivos" lists only READY materials and "cuántos documentos tengo" counts READY exactly. Explicit "incluí también los que fallaron"-style phrasings may widen the filter to the existing status vocabulary (`pending`/`ready`/`failed`/`unsupported`).
+- Sorting is deterministic and local. Chronological requests ("en orden cronológico", "chronologically") use the import/index timestamp (`documents.indexed_at`, with a documented fallback to `material_sources.updated_at`); "últimos"/"latest"/"recientes" request newest-first; "alfabético"/"alphabetical" and the default order are alphabetical by name. Filename dates are never parsed.
+
+### App path and contract
+
+`prepare_knowledge_context` routes a `KnowledgeInventory` turn to `prepare_inventory_knowledge_context`, which queries the store metadata, builds a `local_answer`, and returns an `AgentKnowledgeContext` with `entries = []`, `citation_source_names = []`, and `retrieval_mode = None`. `send_message_run`'s existing local-answer short-circuit then completes the turn locally: no OpenCode agent session, no `run_agent_with_inputs`, no provider tokens, no query embedding, no evidence assembly.
+
+For pure inventory queries the observable contract is:
+
+- `remote_calls = 0`, provider invoked `false`, query embedding generated `false`;
+- `retrieval_mode` is not `hybrid`/`normal`/`exhaustive`/`thematic` — it stays `None`, and the truthful local reason is surfaced as `local_mode = "inventory"` in the durable turn metrics and as `reason=inventory` in the usage log;
+- the log emits `[knowledge] local_mode=inventory inventory_action=list|count|membership materials_ready=N remote_calls=0` (no sensitive paths, no document content);
+- no semantic `Fuentes:` block is appended — the list itself is the answer, and count/membership are plain local prose;
+- **no top-K truncation**: listing returns all matching READY materials regardless of count.
+
+### Deduplication, sorting, and restart semantics
+
+Knowledge is content-addressed: byte-identical files share a canonical document but each persisted material keeps its own canonical `source_name`. Inventory lists/counts persisted unique materials and never fabricates aliases. If only the canonical first `source_name` is persisted, only that name is shown. Chronological ordering uses `documents.indexed_at`, never filename parsing. Restart persistence is exact: inventory list, count, and membership read the same persisted rows after close/reopen with no reindex, no embedding generation, and no provider call.
+
+### Current-turn vs persisted Knowledge
+
+A later turn may report `0 archivos procesados` because no new files were attached in that turn. That must never imply the Knowledge store is empty: inventory queries read persisted `knowledge.sqlite` state and are never derived from `accepted_import_operation.total` or any current-turn attachment/import accounting.
+
+## 11a. Corpus-wide thematic synthesis (implemented)
+
+`KnowledgeStore::thematic_synthesis_evidence` performs the whole aggregation locally and hands the caller a bounded, deterministic evidence set; the app then runs **one** bounded remote synthesis call over that evidence.
+
+Pipeline: READY documents → local tokenization over one **shared bounded per-document window** (at most 64 inspected chunks, used for both candidate discovery and evidence localization, so a theme that can be evidenced is always discoverable first) → per-document candidate-term presence over **distinct documents** (a term must appear in at least two distinct documents to become a candidate; duplicated chunks inside one document never inflate document frequency; already-`Ready` per-document K6 summaries join the document representation to broaden candidates but are never sent as evidence) → candidate terms are **content-anchored**: standalone candidates are content words only (structural minimum-length rule, plus a bounded categorized closed-class function/discourse list and a bounded meeting-process scaffolding list), so "es", "no", "al", "lo", "etc." never become recurring "themes" → multi-word concepts are **first-class**: contiguous two-word phrases and function-word-bridged phrases such as "presente continuo", "Google Workspace", "comprensión auditiva", or "preguntas en pasado" compete directly with unigrams (a phrase with equal support outranks a unigram) → deterministic theme ranking by distinct-document support (then phrase preference on ties, bounded occurrence strength, a mild demotion for corpus-saturated standalone unigrams, lexical specificity, and term order) with **constituent-redundancy removal** (a unigram that is a token of a recurring phrase with at least as much support is dropped, since the phrase is the more informative concept) → **explicit candidate-theme cap (at most 20) before any evidence is constructed** → theme-local evidence selection (for each selected theme, the strongest chunk from each of its distinct supporting documents, windowed around that specific theme, matched token/phrase-boundary aware so a short term can never match inside an unrelated larger word) → **interleaved, source-diverse bounded candidate list that guarantees every selected theme contributes at least one theme-local excerpt**, preferring unused then least-used supporting documents → one remote synthesis with locally appended `Fuentes`.
+
+**Ranking contract:** what makes a candidate stronger is, first and foremost, **distinct-document support** (a term present in more distinct meetings is stronger), transformed by two structural corrections that keep conversational boilerplate from crowding out meaningful topics:
+
+- **Phrase specificity.** A multi-word concept carries more discriminating information per supporting document than a single generic word, so a phrase's distinct-document support is scaled up (`THEMATIC_PHRASE_SPECIFICITY`) when ranked against unigrams. This is why a generic chatter unigram present in 15/15 documents does not automatically beat a meaningful phrase present in only 7–10/15 documents.
+- **Strong saturation penalty.** A standalone unigram present in at least 80% of the eligible documents is treated as corpus-wide conversational background, not as a discriminating theme. Every document beyond that saturation floor receives a per-document penalty (`THEMATIC_SATURATION_PENALTY_PER_DOC`) on its support, strong enough that a near-ubiquitous generic word is discounted below a meaningful phrase in far fewer documents. Phrases never receive this penalty.
+
+On ties a **phrase** is preferred over a unigram; then bounded **occurrence strength** (number of distinct chunk texts containing the term, deduplicated per document) breaks ties; then **lexical specificity** (longer terms) and finally canonical term order. A unigram that is a **token of a recurring phrase with at least as much distinct-document support** (compared on raw distinct-document frequency, never on the scaled score) is removed as constituent redundancy, because the phrase is the more informative concept ("preguntas" is redundant beside "preguntas en pasado"). The final candidate set is **explicitly capped at 20 themes**, selected before any evidence is constructed.
+
+Content anchoring is a bounded, categorized lexical classification, not an unbounded stopword list: standalone candidates must be content words. The closed-class function/discourse list also covers common discourse and politeness fillers such as "bueno", "claro", "gracias", "verdad"; the meeting-process scaffolding list also covers meeting-participant role nouns such as "alumnos" and "docente". Those categories never become standalone recurring themes but may still appear inside a phrase headed by a real content word. The structural ranking above is the primary defense against open-class conversational noise; the bounded categorized lists are a secondary guard, never the mechanism by which the ranking grows.
+
+Theme-local evidence: evidence for a theme is never "the first chunk containing any candidate token". For each selected theme the distinct supporting documents are identified and their strongest supporting chunks are chosen; the excerpt is windowed around that specific theme, so a theme that appears only in a late section of a document (for example a substantial "past continuous" discussion buried after unrelated opening material) is still discovered and evidenced with the actual supporting text. The evidence window offsets are snapped to UTF-8 character boundaries, so the slice can never split a multi-byte Unicode scalar value (accented Spanish such as "comprensión auditiva" never panics). Supporting documents are ordered by theme strength (distinct-chunk support) then canonical document id — a content hash, never a filename — so early lexicographic sources cannot monopolize the budget and late sources such as `doc17`/`doc48` contribute on equal footing.
+
+Source provenance: only documents whose excerpts actually entered the final evidence package appear in the grounded source list (`TurnMetrics.source_names`, surfaced in the per-turn detail popover; it was formerly the text-appended `Fuentes:` block). Every selected theme is guaranteed at least one theme-local excerpt in the bounded candidate list; the list prefers distinct source documents before reusing one, so a single document cannot monopolize the budget, and if one document supports several themes its filename is deduplicated in the user-visible source list. A high-salience theme present in exactly one document never becomes a recurring-theme candidate, so its source is neither forwarded as evidence nor cited. Documents that were inspected and even candidate-producing but dropped by the bounded budget are never cited. Semantic similarity alone is never source provenance.
+
+K6 role: persisted `Ready` per-document K6 summaries are read and reused to **broaden candidate themes** only; they are never synthesized on demand, so a thematic question never causes one remote call per document. Final evidence is always windowed around the theme inside persisted source chunks, so K6 summary text is never sent as evidence by itself; summary sentences are not forwarded.
+
+Coverage semantics: CorpusThematic is thematic synthesis over selected evidence, not deterministic absence checking. The serialized request never emits exhaustive-negative instructions ("Do not claim that a topic is absent…"); that text belongs only to the exhaustive route. A theme absent from the bounded thematic evidence is explicitly not treated as proof it never appeared. Candidate discovery and evidence localization inspect only the first **64 chunks per document** (a shared bounded window); a theme that appears only after chunk 64 is neither discovered nor evidenced, so CorpusThematic explicitly does **not** claim full-document thematic coverage beyond that bound.
+
+Cost model: large local work (O(N) chunk scanning, document-frequency aggregation) is acceptable; the remote context is a fixed budget (default 8,000 local units, at most 20 entries, at most 20 candidate themes) regardless of corpus size, so 15, 50, or 100 documents produce substantially smaller context than the raw corpus. Exactly zero remote calls are made per document: Ready summaries are reused but never regenerated, no embeddings are queried, and no summary is synthesized on demand. `retrieval_mode` is `thematic` (Conversation Details distinguishes it from `normal` and `exhaustive`); the semantic provider is reported as `not_requested`.
+
+Restart/cache behavior: the aggregation is recomputed deterministically from persisted chunks each turn; already-`Ready` per-document summaries are durable in SQLite and reused across restarts (a later turn never regenerates them). A corpus with fewer than two READY documents cannot exhibit recurring themes across distinct meetings, so the thematic intent falls back to the compact K3/K4 semantic path (reported as `normal`).
 
 ## 12. Incrementality, deduplication, and invalidation
 
@@ -129,7 +216,93 @@ per-Material error and does not poison independent work. Post-acceptance
 cancellation is not supported because filesystem, Material, and derived state
 cannot yet be rolled back atomically.
 
+The embedding phase advances the durable ledger at a bounded cadence
+(approximately once per second, never per embedding) so the existing
+`ProjectView.acceptedImport` polling path observes incremental progress:
+`chunks_total`, `embeddings_total`, `embedding_completed`,
+`embeddings_created`, `embeddings_reused`, and a stable phase start used only
+to derive an average throughput. These are structural counters; no content,
+vector, prompt, or raw path is exposed. Progress never marks an operation or
+Material `Ready`/`completed` before the required indexing and embedding work
+has actually finished.
+
+Counter units are strict and never mixed. Material progress
+(`total`, `copied`, `lexical_completed`, `failed`) counts Materials; embedding
+progress (`chunks_total`, `embeddings_total`, `embedding_completed`,
+`embeddings_created`, `embeddings_reused`) counts chunks/vectors. The accepted
+import boundary preserves the chunk-level values produced by the embedding
+pass and never overwrites `embedding_completed` with a Material count, so the
+invariant `0 <= embedding_completed <= embeddings_total` holds and a polled
+run never moves backwards (e.g. from 31778/31778 to 50/31778). Terminal
+semantic eligibility is the chunk-unit condition "every chunk reachable from
+the operation has an embedding": `embeddings_created + embeddings_reused ==
+chunks_total` once the embedding phase resolves totals.
+
+## 14a. Internal lexical Ready vs. user-facing materialsReady
+
+Two distinct "ready" notions must never be conflated:
+
+- **Internal lexical `MaterialIndexState::Ready`** is durable operational state
+  for one Material's *derived-indexing stage*: extraction/normalization and
+  chunking completed (or the document was reused). It says nothing about whether
+  the Material is searchable or usable as Knowledge with embeddings. It is never
+  surfaced directly to the user and is **not** the user-facing ready counter.
+
+- **User-facing accepted-import `materialsReady`** is the count of accepted
+  operation materials that are *fully usable for the currently active Knowledge
+  embedding generation*. A material counts ready when (1) its lexical/indexing
+  stage is complete (the internal `Ready` state) **and** (2) every chunk
+  reachable from its document has a `ready` embedding for the active generation.
+  A zero-chunk material counts ready once its lexical stage completes (the
+  chunk predicate is vacuously satisfied). Embeddings from a previous/other
+  generation never satisfy (2), so stale-generation vectors can never inflate
+  the count. Lexical `Ready` alone never increments `materialsReady`; the UI
+  therefore never shows N/N before every accepted material is actually usable.
+
+The count is computed by `KnowledgeStore::accepted_import_materials_ready(
+operation_id, generation_id)` — a read-only, indexed NOT EXISTS aggregate over
+`accepted_import_materials`, `material_index_state`, `material_sources`,
+`chunks`, and `chunk_embeddings` that never mutates Knowledge, regenerates
+embeddings, or calls a provider. The caller resolves the active generation from
+the embedded model manifest (a pure JSON parse; ONNX is never loaded to render
+progress). The operation durably records the generation the embedding-progress
+path used in the optional `embedding_generation_id` ledger column (additive
+migration only; older operations keep it NULL and remain safe).
+
+### Compact embedding progress
+
+While an accepted import is non-terminal and `embeddings_total > 0`, the compact
+UI derives `round(100 * embedding_completed / embeddings_total)` from the
+durable ledger, bounded to `0..=99`. It therefore can say, for example,
+`Procesando tu solicitud · 27% · 0 de 50 archivos listos` without calling a
+provider or implying that any file is ready. The detailed popover retains the
+exact counters. On reopen the same percentage is recomputed from the durable
+counters; there is no separate progress state. Terminal copy is the concise
+file-ready count, and the percentage is never used to claim `100%` early.
+
+Degraded rule: when an operation has no resolved embedding context (no
+embedding phase ever resolved chunks — no provider or nothing to embed), the
+caller passes `generation_id = None` and lexically-ready materials count, which
+is consistent with the previous `semanticReady` fallback (`failed === 0` when
+`chunks_total == 0`) so an offline/lexical-only import is never stuck at 0/N.
+Lexical and semantic units are never mixed in a single call; a failure is
+represented truthfully (a failed Material is excluded from `materialsReady` and
+surfaces through the `failed` counter).
+
 ## 15. Performance expectations
+
+Measured on the production ingestion path, the dominant cost is local CPU
+embedding inference, not SQLite (lexical index + SQLite was ~0.2% of a
+controlled benchmark; embeddings were ~99.8%). The ONNX session therefore uses
+a bounded intra-op thread count, `min(available_parallelism, 4)`, and the
+application embedding batch size is 32 (the store clamps to its own safety
+bound and the provider re-batches internally at a bounded cap of 32). Both are
+throughput knobs only: model identity, revision, dimensions, tokenizer, mean
+pooling, L2 normalization, prefixes, chunk identity, retrieval semantics, and
+the persistence contract are unchanged. On the measured machine the bounded
+configuration improved embedding throughput by roughly 3.5× over the
+`threads=1, batch=8` baseline; this is a measured probe, not an SLA. A local
+probe lives at `crates/project-knowledge/examples/embedding_throughput.rs`.
 
 For 100–1,000 text documents (tens of thousands of chunks), expect disk usage dominated by source text plus roughly `chunks × dimensions × 4` bytes for float32 vectors (about 1.5 KB per 384-d vector before indexes). Stream batches; do not load the full index into RAM. SQLite WAL and batched writes keep startup incremental; query latency should be dominated by bounded candidate scoring, with benchmarks required on representative hardware rather than guarantees.
 
@@ -517,8 +690,467 @@ stale/missing node must actually be synthesized. All ingestion/embedding/
 retrieval/context-assembly/invalidation/cache-lookup remain local (zero remote
 calls), exactly as in K1–K5.
 
+The corpus-wide thematic synthesis path (`## 11a`) reuses the persisted `Ready`
+per-document K6 summaries when they exist: their summary/topic text joins each
+document's local candidate representation, so a cached summary can broaden the
+recurring-theme candidates without any new remote call. A thematic question
+never synthesizes a summary on demand and never makes one remote call per
+document; it only ever makes at most one bounded remote synthesis over the
+locally selected contributing excerpts, and evidence always returns to windowed
+persisted source chunks (never summary sentences).
+
 Fingerprint output hash, source provenance, and content are persisted; no
 prompt, chunk text, provider secret, or raw provider request body is stored.
 Structural acceptance uses a deterministic capture summarizer (zero spend);
 tests live in `crates/project-app/tests/summarization.rs` and in
 `project-knowledge` `summary.rs` unit tests.
+
+## 32. Contextual follow-up over persisted turn referents (implemented)
+
+A follow-up that refers to the previous turn's result ("resumí cada uno",
+"de esos archivos, cuáles mencionan...?", "para cada uno de los temas que
+acabás de identificar...") must resolve the EXACT set the user is talking
+about, never rediscover a different one. This is NOT a new retrieval mode:
+it is a durable structured referent resolved BEFORE existing retrieval
+routing, used as an explicit scope and/or action. The four existing
+behaviors (`NormalSemantic`, `CorpusExhaustive`, `CorpusThematic`,
+`KnowledgeInventory`) keep their meaning; no mode is collapsed or renamed.
+
+### Persisted turn referents
+
+`project.json` messages may carry an optional `turnReferent` (camelCase,
+tagged `kind`), additive and defaulted so older projects load unchanged:
+
+- `materialSet { materialIds, sourceNames, originTurnId, producedBy }` —
+  captured when a `KnowledgeInventory` list produces its local answer. It
+  preserves stable material identity plus display provenance and the exact
+  order the answer used. It never stores content, vectors, or paths.
+- `themeSet { themeKeys, displayLabels, originTurnId, sourceNames }` —
+  captured when a `CorpusThematic` turn produces its selected themes. A later
+  follow-up MUST reuse these exact keys; discovery is never re-run and can
+  never silently replace the previously identified themes.
+
+Referents are written with the owning user message; they survive restart and
+are never reconstructed by parsing assistant prose.
+
+### Deterministic resolution (no LLM)
+
+`project_app::referent::resolve_followup` resolves a query against the
+newest-first prior referents using an **action-first** model, never recency
+alone. A referential cue ("de esos", "cada uno", "those") only says "look
+backward"; it never decides the object type by itself. The requested OPERATION
+decides the referent kind it needs, the referent history supplies the
+compatible candidates, and recency only orders candidates of the SAME kind:
+
+- presence / membership / exhaustive-over-materials ("de esos, cuáles mencionan
+  X?") and per-item summary ("resumí cada uno") require a `MaterialSet`;
+- per-theme detail ("para cada tema...", "indicame las reuniones exactas donde
+  aparece") requires a `ThemeSet`;
+- a type-specific cue (material/theme wording) still pins the kind and is
+  checked against the operation.
+
+A neutral cue with no typed operation falls back to the nearest referent with a
+derivable action, but never forces an incompatible one (a `MaterialSet` with no
+presence/summary is never bound). No compatible referent (or no implementable
+action) returns `None` and ordinary routing continues — so a dangling cue with
+only a `ThemeSet` in history ("de esos, ¿cuáles mencionan Kubernetes?") never
+reinterprets theme names as files. Corpus nouns alone never bind, and an
+unrelated question never inherits a referent merely because one exists in
+history.
+
+### Actions
+
+- **Per-item summary** (`turn_kind=per_item_summary`, `base_intent=normal`):
+  "resumí cada uno" over a MaterialSet. Every referent material gets exactly
+  one compact local representative — a persisted `Ready` document-level K6
+  summary when present, otherwise a deterministic beginning/middle/end chunk
+  representative — composed into `ceil(N / batch)` bounded aggregate remote
+  requests (default 100 materials per call), never N calls and never ordinary
+  top-K retrieval or re-embedding. The remote prompt uses stable keys
+  (`M001`, `M002`, ...), one summary per key, validated for exact cardinality;
+  a missing entry gets an explicit localized fallback. Rendering is per item
+  (`source_name -> summary`) with no global `Fuentes:` block. A referent
+  material that no longer resolves keeps an explicit failure slot.
+- **Scoped exhaustive** (`turn_kind=scoped_exhaustive`, `base_intent=exhaustive`):
+  "de esos archivos, cuáles mencionan X?" constrains the exhaustive presence
+  scan to the referent `material_ids` (`exhaustive_presence_search_scoped`).
+  Coverage completeness and lexical-only evidence rules are unchanged.
+- **Per-theme detail** (`turn_kind=per_theme_detail`, `base_intent=thematic`):
+  "para cada tema..." re-localizes evidence for the EXACT persisted theme
+  keys (`thematic_evidence_for_themes`), never re-running discovery. The exact
+  theme labels reach the remote synthesis through the structural coverage note.
+
+### Cost and privacy
+
+Per-item remote context grows as `N × compact_representation`, never
+`N × document_size`; remote calls are a function of the provider-input budget
+(`ceil(compact_input / batch_budget)`), never the material count. No raw
+document, vector, prompt body, or absolute path is logged or persisted with a
+referent. Telemetry (`contextual_followup`, `referent_type`, `referent_count`,
+`origin_turn_id`, `base_intent`, `turn_kind`) is structural and separate from
+`retrieval_mode` (a per-item summary is `local_mode=per_item_summary`, never a
+retrieval mode). The sanitized session log also records a `resolution` reason
+(`cue_type_recent`, `action_compatible_recent`, or `nearest_compatible`), never
+content. Pure `KnowledgeInventory` remains `remote_calls=0`.
+
+## 33. Creation-from-material (implemented)
+
+A request such as "me podes armar una presentacion interactiva para presentar
+esto?" (with `README.md` attached) must resolve the READY material as the
+artifact basis and actually create an artifact instead of answering that the
+workspace is empty. This is NOT a fifth retrieval mode and adds no
+`RetrievalIntent` variant. It is modeled as: creation intent + target
+resolution + a creation-specific document-wide Knowledge context + the existing
+agent/artifact pipeline.
+
+### Intent
+
+`project_app::creation::detect_creation_intent` requires BOTH a bounded
+creation verb (armar/armá/hacé/haceme/creá/generá/... and English create/make/
+build/generate/design) AND an artifact noun (presentación/actividad/recurso/
+página/sitio web/quiz/juego/app/aplicación/interactiva/...). Ordinary Q&A never
+qualifies: "¿qué dice el README sobre Grok?", "resumime el README", and
+"¿cuántos archivos tengo?" stay on their existing routes, and an
+interrogative-led question ("¿Qué vamos a hacer con la página?") is vetoed even
+when it contains a creation verb and noun.
+
+### Target resolution
+
+`resolve_creation_targets` is deterministic, in precedence order:
+1. current-turn selected READY material ids (the attached file wins; a
+   demonstrative never binds an older set when a current attachment exists);
+2. an explicit source filename/name through
+   `KnowledgeStore::find_material_by_source_name` (no fuzzy matching);
+3. a compatible prior `MaterialSet` referent for a demonstrative ("esto",
+   "este archivo", "esos archivos");
+4. otherwise a local clarification (`remote_calls=0`, `creations=0`, no top-K
+   retrieval). A generic creation with no referenced target ("crea una
+   actividad" with nothing attached) is NOT creation-from-material and keeps the
+   normal agent pipeline.
+
+### Context strategy
+
+`AppState::prepare_creation_knowledge_context` builds a bounded document-wide
+context per resolved target: a persisted `Ready` document-level K6 summary when
+present, otherwise a deterministic representative of up to 12 chunks spread
+across the whole document (each excerpt bounded, total bounded). Multiple
+targets are composed as `N × compact_representation` under a controlled total
+budget; raw files are never concatenated. No re-embedding, no on-demand K6
+synthesis, no re-ingestion. The serialized prompt tells the model the target
+material exists and is READY in Knowledge, that an empty filesystem is expected,
+and that it must actually create the artifact rather than ask the user to
+re-upload. The indexed target is never raw-forwarded into the workspace.
+Creation stays on the conversational OpenCode session so tools and workspace
+continuity (`revise_existing`) keep working. After the prompt that contains
+`<knowledge_evidence>` has been sent (success, failure, or cancel), that
+conversational `session_id` is dropped from the cache; the next OrdinaryChat
+opens a new conversational session. The EducAI conversation is unchanged.
+
+### Routing and telemetry
+
+Creation routing sits after contextual-follow-up resolution and before the K6
+summary gate and retrieval routing, in both the direct send facade and the
+staged production seam (`send_staged_message_persist` →
+`run_accepted_staged_turn` → `run_accepted_staged_turn_inner`; resume inherits
+the same routing). A creation turn reports `turn_kind=creation_from_material`,
+`local_mode=creation_from_material`, `reason=creation_from_material`, and
+`retrieval_mode=None` (never `hybrid`/`normal`/`exhaustive`/`thematic`). The
+session log records structural `creation_from_material=true target_count=N
+referent_type=... context_strategy=... document_wide_est_tokens=N
+no_reembedding=true`; no raw content, vectors, or paths are logged.
+
+## 34. K6 durable operation lifecycle (implemented; call-count optimization deferred)
+
+K6 summary artifacts remain durable `summaries`, `summary_sources`, and
+`summary_chunks` rows. A separate, small `summary_operations` ledger now owns
+the lifecycle of one user-requested K6 run; it never duplicates summary text.
+It records the turn, scope, deterministic selected material identities,
+contract/model compatibility fingerprint, status, active node/session hints,
+sanitized failure class, final-summary identity, counters, and timestamps.
+
+Before a remote node is scheduled, its operation records an in-flight fence.
+After the validated node is committed atomically to the existing summary tables,
+the fence is cleared and aggregate counters checkpointed. Thus a restart reuses
+committed document/batch/global nodes and never re-ingests or re-embeds READY
+materials. A process loss with an in-flight fence whose node is not committed
+becomes `retry_required` with `remote_outcome_unknown`; it is never silently
+resent. Retry is an explicit operation, not automatic recovery.
+
+Operation statuses are `pending`, `running`, `cancelled`, `failed`,
+`retry_required`, `completed`, and `stale`. Completed compatible operations
+reuse their existing result; cancelled operations never auto-resume; stale
+operations invalidate only their ledger/result compatibility, never unrelated
+Knowledge data. The lifecycle compatibility fingerprint includes scope,
+selected identity/order, K6 contract version, and selected provider/model.
+Current K6 artifact planning remains model-agnostic pending a later cache-key
+migration, so a different model is conservatively incompatible for operation
+resume rather than being claimed as a compatible artifact cache hit.
+
+K6 owns a process-local cancellation handle distinct from normal chat sessions.
+Cancel sets the durable operation to `cancelled`, prevents scheduling later
+document/batch/global nodes, and the active scratch-session poll observes the
+flag and attempts its exact OpenCode `/abort`. Already committed nodes are kept
+for future compatible requests. If cancellation races with a provider response,
+local continuation is stopped and no descendants are scheduled.
+
+This milestone intentionally preserves the current sequential K6 hierarchy and
+remote-call count. Bounded local condensation and call-count reduction are
+future work.
+
+## 34a. Compact per-source summary — `PerItemBatchAggregate` (implemented)
+
+The summary routes are three-way by intent depth, resolved semantically (the
+OpenCode classifier is authoritative multilingual; the deterministic adapter is
+a conservative ES/EN fallback with a small multilingual depth-cue set):
+
+- **generic aggregate** `BatchSummary` / `selected_batch_aggregate`: "resumen
+  general de estos archivos" — the existing bounded per-item aggregate over the
+  exact current-turn set;
+- **compact per-source** `PerItemBatchAggregate` /
+  `per_item_batch_aggregate`: "resumime cada archivo por separado", "resumí
+  brevemente cada documento", "Résume chaque fichier séparément" — one brief
+  identifiable result per selected source through a bounded number of aggregate
+  remote calls;
+- **deep per-source** `PerSourceSummary` / K6: "analizá detalladamente cada
+  documento", "resumen exhaustivo y profundo de cada archivo", "analyse chaque
+  document en détail" — the durable hierarchical K6 document/batch/global
+  pipeline.
+
+The distinction is semantic, never a single hardcoded phrase: a per-source
+request is deep only when it carries an explicit detail/exhaustiveness cue
+("detallado", "exhaustivo", "profundo", "detailed", "in-depth", "en détail",
+…) or an analysis verb ("analizá", "análisis", "analyse", "analysis", …).
+Otherwise it is compact.
+
+The compact route reuses the exact deterministic material-scope precedence of
+the deep per-source route (current-turn attachments → newest compatible prior
+`MaterialSet` referent → conversation-active material set → truthful
+no-selection), runs the bounded per-item aggregate executor (never K6, never
+one remote call per document, never query embeddings, never re-indexing, never
+raw corpus forwarding), reuses persisted `Ready` document summaries when
+present (telemetry-visible as `representations_reused`) and otherwise builds a
+deterministic bounded chunk representative (`representations_generated_locally`),
+validates exact output cardinality/identity/ordering, and reports structural
+telemetry: `summary_mode`, `summary_scope_source`, `selected_materials`,
+`per_item_batches`, `remote_summary_calls`, `items_requested`,
+`items_completed`, `items_generated`, `items_failed`, `request_budget_limit`,
+`max_batch_estimated_units`, `representations_reused`,
+`representations_generated_locally`, and the estimated input budget.
+
+Compact per-source wording ("Resumime cada archivo por separado",
+"Résume chaque fichier séparément") resolves to `PerItemBatchAggregate` even
+with zero current-turn attachments: it never falls back to the whole-project
+K6 `WholeCorpusSummary` route. The material scope is then resolved
+deterministically (prior `MaterialSet` referent or the conversation-active set),
+or the turn produces a truthful no-selection answer with zero provider calls.
+
+Batch packing enforces a hard per-call application-level request budget
+(`PER_ITEM_MAX_REQUEST_BYTES_PER_CALL`, 72,000 UTF-8 bytes) in addition to the
+item cap (`PER_ITEM_MAX_ITEMS_PER_CALL`), so a large reused summary can force a
+split instead of silently producing an oversized request. The budget is the
+EXACT size of the serialized compact prompt that is actually sent — the shared
+`serialize_summary_prompt` framing (instruction text, source names, `[Mxxx]`
+keys, `(fuente: …)` framing, separators/newlines, and representatives all
+count) — so the packer and the executor can never diverge; the executor's
+`build_prompt` emits exactly the bytes the packer budgeted. Every representative
+(reused `Ready` summary or local chunk representative) is bounded to
+`PER_ITEM_REPRESENTATIVE_MAX_CHARS` UTF-8 characters and every source name to
+`PER_ITEM_SOURCE_NAME_MAX_CHARS`, so a single item can never exceed the budget
+(no infinite loop, no oversized single-item request). A missing provider slot
+receives an explicit synthesis-failure marker ("No se pudo generar el resumen de
+este archivo en esta ejecución."), never the misleading "no hay contenido
+suficiente" wording, so a partial provider output (e.g. 47/50) is surfaced
+truthfully as `items_generated`/`items_failed`.
+
+During compact synthesis the UI shows a truthful synthesis phase
+("Generando resúmenes…") instead of the stale "99% · N de N archivos listos"
+import line; the durable accepted-import ledger carries a `synthesizing` flag
+for this phase. The flag is cleared on ordinary completion and error, and on
+reopen a stale `synthesizing=true` flag with no live in-process owner is
+reconciled to not-synthesizing (with a `stale_synthesizing_recovered` telemetry
+line); this never re-sends a provider request, so a crash can never leave an
+endless "Generando resúmenes…" state or present an interrupted synthesis as
+successfully completed. K6 lifecycle state semantics, `CorpusExhaustive`, and
+the active-set/migration behavior are unchanged.
+
+## 35. Provider usage and conversation totals
+
+`GET /session/{id}` is the OpenCode scratch-session usage source. The adapter
+reads its cumulative `tokens.input`, `tokens.output`, optional
+`tokens.cache.read`/`write`, and `cost`, then persists the before/after delta
+on the owning user turn. Direct session objects and a compatible `{data: ...}`
+transport envelope are accepted. If OpenCode omits a field, it remains
+unavailable; no token or cost estimate is displayed as provider telemetry.
+
+Last-turn metrics are the exact durable record on the newest completed user
+turn. Conversation totals are derived from all durable turn records and survive
+reopen: provider calls, input/output/cache tokens, cost, and duration are sums.
+A provider-using turn that omits one usage field makes that field's total
+unavailable rather than partial; local `remote_calls=0` turns add zero. Provider
+and model are the latest reported identity. Retrieval mode, semantic-provider
+state, corpus size, and selected evidence remain latest-turn/current snapshots
+and are never summed.
+
+`selected_batch_aggregate` is deliberately non-retrieval: it records
+`semantic_provider_state=not_requested`, `retrieval_mode=None`, no candidates
+or evidence, zero query embeddings, and no raw attachment forwarding. Its one
+aggregate provider call contributes once to the durable last-turn and
+conversation totals when usage is reported.
+
+## 36. Intent classifier seam (Phase 3A) and OpenCode classifier (Phase 3B)
+
+The classifier seam is `project_app::classifier::IntentClassifier::classify
+(&ClassifierInput) -> Result<ClassifierDecision, IntentClassificationError>`
+(synchronous, matching the application core). `ClassifierInput` carries only
+semantic-classification inputs — the current user text plus small structural
+counts/flags (`current_turn_attachment_count`, `current_turn_ready_count`,
+`persisted_material_count`, `persisted_ready_count`, `has_persisted_knowledge`,
+`remote_summarizer_available`, `prior_referent_kind`) — and never material ids,
+document bodies, chunks, embeddings, retrieved evidence, or provider/assistant
+transcripts.
+
+Two implementations exist behind the seam:
+
+- `DeterministicAdapter` (fallback): the historical keyword rules (thematic ->
+  summary gate -> retrieval/ordinary) with the same precedence as production
+  dispatch.
+- `OpenCodeIntentClassifier` (Phase 3B): the first real semantic classifier. It
+  runs one small classification prompt in a dedicated, stateless scratch
+  OpenCode session (a fresh tool-safe scratch session per request —
+  explicit coding-tool execution denies plus `external_directory` deny, and
+  **not** a global `*` deny, which yields an empty assistant on OpenCode
+  1.18.25 — polled for a `finish:"stop"`, then aborted). The
+  `external_directory` deny — polled for a `finish:"stop"`, then aborted). The
+  permission ruleset only gates tools; text generation is unaffected, so the
+  model still returns its classification decision. It receives no document
+  bodies/chunks/
+  embeddings/evidence/transcripts, returns only bounded JSON
+  (`{"intent","modifiers","confidence"}`), and validates that JSON against the
+  existing enums before returning a decision. Confidence is validated finite and
+  within `[0.0, 1.0]`; `reason_code` is always Rust-owned (`SemanticClassifier`).
+
+`SemanticIntentClassifier` composes the real classifier with a structural
+trigger gate. `has_persisted_knowledge` (`knowledge.sqlite` exists) means
+Knowledge is **available**, not that this turn **uses** Knowledge. Knowledge
+available does not imply using Knowledge, but when the intent cannot be
+resolved structurally, the semantic multilingual classifier is the authority.
+`should_classify` / `knowledge_may_apply` (aliased as `knowledge_cue_for_turn`)
+is true when an index exists, this turn has attachments, or a prior referent
+is in scope. The classifier may return `Intent::OrdinaryChat` even when
+Knowledge is persisted. That result is a hard per-turn contract: no retrieval,
+no query embedding, no Knowledge context serialization, no `retrieval_mode=normal`,
+and no fresh RAG session. Knowledge may exist on the project without participating
+in that turn. Local interrogative helpers (`has_open_question_lead`) are retrieval internals,
+not a skip-classifier gate. Follow-up (`resolve_followup`) and creation
+grounding still win before classification. Routing is decided **per turn**:
+adding Knowledge to a project does not lock the conversation into Knowledge
+mode.
+
+Knowledge answers that serialize evidence (`NormalSemantic`,
+`CorpusExhaustive`, `CorpusThematic`) use an ephemeral OpenCode session so
+`<knowledge_evidence>` cannot accumulate on the conversational transcript.
+The answer prompt uses a shared Knowledge grounding contract: evidence is the
+documentary source; cwd/workspace emptiness is not corpus emptiness; source
+labels identify files when present. The OpenCode build agent, tools, and
+session policy are unchanged. `<knowledge_evidence trust="untrusted">` stays
+untrusted as instructions. Visible continuity is reconstructed from a bounded EducAI message window, not
+by unifying `session_id` with OrdinaryChat. Classifier, K6, and PerItem remain
+scratch workers and never share that conversational session.
+
+A later OrdinaryChat in the same conversation uses the cached conversational
+session and must not receive the previous turn's evidence. Follow-ups open a
+new ephemeral Knowledge session and restated bounded visible history; they
+do not reuse the prior RAG transcript. Adding files mid-conversation updates
+the conversation-active material set for the current contract and does not
+lock later turns into Knowledge. Restart drops OpenCode session caches;
+continuity is reconstructed from durable EducAI state, never from a stale
+`session_id`.
+
+On OpenCode unavailability, timeout,
+malformed/unknown/incomplete output, out-of-range confidence, or confidence
+below the conservative threshold (`DEFAULT_MIN_CONFIDENCE = 0.5`), routing falls
+back to `DeterministicAdapter`; a classifier failure can never break a turn.
+The classifier uses the SAME selected conversation model (no new user-facing
+classifier-model setting); a cheaper dedicated classifier model is a later
+option behind the same seam.
+
+The classifier owns **nothing** deterministic: contextual follow-up
+(`resolve_followup`) and creation grounding (`detect_creation_intent` +
+`creation_turn`) remain deterministic pre-gates in `resolve_intent` (a bound
+follow-up is resolved before any classification and the model is never called);
+`SummaryExecutionKind` and the retrieval/exhaustive execution guarantees remain
+Rust invariants; modifiers never influence engine selection. The model may emit
+`Intent::Creation`, but the exact material binding, target resolution,
+explicit-name resolution, current-attachment precedence, and clarification stay
+deterministic (`BoundRoute.creation_request`) and no semantic model returns
+material ids.
+
+A compact/depth clamp guards summary depth at the intent-composition layer
+(`resolve_intent_with` → `clamp_summary_depth`). This is a product invariant,
+not a second classifier: it runs only when a **trusted** semantic decision
+already selected `WholeCorpusSummary` or `PerSourceSummary`. If the
+deterministic local summary detector independently resolves the wording as an
+unequivocal compact per-file request (`PerItemBatchAggregate`, which by
+construction carries no explicit deep/detail cue), that K6 promotion is
+clamped back. OrdinaryChat, NormalSemantic, Exhaustive, Thematic, Inventory,
+and fallback decisions are not re-read through local wording detectors here.
+The classifier is not globally distrusted — explicit deep wording still routes
+to K6. The clamp records structural telemetry (`classifier_intent`,
+`local_summary_intent`, `resolved_summary_intent`, `summary_depth_clamped`,
+`clamp_applied`).
+
+### Phase 3 — intent-resolution precedence
+
+Once a layer authoritatively resolves the intent, later layers may only
+normalize, validate, or apply documented invariants. They must not re-classify
+natural language.
+
+1. Typed follow-up / structural continuity (`resolve_followup`) — skips the
+   classifier.
+2. Creation pre-gate — only the existing unequivocal local contract.
+3. Semantic classifier — multilingual authority when the intent is still open.
+4. Deterministic fallback — only on classifier error, unavailability, or
+   confidence below `DEFAULT_MIN_CONFIDENCE` (0.5). Fallback **replaces** the
+   decision; it never mixes with a trusted semantic result and never upgrades
+   OrdinaryChat to Knowledge after a valid classifier decision.
+5. Clamps / invariants — currently the compact-vs-K6 summary-depth guard.
+6. `BoundRoute` — the single input to `apply_route` / `dispatch_route`.
+
+`[routing]` telemetry records `classifier_invoked`, `classifier_result`,
+`classifier_confidence`, `fallback_used`, `fallback_reason`, `pre_gate_used`,
+`clamp_applied`, `resolved_intent`, and `uses_knowledge` (structural only;
+never prompts or bodies).
+
+Classifier provider usage is recorded separately from answer-generation usage
+(`[classifier] classifier_impl=opencode classifier_result=success|fallback
+classifier_latency_ms classifier_intent classifier_confidence
+classifier_remote_calls classifier_input_tokens classifier_output_tokens
+classifier_cache_read_tokens classifier_fallback
+classifier_fallback_reason`), so the cost of the extra classification call is
+measurable. A normal Knowledge turn with successful remote classification now
+costs one classifier call plus the final answer call (or zero final calls for a
+local-answer intent such as `KnowledgeInventory`).
+
+A table-driven golden classifier-evaluation harness (`project_app::eval`)
+distinguishes the deterministic dataset (`deterministic_golden_cases`, current
+behavior preserved) from the semantic dataset (`semantic_golden_cases`, desired
+behavior) and reports per-case metrics (language, expected/actual intent and
+modifiers, confidence, latency, provider usage, fallback). The semantic dataset
+is grouped by intent and language (`es`, `en`, `pt`, `fr`, `de`, `it`, `ja`,
+`zh`, `ar`).
+
+Defect status: (A) **resolved** — "resumen general … temas principales …
+cronológicamente" now classifies as `BatchSummary` with `HighlightMainTopics` +
+`ChronologicalOrder` modifiers (not `CorpusThematic`); (B) **resolved** — the
+compact per-source route is now a distinct `PerItemBatchAggregate` intent
+(`summary_mode=per_item_batch_aggregate`), separate from the generic
+`BatchSummary` aggregate and the deep `PerSourceSummary` K6 route; (C)
+**unchanged** — fresh current attachments vs prior `MaterialSet` precedence is
+unchanged.
+
+`dispatch_message_run` guarantees the invariant that a turn is fully
+bound/applied for the route it carries before `dispatch_route` executes: a
+missing route is resolved AND applied (follow-up scope, creation context,
+Knowledge preparation) in place. The contextual follow-up binding has a single
+authoritative owner (`BoundRoute.followup`); `AgentRunInputs` no longer carries
+a duplicate field, so the binding cannot diverge.

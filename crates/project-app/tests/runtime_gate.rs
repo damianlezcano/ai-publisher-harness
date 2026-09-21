@@ -419,7 +419,7 @@ fn durable_completed_turn_survives_disk_restart_without_session_log() {
     let accepted = state
         .send_staged_message_persist(
             &project.id,
-            "Knowledge",
+            "¿En qué archivos aparece Knowledge?",
             &[source.to_string_lossy().to_string()],
             &[],
         )
@@ -754,6 +754,14 @@ fn h_privacy_no_prompt_or_body_in_metrics() {
         exhaustive_coverage: Some("not_requested".into()),
         lexical_hits: None,
         semantic_hits: None,
+        local_mode: None,
+        contextual_followup: None,
+        referent_type: None,
+        referent_count: None,
+        origin_turn_id: None,
+        base_intent: None,
+        turn_kind: None,
+        source_names: Vec::new(),
     };
     let json = serde_json::to_value(&metrics).unwrap();
     let text = serde_json::to_string(&json).unwrap();
@@ -798,6 +806,7 @@ fn h_privacy_no_prompt_or_body_in_metrics() {
         "exhaustiveCoverage",
         "lexicalHits",
         "semanticHits",
+        "sourceNames",
     ];
     let keys: Vec<&str> = json
         .as_object()
