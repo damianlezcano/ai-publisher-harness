@@ -23,10 +23,10 @@ require_heading() {
 
 for file in \
   CODEX_HANDOFF.md AGENTS.md README.md \
-  docs/PRODUCT.md docs/ARCHITECTURE.md docs/SECURITY.md docs/UX.md \
-  docs/DEFINITION_OF_DONE.md docs/TESTING.md docs/VERIFY.md docs/REQUIREMENTS.md \
-  docs/WORKTREES.md docs/MULTI_AGENT_WORKFLOW.md docs/HARNESS_REVIEW.md \
-  docs/HARNESS_ENGINEERING.md docs/architecture-contracts/README.md \
+  docs/product/PRODUCT.md docs/architecture/ARCHITECTURE.md docs/product/SECURITY.md docs/product/UX.md \
+  docs/engineering/DEFINITION_OF_DONE.md docs/engineering/TESTING.md docs/engineering/VERIFY.md docs/engineering/REQUIREMENTS.md \
+  docs/engineering/WORKTREES.md docs/engineering/MULTI_AGENT_WORKFLOW.md docs/history/reviews/harness-m0-review.md \
+  docs/engineering/HARNESS_ENGINEERING.md docs/architecture-contracts/README.md \
   docs/decisions/README.md \
   skills/implement-feature/SKILL.md skills/review-feature/SKILL.md \
   skills/review-architecture/SKILL.md skills/verify-ui/SKILL.md; do
@@ -38,11 +38,11 @@ for script in scripts/bootstrap scripts/verify scripts/architecture-verify scrip
   bash -n "$script" || fail "shell syntax check failed: $script"
 done
 
-require_heading docs/TESTING.md '## Required test levels'
-require_heading docs/VERIFY.md '## Contract by milestone'
-require_heading docs/WORKTREES.md '## Checkout ownership'
-require_heading docs/MULTI_AGENT_WORKFLOW.md '## Herdr delegation'
-require_heading docs/HARNESS_REVIEW.md '## Resolved gaps'
+require_heading docs/engineering/TESTING.md '## Required test levels'
+require_heading docs/engineering/VERIFY.md '## Contract by milestone'
+require_heading docs/engineering/WORKTREES.md '## Checkout ownership'
+require_heading docs/engineering/MULTI_AGENT_WORKFLOW.md '## Herdr delegation'
+require_heading docs/history/reviews/harness-m0-review.md '## Resolved gaps'
 
 printf 'verify: scripts/test-agent-launch\n'
 ./scripts/test-agent-launch
@@ -282,9 +282,9 @@ printf 'verify: M10 version alignment: %s\n' "$m10_version"
 
 # --- UX_REDESIGN_01: closure gate ---------------------------------------------
 
-require_file docs/ux-redesign-01/RESULTS.md
-require_file docs/ux-redesign-01/harness/run.sh
-require_heading docs/ux-redesign-01/RESULTS.md '## Per-flow assertion matrix'
+require_file docs/history/ux/ux-redesign-01/evidence/RESULTS.md
+require_file docs/history/ux/ux-redesign-01/evidence/harness/run.sh
+require_heading docs/history/ux/ux-redesign-01/evidence/RESULTS.md '## Per-flow assertion matrix'
 require_file docs/decisions/0014-durable-conversation-history-in-project-aggregate.md
 require_file docs/decisions/0015-deterministic-free-model-discovery.md
 

@@ -1,37 +1,10 @@
-Actuá como agente de ingeniería de EducAI.
+New EducAI engineering session.
 
-Antes de modificar archivos:
+1. Read `CODEX_HANDOFF.md`, then `AGENTS.md`.
+2. Follow the authority order those files name (product → harness docs under
+   `docs/` → selected requirement under `tasks/` → `RUNTIME.md` only when
+   routing a role).
+3. Do not treat this file as policy, architecture, or durable state.
 
-Usá este único orden de autoridad. Distingue restricciones de producto,
-operación del Harness, contexto local de tarea y configuración runtime;
-un grupo posterior nunca reemplaza a uno anterior.
-
-1. **Restricciones y arquitectura de producto:** `CODEX_HANDOFF.md`,
-   `docs/PRODUCT.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
-   `docs/UX.md`, y luego los ADRs en `docs/decisions/`.
-2. **Reglas operativas del Harness:** `AGENTS.md`,
-   `docs/HARNESS_ENGINEERING.md`, `docs/AGENT_POLICY.md`,
-   `docs/MULTI_AGENT_WORKFLOW.md`, `docs/WORKTREES.md`, `docs/TESTING.md`,
-   `docs/VERIFY.md`, `docs/DEFINITION_OF_DONE.md`,
-   `docs/PLATFORM_POLICY.md` y `docs/DISTRIBUTION.md`.
-3. **Contexto de requirement y tarea:** `docs/REQUIREMENTS.md`, el
-   requirement seleccionado y su contrato de tarea acotado bajo `tasks/`, los
-   Architecture Contracts afectados y `docs/CURRENT_CHECKPOINT.md`.
-4. **Configuración runtime:** `RUNTIME.md`, y después
-   `config/agent-models.env` si el rol asignado necesita routing de ejecución.
-   Son insumos operativos; nunca autoridad de producto ni de metodología.
-
-Para trabajo de Harness, `docs/HARNESS_ENGINEERING.md` es la metodología
-canónica vigente. `examples/README.md` es sólo trazabilidad histórica.
-5. Confirmá el baseline y el estado del árbol con Git. No toques archivos
-   locales/untracked fuera del scope.
-6. Antes de editar, declarar el requirement/milestone, paths propios, criterios de
-   aceptación, comandos de verificación y autor/reviewer.
-7. No rediseñes arquitectura protegida. Si un cambio requiere violar un
-   invariante, detenete y reportá `ARCHITECTURE_CHANGE_REQUIRED`.
-8. Ejecutá los checks relevantes y cerrá con `CI=true ./scripts/verify`.
-9. No declares `PASS`, `DONE` ni aprobación arquitectónica desde el rol Worker;
-   la revisión debe ser independiente.
-
-El baseline funcional actual es `015d466`. Seleccioná trabajo nuevo sólo desde
-el backlog/requirement vigente y respetá los gates humanos cuando correspondan.
+When a requirement ID is named (for example `Implementar REQ-XXXX.`), that is
+a complete Orchestrator assignment: execute `prompts/orchestrator.md`.

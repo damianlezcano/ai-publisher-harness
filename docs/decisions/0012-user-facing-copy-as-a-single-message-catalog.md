@@ -35,7 +35,7 @@ system must not require re-touching every component or re-auditing terminology.
    to make error recovery actionable.
 
 4. **Terminology lives above the code.** The canonical user-facing vocabulary is
-   defined in `docs/UX.md` (higher in the source-of-truth order than ADRs); the
+   defined in `docs/product/UX.md` (higher in the source-of-truth order than ADRs); the
    catalog is its executable reflection. Changing a term is a UX.md change first,
    then a catalog edit.
 

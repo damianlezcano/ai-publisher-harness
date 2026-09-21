@@ -33,7 +33,7 @@ architecture gate.
 ## Owned / allowed paths
 
 - `AGENTS.md`, `CODEX_HANDOFF.md`, `README.md`, `START_CODEX.txt`, `RUNTIME.md`
-- `docs/HARNESS_ENGINEERING.md`, `docs/REQUIREMENTS.md`,
+- `docs/engineering/HARNESS_ENGINEERING.md`, `docs/engineering/REQUIREMENTS.md`,
   `docs/architecture-contracts/`, and Harness-policy documentation
 - `examples/README.md`, `prompts/`, `tasks/`, `scripts/architecture-verify`,
   `scripts/verify`
@@ -53,7 +53,7 @@ architecture gate.
 
 ## Acceptance criteria
 
-- Entry points name `docs/HARNESS_ENGINEERING.md` as the current canonical methodology; `examples/README.md` is historical only.
+- Entry points name `docs/engineering/HARNESS_ENGINEERING.md` as the current canonical methodology; `examples/README.md` is historical only.
 - Methodology retains Prompt, Context, Harness, Evaluation, Loop and Graph Engineering, is neutral to runtime providers/models, uses current commands, and labels TaskBoard historical/non-normative.
 - This active requirement has reviewable lifecycle/evidence and bounded task contracts without invented approvals.
 - Every AC has an individual contract document with required fields and a concrete existing test selector.

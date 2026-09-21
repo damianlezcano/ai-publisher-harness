@@ -2,7 +2,7 @@
 
 Roles are stable; providers, models, and launch mechanisms are operational
 configuration. The current executable mapping is `config/agent-models.env` and
-the governing routing/cost policy is `docs/AGENT_POLICY.md`.
+the governing routing/cost policy is `docs/engineering/AGENT_POLICY.md`.
 
 ## Routing
 
@@ -24,5 +24,5 @@ make architecture or product behavior depend on a particular provider/model.
 - `RELEASE_HUMAN`: release-level distribution/product approval is required.
 
 The applicable gate is declared by the requirement; it is additive to tests and
-review. See `docs/TESTING.md`, `docs/VERIFY.md`, and the relevant release
+review. See `docs/engineering/TESTING.md`, `docs/engineering/VERIFY.md`, and the relevant release
 documents.

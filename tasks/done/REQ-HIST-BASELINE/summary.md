@@ -2,7 +2,7 @@
 
 Baseline: `015d466` (`main == origin/main` when inspected).
 
-Evidence in Git, `docs/CURRENT_CHECKPOINT.md`, `docs/ARCHITECTURE.md`, and
+Evidence in Git, `docs/CURRENT_CHECKPOINT.md`, `docs/architecture/ARCHITECTURE.md`, and
 named suites establishes these completed blocks: turn routing; OrdinaryChat /
 Knowledge separation; semantic authority and exclusive fallback; bounded
 continuity and session roles; material scope; Creation session boundary;

@@ -4,7 +4,7 @@
 - Author / reviewer: original author identity not evidenced / new independent reviewer required.
 - Objective: align entry points on the canonical Harness methodology.
 - Owned paths: `README.md`, `START_CODEX.txt`, `CODEX_HANDOFF.md`, `AGENTS.md`, `examples/README.md`.
-- Allowed paths: `docs/HARNESS_ENGINEERING.md`; Prohibited paths: product code and authorities.
+- Allowed paths: `docs/engineering/HARNESS_ENGINEERING.md`; Prohibited paths: product code and authorities.
 - Affected contracts: `None` (governance only); ADR/change control: `None`.
 - Acceptance: no transitional authority; examples are historical only.
 - Commands: `rg -n -i 'until then|when exista|durante su migración|M0-only' README.md START_CODEX.txt CODEX_HANDOFF.md AGENTS.md examples/README.md`; `git diff --check`.

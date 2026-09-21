@@ -3,7 +3,7 @@
 - Requirement: `REQ-HARNESS-001`; Base SHA: `015d466`; Status: `PASS`; Human gate: `NO_HUMAN`.
 - Author / reviewer: original author identity not evidenced / new independent reviewer required.
 - Objective: distinguish evidenced historical baseline work from uncommitted future ideas.
-- Owned paths: `tasks/done/`, `tasks/backlog/`, `tasks/future/`, `docs/REQUIREMENTS.md`.
+- Owned paths: `tasks/done/`, `tasks/backlog/`, `tasks/future/`, `docs/engineering/REQUIREMENTS.md`.
 - Allowed paths: `tasks/active/REQ-HARNESS-001/`; Prohibited paths: product code and M11 implementation.
 - Affected contracts: `None`; ADR/change control: `None`.
 - Acceptance: M11 is future until separately approved; no historical approval is invented.

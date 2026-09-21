@@ -27,4 +27,4 @@ Normal work that needs to change an invariant stops with
 tests and gate, independent review, and explicit human approval.
 
 Current protection is local executable gating plus documentary/process control;
-it is not diff-aware technical prevention. See `docs/HARNESS_ENGINEERING.md`.
+it is not diff-aware technical prevention. See `docs/engineering/HARNESS_ENGINEERING.md`.

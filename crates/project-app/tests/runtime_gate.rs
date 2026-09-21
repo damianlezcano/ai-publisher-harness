@@ -5,7 +5,7 @@
 //! `run_accepted_staged_turn` (derived Knowledge work + terminal agent step) —
 //! WITHOUT graphical clicks. The only replaced boundary is the *external*
 //! provider edge (`FakeAgentEngine`), which is exactly the deterministic
-//! offline split the project's test convention mandates (`docs/TESTING.md`:
+//! offline split the project's test convention mandates (`docs/engineering/TESTING.md`:
 //! "local fakes for external processes"). The real model/K6 remote synthesis
 //! boundary and real E5 embeddings are the §12 human gate, exercised by the
 //! real AppImage run, not by this offline harness.

@@ -38,13 +38,13 @@ The following boundaries are protected:
 - The default UX must not expose implementation concepts such as ports,
   tunnels, provider credentials, servers, filesystem paths, or model IDs.
 
-`docs/SECURITY.md`, `docs/ARCHITECTURE.md`, and `docs/UX.md` define the full
+`docs/product/SECURITY.md`, `docs/architecture/ARCHITECTURE.md`, and `docs/product/UX.md` define the full
 invariants. This summary does not replace them.
 
 ## Protected conversation and Knowledge architecture
 
 The baseline also protects the turn-routing and Knowledge architecture recorded
-in `docs/ARCHITECTURE.md`, `docs/KNOWLEDGE_ARCHITECTURE.md`, and
+in `docs/architecture/ARCHITECTURE.md`, `docs/architecture/KNOWLEDGE_ARCHITECTURE.md`, and
 `docs/CURRENT_CHECKPOINT.md`. In particular, do not casually alter:
 
 - OrdinaryChat isolation, semantic classifier authority, exclusive fallback,
@@ -67,22 +67,22 @@ Use this single authority order. It distinguishes product constraints from
 Harness operation, task-local context, and changeable runtime configuration;
 later groups never override an earlier one.
 
-1. **Product constraints and architecture:** this handoff, `docs/PRODUCT.md`,
-   `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/UX.md`, then ADRs in
+1. **Product constraints and architecture:** this handoff, `docs/product/PRODUCT.md`,
+   `docs/architecture/ARCHITECTURE.md`, `docs/product/SECURITY.md`, `docs/product/UX.md`, then ADRs in
    `docs/decisions/`.
-2. **Harness operating rules:** `AGENTS.md`, `docs/HARNESS_ENGINEERING.md`,
-   `docs/AGENT_POLICY.md`, `docs/MULTI_AGENT_WORKFLOW.md`,
-   `docs/WORKTREES.md`, `docs/TESTING.md`, `docs/VERIFY.md`,
-   `docs/DEFINITION_OF_DONE.md`, `docs/PLATFORM_POLICY.md`, and
-   `docs/DISTRIBUTION.md`.
-3. **Requirement and task context:** `docs/REQUIREMENTS.md`, the selected
+2. **Harness operating rules:** `AGENTS.md`, `docs/engineering/HARNESS_ENGINEERING.md`,
+   `docs/engineering/AGENT_POLICY.md`, `docs/engineering/MULTI_AGENT_WORKFLOW.md`,
+   `docs/engineering/WORKTREES.md`, `docs/engineering/TESTING.md`, `docs/engineering/VERIFY.md`,
+   `docs/engineering/DEFINITION_OF_DONE.md`, `docs/distribution/PLATFORM_POLICY.md`, and
+   `docs/distribution/DISTRIBUTION.md`.
+3. **Requirement and task context:** `docs/engineering/REQUIREMENTS.md`, the selected
    requirement and bounded task contract under `tasks/`, affected Architecture
    Contracts, and `docs/CURRENT_CHECKPOINT.md`.
 4. **Runtime configuration:** `RUNTIME.md`, then `config/agent-models.env`
    when the assigned role needs execution routing. These are operational inputs,
    never product or Harness-methodology authority.
 
-`docs/HARNESS_ENGINEERING.md` is the canonical methodology for prompt,
+`docs/engineering/HARNESS_ENGINEERING.md` is the canonical methodology for prompt,
 context, Harness, evaluation, loop, and graph engineering.
 `examples/README.md` is historical/example traceability only; it is not a
 methodology authority.
@@ -111,6 +111,6 @@ replacement for the local gate.
 
 The initial distribution target is Linux x86_64, with AppImage built in the
 controlled Ubuntu 24.04 root; Windows x64 portability and native packaging are
-governed by `docs/PLATFORM_POLICY.md`. Sidecar versions are pinned and checked.
+governed by `docs/distribution/PLATFORM_POLICY.md`. Sidecar versions are pinned and checked.
 Future work must preserve portability without introducing platform-specific
 behavior outside an approved requirement.

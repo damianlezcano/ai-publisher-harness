@@ -4,16 +4,16 @@
 
 Read `CODEX_HANDOFF.md`, then these sources in order:
 
-1. `docs/PRODUCT.md`
-2. `docs/ARCHITECTURE.md`
-3. `docs/SECURITY.md`
-4. `docs/UX.md`
+1. `docs/product/PRODUCT.md`
+2. `docs/architecture/ARCHITECTURE.md`
+3. `docs/product/SECURITY.md`
+4. `docs/product/UX.md`
 5. ADRs in `docs/decisions/`
 
 If code, a task, or a request conflicts with this order, stop and resolve the
-conflict. `docs/HARNESS_ENGINEERING.md` is the canonical methodology; detailed operating
-policy lives in `docs/AGENT_POLICY.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
-`docs/WORKTREES.md`.
+conflict. `docs/engineering/HARNESS_ENGINEERING.md` is the canonical methodology; detailed operating
+policy lives in `docs/engineering/AGENT_POLICY.md`, `docs/engineering/MULTI_AGENT_WORKFLOW.md`, and
+`docs/engineering/WORKTREES.md`.
 
 ## Roles and context
 
@@ -29,7 +29,8 @@ prompt may hardcode a provider or model.
 
 ## Protected architecture
 
-Protected paths include `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, ADRs,
+Protected paths include `docs/architecture/ARCHITECTURE.md`,
+`docs/product/SECURITY.md`, ADRs in `docs/decisions/`,
 `docs/architecture-contracts/`, and their gates/tests. Protected behavior
 includes publication isolation and the conversation/Knowledge invariants named
 in `CODEX_HANDOFF.md`.
@@ -49,7 +50,7 @@ Requirements enter `tasks/backlog/`. The Orchestrator moves a selected
 requirement to `tasks/active/<REQ-ID>/`, creates bounded task contracts there,
 and moves it to `tasks/done/<REQ-ID>/` only after verification, independent
 review, and its declared human gate. Non-committed ideas stay in `tasks/future/`.
-See `docs/REQUIREMENTS.md` and `tasks/TASK_CONTRACT_TEMPLATE.md`.
+See `docs/engineering/REQUIREMENTS.md` and `tasks/TASK_CONTRACT_TEMPLATE.md`.
 
 Before editing, state milestone/requirement, exact owned paths, acceptance
 criteria, verification commands, and planned author/reviewer. One implementation
