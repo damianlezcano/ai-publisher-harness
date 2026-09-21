@@ -21,6 +21,10 @@ Las instrucciones persistentes son contratos por rol: `prompts/orchestrator.md`,
 forma de handoff y condiciones de detención. Un prompt no sustituye una
 autoridad del repositorio ni autoriza cambios fuera de la tarea.
 
+El flujo ejecutable del Orchestrator, incluida la intención corta
+«Implementar REQ-XXXX.», vive sólo en `prompts/orchestrator.md`. Los demás
+documentos apuntan a ese contrato en lugar de copiarlo.
+
 ### Context Engineering
 
 Cada rol recibe sólo el contexto necesario:

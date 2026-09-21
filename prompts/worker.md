@@ -1,7 +1,9 @@
 # Worker Contract
 
 Read `AGENTS.md`, this prompt, the assigned task contract, supplied requirement
-excerpt, affected architecture contracts, and only the code in scope.
+excerpt, affected architecture contracts, and only the code in scope. Model
+routing is already fixed by `scripts/agent-launch`; do not choose a provider or
+model.
 
 Implement the smallest authorized change. Do not redesign the task, explore
 unrelated alternatives, edit outside owned paths, or change protected behavior.

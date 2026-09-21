@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+status_for() {
+  ./scripts/requirement-status "$1"
+}
+
+output=$(status_for REQ-DOCS-001)
+grep -Fxq 'REQ_ID: REQ-DOCS-001' <<<"$output"
+grep -Fxq 'STATE: ACTIVE' <<<"$output"
+grep -Fxq 'PATH: tasks/active/REQ-DOCS-001' <<<"$output"
+grep -Fxq 'EXECUTABLE: yes' <<<"$output"
+grep -Fxq 'ACTION: CONTINUE' <<<"$output"
+grep -Fq 'TASK-D1-inventory-taxonomy.md' <<<"$output"
+
+output=$(status_for REQ-HARNESS-002)
+grep -Fxq 'STATE: DONE' <<<"$output"
+grep -Fxq 'EXECUTABLE: no' <<<"$output"
+grep -Fxq 'ACTION: REJECT' <<<"$output"
+
+output=$(status_for REQ-HARNESS-001)
+grep -Fxq 'STATE: DONE' <<<"$output"
+grep -Fxq 'EXECUTABLE: no' <<<"$output"
+grep -Fxq 'ACTION: REJECT' <<<"$output"
+
+output=$(status_for REQ-M11-COMPONENT-UPDATES)
+grep -Fxq 'STATE: FUTURE' <<<"$output"
+grep -Fxq 'EXECUTABLE: no' <<<"$output"
+grep -Fxq 'ACTION: REJECT' <<<"$output"
+
+if ./scripts/requirement-status REQ-DOES-NOT-EXIST >/tmp/requirement-status-missing.out; then
+  echo "test-requirement-status: expected UNKNOWN to fail" >&2
+  exit 1
+fi
+grep -Fxq 'STATE: UNKNOWN' /tmp/requirement-status-missing.out
+
+if ./scripts/requirement-status 'not-an-id' >/dev/null 2>&1; then
+  echo "test-requirement-status: expected invalid id to fail" >&2
+  exit 1
+fi

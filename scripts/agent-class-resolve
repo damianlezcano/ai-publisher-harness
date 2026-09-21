@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/agent-class-resolve --class orchestrator|worker|reviewer [--tier TIER]
+
+Map a Harness role class onto scripts/agent-launch --role/--provider.
+Does not print model IDs; those come from config/agent-models.env via agent-launch.
+
+Tiers:
+  worker:    cheap (default; primary OpenCode Go, Cursor last-resort fallback)
+             | coding | fallback | visual
+  reviewer:  independent (default) | escalation | architecture
+  orchestrator: strong (default; only valid tier)
+EOF
+}
+
+class=""
+tier=""
+
+while (($#)); do
+  case "$1" in
+    --class) class=${2:?}; shift 2 ;;
+    --tier) tier=${2:?}; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "agent-class-resolve: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[[ -n $class ]] || { usage >&2; exit 2; }
+
+launch_role=""
+launch_provider=""
+fallback_launch_role=""
+fallback_launch_provider=""
+
+case "$class" in
+  orchestrator)
+    tier=${tier:-strong}
+    [[ $tier == strong ]] || {
+      echo "agent-class-resolve: orchestrator only accepts --tier strong" >&2
+      exit 2
+    }
+    launch_role=medium
+    launch_provider=opencode
+    ;;
+  worker)
+    tier=${tier:-cheap}
+    case "$tier" in
+      cheap)
+        launch_role=low
+        launch_provider=opencode
+        fallback_launch_role=low
+        fallback_launch_provider=cursor
+        ;;
+      coding) launch_role=high-coding; launch_provider=opencode ;;
+      fallback) launch_role=medium-high; launch_provider=cursor ;;
+      visual) launch_role=high-visual; launch_provider=cursor ;;
+      *) echo "agent-class-resolve: unsupported worker tier: $tier" >&2; exit 2 ;;
+    esac
+    ;;
+  reviewer)
+    tier=${tier:-independent}
+    case "$tier" in
+      independent) launch_role=review; launch_provider=opencode ;;
+      escalation) launch_role=high-review; launch_provider=opencode ;;
+      architecture) launch_role=high-architecture; launch_provider=opencode ;;
+      *) echo "agent-class-resolve: unsupported reviewer tier: $tier" >&2; exit 2 ;;
+    esac
+    ;;
+  *)
+    echo "agent-class-resolve: unsupported class: $class" >&2
+    exit 2
+    ;;
+esac
+
+printf 'HARNESS_CLASS: %s\nHARNESS_TIER: %s\nLAUNCH_ROLE: %s\nLAUNCH_PROVIDER: %s\n' \
+  "$class" "$tier" "$launch_role" "$launch_provider"
+if [[ -n $fallback_launch_role && -n $fallback_launch_provider ]]; then
+  printf 'FALLBACK_LAUNCH_ROLE: %s\nFALLBACK_LAUNCH_PROVIDER: %s\n' \
+    "$fallback_launch_role" "$fallback_launch_provider"
+fi
+printf 'POLICY: RUNTIME.md\nCONFIG: config/agent-models.env\nLAUNCHER: scripts/agent-launch\n'

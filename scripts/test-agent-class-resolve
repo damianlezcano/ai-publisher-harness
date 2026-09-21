@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+check() {
+  local class=$1
+  local extra=()
+  shift
+  if (($#)); then
+    extra=("$@")
+  fi
+  ./scripts/agent-class-resolve --class "$class" "${extra[@]}"
+}
+
+output=$(check orchestrator)
+grep -Fxq 'HARNESS_CLASS: orchestrator' <<<"$output"
+grep -Fxq 'HARNESS_TIER: strong' <<<"$output"
+grep -Fxq 'LAUNCH_ROLE: medium' <<<"$output"
+grep -Fxq 'LAUNCH_PROVIDER: opencode' <<<"$output"
+if grep -q '^FALLBACK_LAUNCH_' <<<"$output"; then
+  echo "test-agent-class-resolve: orchestrator must not emit a cheap Cursor fallback" >&2
+  exit 1
+fi
+
+output=$(check worker)
+grep -Fxq 'HARNESS_TIER: cheap' <<<"$output"
+grep -Fxq 'LAUNCH_ROLE: low' <<<"$output"
+grep -Fxq 'LAUNCH_PROVIDER: opencode' <<<"$output"
+grep -Fxq 'FALLBACK_LAUNCH_ROLE: low' <<<"$output"
+grep -Fxq 'FALLBACK_LAUNCH_PROVIDER: cursor' <<<"$output"
+# Precedence: OpenCode Go is the default cheap provider; Cursor is last-resort only.
+if grep -Fxq 'LAUNCH_PROVIDER: cursor' <<<"$output"; then
+  echo "test-agent-class-resolve: worker cheap must not resolve Cursor as the primary provider" >&2
+  exit 1
+fi
+
+output=$(check worker --tier coding)
+grep -Fxq 'LAUNCH_ROLE: high-coding' <<<"$output"
+grep -Fxq 'LAUNCH_PROVIDER: opencode' <<<"$output"
+
+output=$(check worker --tier fallback)
+grep -Fxq 'LAUNCH_ROLE: medium-high' <<<"$output"
+grep -Fxq 'LAUNCH_PROVIDER: cursor' <<<"$output"
+
+output=$(check reviewer)
+grep -Fxq 'HARNESS_TIER: independent' <<<"$output"
+grep -Fxq 'LAUNCH_ROLE: review' <<<"$output"
+grep -Fxq 'LAUNCH_PROVIDER: opencode' <<<"$output"
+if grep -q '^FALLBACK_LAUNCH_' <<<"$output"; then
+  echo "test-agent-class-resolve: independent reviewer must not emit a cheap Cursor fallback" >&2
+  exit 1
+fi
+
+output=$(check reviewer --tier escalation)
+grep -Fxq 'LAUNCH_ROLE: high-review' <<<"$output"
+
+if grep -E 'MODEL_|opencode-go/|composer-2.5|gpt-|qwen|kimi|deepseek' <<<"$(check worker --tier coding)"; then
+  echo "test-agent-class-resolve: must not print model IDs" >&2
+  exit 1
+fi
+
+# Class mapping must be consumable by the existing launcher config check.
+map_output=$(check worker --tier cheap)
+role=$(awk -F': ' '/^LAUNCH_ROLE: / { print $2 }' <<<"$map_output")
+provider=$(awk -F': ' '/^LAUNCH_PROVIDER: / { print $2 }' <<<"$map_output")
+fallback_role=$(awk -F': ' '/^FALLBACK_LAUNCH_ROLE: / { print $2 }' <<<"$map_output")
+fallback_provider=$(awk -F': ' '/^FALLBACK_LAUNCH_PROVIDER: / { print $2 }' <<<"$map_output")
+[[ $role == low && $provider == opencode ]]
+[[ $fallback_role == low && $fallback_provider == cursor ]]
+launch_output=$(./scripts/agent-launch --role "$role" --provider "$provider" --check-config)
+grep -Fxq 'REASONING_LEVEL: low' <<<"$launch_output"
+grep -Fxq 'AGENT_PROVIDER: opencode' <<<"$launch_output"
+grep -Fq 'MODEL_REQUESTED:' <<<"$launch_output"
+fallback_launch_output=$(./scripts/agent-launch --role "$fallback_role" --provider "$fallback_provider" --check-config)
+grep -Fxq 'REASONING_LEVEL: low' <<<"$fallback_launch_output"
+grep -Fxq 'AGENT_PROVIDER: cursor' <<<"$fallback_launch_output"
+grep -Fq 'MODEL_REQUESTED:' <<<"$fallback_launch_output"
+
+if ./scripts/agent-class-resolve --class worker --tier nosuch >/dev/null 2>&1; then
+  echo "test-agent-class-resolve: expected unknown tier to fail" >&2
+  exit 1
+fi

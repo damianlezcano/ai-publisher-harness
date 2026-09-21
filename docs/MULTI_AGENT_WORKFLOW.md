@@ -54,6 +54,26 @@ After the author commits, a different agent receives the commit/diff in its own
 review checkout and returns only actionable findings and a decision. The lead
 owns integration and runs `./scripts/verify` after every integration batch.
 
+When to delegate, what context a Worker receives, and when to stop for review
+are defined in `prompts/orchestrator.md`. This section is only the Herdr launch
+mechanism.
+
+## Confirming delegated workers
+
+After `scripts/agent-launch --launch` succeeds, confirm secondary agents from
+inside the same Herdr session (`HERDR_ENV=1`). Inspect `herdr --help` and the
+`agent` / `pane` groups rather than guessing flags. Expect:
+
+- the Orchestrator pane still occupied by the lead;
+- one additional pane/agent per launched Worker or Reviewer, with the `--name`
+  passed to `agent-launch`;
+- `MODEL_REQUESTED == MODEL_ACTUAL` on the launcher stdout from that launch.
+
+A later audit can list live agents/panes with the installed `herdr agent` and
+`herdr pane` commands and match names/pane IDs recorded in the task handoff.
+Absence of a secondary pane means delegation did not occur (including
+`DELEGATION_UNAVAILABLE` when `HERDR_ENV` is not set).
+
 ## Example task sequence
 
 1. Lead classifies the task and creates `m2/publisher-route-guard` worktree,

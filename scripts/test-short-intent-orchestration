@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+require_contains() {
+  local file=$1
+  local needle=$2
+  rg -Fq -- "$needle" "$file" || {
+    echo "test-short-intent-orchestration: missing '$needle' in $file" >&2
+    exit 1
+  }
+}
+
+require_missing() {
+  local file=$1
+  local needle=$2
+  if rg -Fq -- "$needle" "$file"; then
+    echo "test-short-intent-orchestration: '$needle' must not appear in $file" >&2
+    exit 1
+  fi
+}
+
+[[ -f prompts/orchestrator.md ]]
+[[ -f START_CODEX.txt ]]
+[[ -x scripts/requirement-status ]]
+[[ -x scripts/agent-class-resolve ]]
+
+# Orchestrator contract is the workflow authority.
+for needle in \
+  '## Short intent' \
+  'Implementar REQ-' \
+  'scripts/requirement-status' \
+  'MOVE_TO_ACTIVE' \
+  'scripts/agent-class-resolve' \
+  'scripts/agent-launch' \
+  '--launch' \
+  'HERDR_ENV' \
+  'IN_REVIEW' \
+  'independent Reviewer' \
+  'must not self-review' \
+  'human gate' \
+  'MODEL_REQUESTED' \
+  'MODEL_ACTUAL' \
+  'prompts/worker.md' \
+  'close completed secondary panes'; do
+  require_contains prompts/orchestrator.md "$needle"
+done
+
+require_contains AGENTS.md 'prompts/orchestrator.md'
+require_contains AGENTS.md 'Implementar REQ-'
+require_contains docs/HARNESS_ENGINEERING.md 'prompts/orchestrator.md'
+require_contains docs/REQUIREMENTS.md 'prompts/orchestrator.md'
+require_contains RUNTIME.md 'scripts/agent-class-resolve'
+require_contains RUNTIME.md '`low` / `opencode`'
+require_contains RUNTIME.md '`low` / `cursor`'
+require_contains RUNTIME.md 'OpenCode Go first'
+require_contains RUNTIME.md 'FALLBACK_LAUNCH_'
+require_contains docs/MULTI_AGENT_WORKFLOW.md 'Confirming delegated workers'
+
+# Bootstrap must point at the contract and must not carry the procedure.
+start_lines=$(wc -l < START_CODEX.txt)
+if (( start_lines > 24 )); then
+  echo "test-short-intent-orchestration: START_CODEX.txt is too long ($start_lines lines)" >&2
+  exit 1
+fi
+require_contains START_CODEX.txt 'prompts/orchestrator.md'
+require_contains START_CODEX.txt 'Implementar REQ-'
+require_missing START_CODEX.txt 'scripts/agent-launch'
+require_missing START_CODEX.txt 'MOVE_TO_ACTIVE'
+require_missing START_CODEX.txt 'IN_REVIEW'
+
+# Handoff must not be a second copy of the Orchestrator procedure.
+require_contains CODEX_HANDOFF.md 'prompts/orchestrator.md'
+require_missing CODEX_HANDOFF.md 'scripts/agent-class-resolve'
+
+# Lifecycle helper remains executable. This requirement must not have closed
+# REQ-DOCS-001 (a later independent selection may already be Active).
+[[ -x scripts/requirement-status ]]
+done_state=$(./scripts/requirement-status REQ-HARNESS-001 | awk -F': ' '/^STATE: / { print $2 }')
+[[ $done_state == DONE ]]
+[[ ! -d tasks/done/REQ-DOCS-001 ]]

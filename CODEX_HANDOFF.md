@@ -89,12 +89,9 @@ methodology authority.
 
 ## Continuing work
 
-Before editing, identify the milestone or requirement, exact owned paths,
-acceptance criteria, verification commands, and author/reviewer assignment.
-Use a separate worktree for an implementation task; keep the integration
-checkout lead-owned. A Worker implements only its task contract, a Reviewer is
-independent and returns `PASS` or `REWORK`, and the Orchestrator closes work
-only after required gates and human review where applicable.
+Orchestrator execution lives in `prompts/orchestrator.md`. This handoff is not
+that procedure. A short intent that names a requirement (for example
+`Implementar REQ-XXXX.`) is enough to start it.
 
 Run the focused checks for the affected surface and finish with:
 

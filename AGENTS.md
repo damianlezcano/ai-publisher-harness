@@ -23,9 +23,16 @@ policy lives in `docs/AGENT_POLICY.md`, `docs/MULTI_AGENT_WORKFLOW.md`, and
 | Worker | this file, `prompts/worker.md`, assigned task, requirement excerpt, affected contracts, owned code | implementation inside task scope | change architecture, claim PASS/DONE/approval, edit outside ownership |
 | Reviewer | this file, `prompts/reviewer.md`, requirement/task, affected contracts, exact base/diff and evidence | PASS or REWORK | author the fix or review their own work |
 
-Prompts define the persistent role contracts. `RUNTIME.md` and
+Prompts define the persistent role contracts. The Orchestrator **execution**
+procedure is only `prompts/orchestrator.md`. `RUNTIME.md` and
 `config/agent-models.env` describe changeable execution routing; no permanent
 prompt may hardcode a provider or model.
+
+## Short-intent assignments
+
+An utterance that names a requirement (for example `Implementar REQ-XXXX.`) is a
+complete Orchestrator assignment. Do not wait for a restated playbook. Execute
+`prompts/orchestrator.md`.
 
 ## Protected architecture
 
@@ -49,7 +56,8 @@ Requirements enter `tasks/backlog/`. The Orchestrator moves a selected
 requirement to `tasks/active/<REQ-ID>/`, creates bounded task contracts there,
 and moves it to `tasks/done/<REQ-ID>/` only after verification, independent
 review, and its declared human gate. Non-committed ideas stay in `tasks/future/`.
-See `docs/REQUIREMENTS.md` and `tasks/TASK_CONTRACT_TEMPLATE.md`.
+See `docs/REQUIREMENTS.md` and `tasks/TASK_CONTRACT_TEMPLATE.md`. Locate state
+with `scripts/requirement-status` before acting.
 
 Before editing, state milestone/requirement, exact owned paths, acceptance
 criteria, verification commands, and planned author/reviewer. One implementation
