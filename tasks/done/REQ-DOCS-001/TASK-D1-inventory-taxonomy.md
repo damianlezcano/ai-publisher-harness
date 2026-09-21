@@ -2,7 +2,7 @@
 
 - Requirement: `REQ-DOCS-001`
 - Base SHA: `5664e4495891c495ef9e5b3f40bd7b828c40e312`
-- Status: `IN_REVIEW`
+- Status: `DONE`
 - Human gate: `TARGETED_HUMAN`
 - Author / reviewer: Orchestrator fallback author in worktree `docs-d1-inventory` path (Worker `low`/`opencode` launch failed: `DELEGATION_UNAVAILABLE` / `agent-launch` exit 12, `check-session-budget` exit 4 on this Cursor session) / independent Reviewer `review`/`opencode` (must not be this Orchestrator)
 - Author worktree: `../ai-publisher-req-docs-001-d1` on branch `req-docs-001/d1-inventory`

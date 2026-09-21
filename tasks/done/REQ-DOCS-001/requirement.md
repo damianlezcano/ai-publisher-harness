@@ -1,8 +1,8 @@
 # REQ-DOCS-001: Repository documentation taxonomy and entry-point cleanup
 
-- Status: `IN_REVIEW`
+- Status: `DONE`
 - Planning baseline SHA: `5664e44` (`feat(harness): formalize repository workflow and architecture contracts`)
-- Human gate: `TARGETED_HUMAN` — the owner approves the resulting documentation map and entry-point wording before closure.
+- Human gate: `TARGETED_HUMAN` — owner approved the documentation map and entry-point wording on 2026-09-21.
 - Execution roles: strong Orchestrator; cheap, bounded documentation workers; strong independent Reviewer. Concrete routing must follow `RUNTIME.md` and `config/agent-models.env`; this contract names no model.
 - Reviewer requirement: independent from every task author; inspect the exact integrated diff, migration ledger, references report, and real gate output. `PASS` is required before the human gate.
 

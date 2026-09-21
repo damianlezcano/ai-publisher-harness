@@ -6,11 +6,11 @@ EducAI is an implemented desktop application for non-technical users. It keeps
 materials and creations local, lets the user work with AI, preview creations,
 and share a project temporarily through a managed publication session.
 
-The known functional baseline is commit `015d466`
+The known functional/product baseline is commit `015d466`
 (`checkpoint: stabilize conversation knowledge and creation architecture`).
-At the time of this handoff, `main` and `origin/main` point to that commit.
-Treat it as functional and do not redesign product behavior while evolving the
-harness.
+That commit remains the protected functional baseline; it is not current
+`HEAD` of `main` or `origin/main`. Treat product behavior at that baseline as
+functional and do not redesign it while evolving the harness.
 
 M0 through M10 have implementation and verification evidence in this
 repository. M11 (component update and rollback lifecycle) remains a future

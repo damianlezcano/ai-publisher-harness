@@ -24,7 +24,7 @@ _none in executable or current-authority files._ Closed-requirement records list
 
 ## Gate evidence (worktree)
 
-- `git diff --check` — pass
+- `git diff --check` and `git diff --check 0585c4e..HEAD` — pass after removing the extra blank line at EOF in `docs/checkpoints/README.md`
 - `cargo fmt --all -- --check` — pass
 - `./scripts/architecture-verify` — PASS (14 contracts; mapped tests executed)
 - `CI=true ./scripts/verify` — pass (exit 0), after a local `components/` symlink to the integration checkout’s gitignored sidecar blobs (not part of the documentation change)

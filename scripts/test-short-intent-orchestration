@@ -75,9 +75,7 @@ require_missing START_CODEX.txt 'IN_REVIEW'
 require_contains CODEX_HANDOFF.md 'prompts/orchestrator.md'
 require_missing CODEX_HANDOFF.md 'scripts/agent-class-resolve'
 
-# Lifecycle helper remains executable. This requirement must not have closed
-# REQ-DOCS-001 (a later independent selection may already be Active).
+# Lifecycle helper remains executable.
 [[ -x scripts/requirement-status ]]
 done_state=$(./scripts/requirement-status REQ-HARNESS-001 | awk -F': ' '/^STATE: / { print $2 }')
 [[ $done_state == DONE ]]
-[[ ! -d tasks/done/REQ-DOCS-001 ]]

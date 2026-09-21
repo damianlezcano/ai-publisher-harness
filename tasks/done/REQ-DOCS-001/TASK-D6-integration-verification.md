@@ -2,7 +2,7 @@
 
 - Requirement: `REQ-DOCS-001`
 - Base SHA: updated by the Orchestrator to the integrated D1–D5 base
-- Status: `IN_REVIEW`
+- Status: `DONE`
 - Human gate: `TARGETED_HUMAN`
 - Author / reviewer: Orchestrator/integrator on this continuation / independent Reviewer `review`/`opencode` (must not be this Orchestrator)
 
@@ -39,7 +39,7 @@
 
 - Implementation result: merged `origin/main` (`0585c4e`) into the taxonomy branch; resolved path conflicts; gates re-run; independent Reviewer `REWORK` then re-review `PASS` at `d9603b3`.
 - Verification evidence: see `evidence.md`.
-- Reviewer verdict: `PASS` from independent `review`/`opencode` (`req-docs-001-reviewer`, Qwen3.8 Flash) at `d9603b3`. Human gate `TARGETED_HUMAN` still required.
+- Reviewer verdict: `PASS` from independent `review`/`opencode` (`req-docs-001-reviewer`, Qwen3.8 Flash) at `d9603b3`. Human gate `TARGETED_HUMAN` satisfied by owner approval on 2026-09-21.
 - Rework history:
   - 2026-09-21: Reviewer `REWORK` — (1) extra blank line at EOF in `docs/checkpoints/README.md`; (2) document REQ-HARNESS-002/003 old-path literals as historical prose.
   - 2026-09-21: Author `d9603b3`; same-task re-review `PASS`.

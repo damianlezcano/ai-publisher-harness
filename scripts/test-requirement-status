@@ -10,10 +10,10 @@ status_for() {
 
 output=$(status_for REQ-DOCS-001)
 grep -Fxq 'REQ_ID: REQ-DOCS-001' <<<"$output"
-grep -Fxq 'STATE: ACTIVE' <<<"$output"
-grep -Fxq 'PATH: tasks/active/REQ-DOCS-001' <<<"$output"
-grep -Fxq 'EXECUTABLE: yes' <<<"$output"
-grep -Fxq 'ACTION: CONTINUE' <<<"$output"
+grep -Fxq 'STATE: DONE' <<<"$output"
+grep -Fxq 'PATH: tasks/done/REQ-DOCS-001' <<<"$output"
+grep -Fxq 'EXECUTABLE: no' <<<"$output"
+grep -Fxq 'ACTION: REJECT' <<<"$output"
 grep -Fq 'TASK-D1-inventory-taxonomy.md' <<<"$output"
 
 output=$(status_for REQ-HARNESS-002)

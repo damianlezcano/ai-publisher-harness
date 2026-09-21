@@ -2,7 +2,7 @@
 
 - Requirement: `REQ-DOCS-001`
 - Base SHA: `5664e44` (Orchestrator updates to the integrated D1 base when activated)
-- Status: `IN_REVIEW`
+- Status: `DONE`
 - Human gate: `TARGETED_HUMAN`
 - Author / reviewer: Orchestrator fallback in worktree `../ai-publisher-req-docs-001-d1` (`DELEGATION_UNAVAILABLE` on Worker launch) / independent Reviewer `review`/`opencode`
 
