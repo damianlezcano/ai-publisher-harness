@@ -89,4 +89,3 @@ them as live architecture, UX, or security policy.
 | undated | [`Model allocation (sesión anterior cerrada)`](undated-model-allocation-sesi-n-anterior-cerrada.md) |
 | undated | [`Mapa de Task F (contexto histórico — YA EJECUTADO en `6ea0e67`, conservado como contexto)`](undated-mapa-de-task-f-contexto-hist-rico-ya-ejecutado-en-6ea0e67-conservado-como-contex.md) |
 | undated | [`Próximo paso (inmediato)`](undated-pr-ximo-paso-inmediato.md) |
-

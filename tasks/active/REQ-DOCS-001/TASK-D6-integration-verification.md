@@ -39,5 +39,6 @@
 
 - Implementation result: merged `origin/main` (`0585c4e`) into the taxonomy branch; resolved path conflicts in AGENTS, README, START_CODEX, `scripts/verify`, and remaining prompt/script references. Gates re-run after merge. Independent Reviewer launch is the remaining D6 step.
 - Verification evidence: see `evidence.md` (`git diff --check`, `cargo fmt --all -- --check`, `./scripts/architecture-verify`, `CI=true ./scripts/verify` all passed on `4f53811`).
-- Reviewer verdict: pending independent `review`/`opencode`.
-- Rework history: none after this merge.
+- Reviewer verdict: `REWORK` from independent `review`/`opencode` (`req-docs-001-reviewer`, Qwen3.8 Flash) at `c50e189`.
+- Rework history:
+  - 2026-09-21: Reviewer `REWORK` — (1) `git diff --check 0585c4e..HEAD` blank line at EOF in `docs/checkpoints/README.md`; (2) document REQ-HARNESS-002/003 old-path literals as historical prose. Fixes in author worktree; re-review required.
