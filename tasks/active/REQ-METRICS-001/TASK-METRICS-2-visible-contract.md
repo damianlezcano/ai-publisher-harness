@@ -1,7 +1,7 @@
 # TASK-METRICS-2: Contrato visible, binding y regresiones de métricas
 
 - Requirement: `REQ-METRICS-001`
-- Base SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`
+- Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
 - Status: `PLANNED`
 - Human gate: `TARGETED_HUMAN`
 - Author / reviewer: assigned by the Orchestrator on activation / independent reviewer assigned on activation

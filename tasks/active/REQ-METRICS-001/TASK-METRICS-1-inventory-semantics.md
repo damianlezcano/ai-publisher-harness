@@ -1,10 +1,10 @@
 # TASK-METRICS-1: Inventario y contrato semántico de métricas
 
 - Requirement: `REQ-METRICS-001`
-- Base SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`
-- Status: `PLANNED`
+- Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
+- Status: `IMPLEMENTING`
 - Human gate: `NO_HUMAN`
-- Author / reviewer: assigned by the Orchestrator on activation / independent reviewer assigned on activation
+- Author / reviewer: `metrics1-inventory` (Worker, low/opencode, pending launch verification) / `metrics1-review` (independent Reviewer, pending)
 
 ## Scope
 
