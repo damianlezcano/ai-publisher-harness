@@ -1,6 +1,6 @@
 import type {
   ConversationUsageTotals,
-  SessionKnowledgeMetrics,
+  MessageView,
   SessionLogEntry,
   SessionUsage,
   TurnMetrics,
@@ -12,47 +12,14 @@ interface Props {
   logs: SessionLogEntry[];
   durableMetrics: TurnMetrics | null;
   accumulatedUsage: ConversationUsageTotals | null;
-}
-
-function latest<T>(
-  logs: SessionLogEntry[],
-  select: (entry: SessionLogEntry) => T | null | undefined,
-): T | null {
-  for (let index = logs.length - 1; index >= 0; index--) {
-    const value = select(logs[index]);
-    if (value) return value;
-  }
-  return null;
+  /** Persisted conversation messages for durable Knowledge count derivation. */
+  conversationMessages: MessageView[];
 }
 
 function unavailable(value: number | null | undefined, suffix = ""): string {
   return value == null
     ? messages.conversationDetails.metrics.unavailable
     : `${value.toLocaleString("es-AR")}${suffix}`;
-}
-
-function bytes(value: number | null | undefined): string {
-  return unavailable(value, " bytes");
-}
-
-function duration(value: number | null | undefined): string {
-  return unavailable(value, " ms");
-}
-
-const RAG_REDUCTION_MODES: ReadonlySet<string> = new Set(["normal", "exhaustive", "thematic"]);
-
-function knowledgeReductionPercent(knowledge: SessionKnowledgeMetrics | null): number | null {
-  // Context reduction is only meaningful for turns that performed a RAG
-  // retrieval mode. Local inventory, K6 summary, and plain chat turns do not
-  // carry reduction semantics, even when corpus/evidence estimates are present.
-  if (!knowledge || !RAG_REDUCTION_MODES.has(knowledge.retrievalMode ?? "")) {
-    return null;
-  }
-  if (knowledge.contextReductionPct != null) return knowledge.contextReductionPct;
-  const corpus = knowledge.corpusEstTokens;
-  const sent = knowledge.evidenceEstTokens;
-  if (corpus == null || sent == null || corpus <= 0) return null;
-  return Math.min(100, Math.max(0, (1 - sent / corpus) * 100));
 }
 
 function cost(value: number | null | undefined): string {
@@ -78,9 +45,6 @@ function ProviderMetrics({
   heading?: string;
 }) {
   const unavailableText = messages.conversationDetails.metrics.unavailable;
-  // Provider token/cost fields are only truthful when the backend explicitly
-  // identified them as provider telemetry. Local estimates never appear in
-  // this "Uso real" subsection.
   const actual = usage?.source === "provider_actual" ? usage : null;
   return (
     <section
@@ -118,10 +82,6 @@ function ProviderMetrics({
           value={cost(actual?.costUsd)}
         />
         <Metric
-          label={messages.conversationDetails.metrics.turnDuration}
-          value={duration(usage?.turnDurationMs)}
-        />
-        <Metric
           label={messages.conversationDetails.metrics.remoteCalls}
           value={unavailable(usage?.remoteCalls ?? null)}
         />
@@ -135,9 +95,26 @@ function ProviderMetrics({
   );
 }
 
-function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | null }) {
-  const unavailableText = messages.conversationDetails.metrics.unavailable;
-  const reduction = knowledgeReductionPercent(knowledge);
+function KnowledgeSummary({
+  knowledgeResponseCount,
+  materialCount,
+}: {
+  knowledgeResponseCount: number;
+  materialCount: number | null;
+}) {
+  if (knowledgeResponseCount === 0) {
+    return (
+      <section
+        className="conversation-metrics-subsection"
+        aria-label={messages.conversationDetails.metrics.knowledgeOptimization}
+      >
+        <h4>{messages.conversationDetails.metrics.knowledgeOptimization}</h4>
+        <p className="muted">
+          {messages.conversationDetails.metrics.knowledgeNotUsedInConversation}
+        </p>
+      </section>
+    );
+  }
   return (
     <section
       className="conversation-metrics-subsection"
@@ -146,61 +123,20 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
       <h4>{messages.conversationDetails.metrics.knowledgeOptimization}</h4>
       <dl className="conversation-metrics-grid">
         <Metric
-          label={messages.conversationDetails.metrics.materialCount}
-          value={unavailable(knowledge?.materialCount)}
+          label={messages.conversationDetails.metrics.knowledgeLabel}
+          value={messages.conversationDetails.metrics.knowledgeUsedInResponses(
+            knowledgeResponseCount,
+          )}
         />
         <Metric
-          label={messages.conversationDetails.metrics.corpusBytes}
-          value={bytes(knowledge?.corpusBytes)}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.corpusChars}
-          value={unavailable(knowledge?.corpusUtf8Chars, " caracteres")}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.naiveCorpusTokens}
-          value={unavailable(knowledge?.corpusEstTokens, " tokens estimados")}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.candidateCount}
-          value={unavailable(knowledge?.retrievalCandidateCount)}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.selectedEvidenceCount}
-          value={unavailable(knowledge?.selectedEvidenceCount)}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.selectedEvidenceBytes}
-          value={bytes(knowledge?.selectedEvidenceBytes)}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.selectedEvidenceChars}
-          value={unavailable(knowledge?.selectedEvidenceUtf8Chars, " caracteres")}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.evidenceTokens}
-          value={unavailable(knowledge?.evidenceEstTokens, " tokens estimados")}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.contextReduction}
+          label={messages.conversationDetails.metrics.materialsUsedLabel}
           value={
-            reduction == null
-              ? unavailableText
-              : `${reduction.toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`
+            materialCount != null
+              ? messages.conversationDetails.metrics.materialsUsedValue(materialCount)
+              : messages.conversationDetails.metrics.unavailable
           }
         />
-        <Metric
-          label={messages.conversationDetails.metrics.retrievalMode}
-          value={knowledge?.retrievalMode || unavailableText}
-        />
-        {knowledge?.localMode && (
-          <Metric
-            label={messages.conversationDetails.metrics.localMode}
-            value={knowledge.localMode}
-          />
-        )}
       </dl>
-      <p className="muted">{messages.conversationDetails.metrics.estimateNotice}</p>
     </section>
   );
 }
@@ -210,12 +146,8 @@ export default function ConversationMetrics({
   logs,
   durableMetrics,
   accumulatedUsage,
+  conversationMessages,
 }: Props) {
-  // Durable metrics (persisted in project.json) are the authoritative source.
-  // Fall back to session_logs when durable metrics are unavailable
-  // (old projects, in-flight sessions before restart).
-  const usage = durableUsage(durableMetrics, logs, conversationId);
-  const knowledge = durableKnowledge(durableMetrics, logs, conversationId);
   const accumulated = accumulatedUsage
     ? {
         conversationId,
@@ -234,99 +166,60 @@ export default function ConversationMetrics({
       }
     : null;
 
+  // Durable Knowledge count: derive from persisted per-turn metrics on
+  // conversation messages (survives reload). Fall back to session logs.
+  const knowledgeResponseCount =
+    countKnowledgeFromMessages(conversationMessages) ||
+    countKnowledgeFromLogs(logs, conversationId);
+  const materialCount = durableMetrics?.materialCount ?? null;
+
   return (
     <section
       className="provider-section conversation-metrics"
       aria-label={messages.conversationDetails.metrics.heading}
     >
       <h3>{messages.conversationDetails.metrics.heading}</h3>
-      <h4>{messages.conversationDetails.metrics.lastTurn}</h4>
-      <ProviderMetrics usage={usage} />
-      <KnowledgeMetrics knowledge={knowledge} />
       <h4>{messages.conversationDetails.metrics.accumulated}</h4>
       <ProviderMetrics
         usage={accumulated}
         heading={messages.conversationDetails.metrics.accumulatedProvider}
       />
+      <KnowledgeSummary
+        knowledgeResponseCount={knowledgeResponseCount}
+        materialCount={materialCount}
+      />
     </section>
   );
 }
 
-function durableUsage(
-  durable: TurnMetrics | null,
-  logs: SessionLogEntry[],
-  conversationId: string,
-): SessionUsage | null {
-  // `source`/`remoteCalls` can be the only available provider facts (for
-  // example, a completed zero-source K6 turn). It is still the authoritative
-  // durable record and must not be replaced with a stale session-log entry.
-  if (durable && Object.values(durable).some((value) => value != null)) {
-    return {
-      conversationId,
-      turnId: "",
-      provider: durable.provider || "",
-      model: durable.model || "",
-      inputTokens: durable.inputTokens ?? null,
-      outputTokens: durable.outputTokens ?? null,
-      cacheReadTokens: durable.cacheReadTokens ?? null,
-      cacheWriteTokens: durable.cacheWriteTokens ?? null,
-      totalTokens: durable.totalTokens ?? null,
-      costUsd: durable.costUsd ?? null,
-      turnDurationMs: durable.turnDurationMs ?? null,
-      source: durable.source || "unavailable",
-      remoteCalls: durable.remoteCalls ?? null,
-    };
-  }
-  const selected = logs.filter((entry) => entry.usage?.conversationId === conversationId);
-  return latest(selected, (entry) => entry.usage);
+function isKnowledgeTurn(m: TurnMetrics): boolean {
+  return m.retrievalMode != null || m.localMode != null;
 }
 
-function durableKnowledge(
-  durable: TurnMetrics | null,
-  logs: SessionLogEntry[],
-  conversationId: string,
-): SessionKnowledgeMetrics | null {
-  const materialCount = durable?.materialCount;
-  const corpusBytes = durable?.corpusBytes;
-  const corpusUtf8Chars = durable?.corpusUtf8Chars;
-  const corpusEstTokens = durable?.corpusEstTokens;
-  // These four corpus facts are a single measured local snapshot. Do not turn
-  // a malformed/older partial snapshot into invented zeroes; use the existing
-  // compatibility fallback instead.
-  if (
-    durable &&
-    materialCount != null &&
-    corpusBytes != null &&
-    corpusUtf8Chars != null &&
-    corpusEstTokens != null
-  ) {
-    return {
-      conversationId,
-      materialCount,
-      corpusBytes,
-      corpusUtf8Chars,
-      corpusEstTokens,
-      retrievalCandidateCount: durable.retrievalCandidateCount ?? null,
-      selectedEvidenceCount: durable.selectedEvidenceCount ?? null,
-      selectedEvidenceBytes: durable.selectedEvidenceBytes ?? null,
-      selectedEvidenceUtf8Chars: durable.selectedEvidenceUtf8Chars ?? null,
-      evidenceEstTokens: durable.evidenceEstTokens ?? null,
-      contextReductionPct: durable.contextReductionPct ?? null,
-      semanticProviderState: durable.semanticProviderState || "",
-      requestPreparationMs: durable.requestPreparationMs ?? null,
-      retrievalMode: durable.retrievalMode ?? null,
-      eligibleMaterials: durable.eligibleMaterials ?? null,
-      materialsInspected: durable.materialsInspected ?? null,
-      chunksInspected: durable.chunksInspected ?? null,
-      exhaustiveCoverage: durable.exhaustiveCoverage ?? null,
-      lexicalHits: durable.lexicalHits ?? null,
-      semanticHits: durable.semanticHits ?? null,
-      localMode: durable.localMode ?? null,
-    };
+function countKnowledgeFromMessages(messageList: MessageView[]): number {
+  // Build user-turn metrics map (same shape as turnMetricsByAssistantId).
+  const metricsByUserId = new Map<string, TurnMetrics>();
+  for (const msg of messageList) {
+    if (msg.role === "user" && msg.turnMetrics) {
+      metricsByUserId.set(msg.id, msg.turnMetrics);
+    }
   }
-  // A partial durable record is authoritative but incomplete. Never fill it
-  // from a session entry (which might belong to a different/in-flight turn).
-  if (durable && Object.values(durable).some((value) => value != null)) return null;
+  // Only count turns with a successful assistant response linked via turnId.
+  let count = 0;
+  for (const msg of messageList) {
+    if (msg.role !== "assistant") continue;
+    if (msg.status !== "ok") continue;
+    if (!msg.turnId) continue;
+    const userMetrics = metricsByUserId.get(msg.turnId);
+    if (userMetrics && isKnowledgeTurn(userMetrics)) count++;
+  }
+  return count;
+}
+
+function countKnowledgeFromLogs(logs: SessionLogEntry[], conversationId: string): number {
   const selected = logs.filter((entry) => entry.knowledge?.conversationId === conversationId);
-  return latest(selected, (entry) => entry.knowledge);
+  return selected.filter((entry) => {
+    const k = entry.knowledge;
+    return k != null && (k.retrievalMode != null || k.localMode != null);
+  }).length;
 }

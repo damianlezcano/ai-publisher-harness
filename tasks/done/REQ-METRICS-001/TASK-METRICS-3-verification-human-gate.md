@@ -2,7 +2,7 @@
 
 - Requirement: `REQ-METRICS-001`
 - Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
-- Status: `IMPLEMENTING`
+- Status: `PASS`
 - Human gate: `TARGETED_HUMAN`
 - Author / reviewer: `metrics3-evidence` (Worker, low/opencode, pending launch verification) / independent Reviewer pending evidence handoff
 
@@ -36,7 +36,16 @@
 
 ## Handoff
 
-- Implementation result: pending.
-- Verification evidence: pending.
-- Reviewer verdict: pending independent `PASS`.
-- Rework history: none.
+- Implementation result: cross-surface evidence completed with TASK-METRICS-4;
+  no commit or push.
+- Verification evidence: final frontend suite (23 files / 375 tests),
+  typecheck, lint, format check, build, `git diff --check`,
+  `./scripts/architecture-verify` (14 contracts), and
+  `CI=true ./scripts/verify` passed.
+- Reviewer verdict: independent `metrics4-ui-reviewer` returned `PASS` on the
+  final exact diff, including successful-response binding, reload behavior,
+  unavailable telemetry, privacy, and accessibility checks.
+- Human gate: `TARGETED_HUMAN` approved by the human owner on 2026-09-22:
+  language, hierarchy, and interpretation of the turn popup and accumulated
+  conversation details are approved.
+- Rework history: UI responsibility REWORK resolved through TASK-METRICS-4.

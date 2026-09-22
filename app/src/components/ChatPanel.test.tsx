@@ -631,22 +631,6 @@ describe("ChatPanel per-turn metrics", () => {
     expect(screen.queryByText(/Fuentes:/)).not.toBeInTheDocument();
   });
 
-  it("shows grounded sources in the per-turn detail popover", async () => {
-    render(
-      <ChatPanel
-        {...base}
-        messages={[
-          user({ turnMetrics: turn(111, ["file-a.md", "file-b.md"]) }),
-          assistant({ text: "Respuesta fundamentada." }),
-        ]}
-      />,
-    );
-    await userEvent.click(screen.getByRole("button", { name: messages.turnMetrics.infoAria }));
-    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    expect(panel).toHaveTextContent("file-a.md");
-    expect(panel).toHaveTextContent("file-b.md");
-  });
-
   it("binds each assistant response to its own per-turn metrics", () => {
     render(
       <ChatPanel

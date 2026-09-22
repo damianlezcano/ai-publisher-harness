@@ -163,6 +163,7 @@ export default function ConversationDetails({ project, active, onClose, onRefres
         logs={logs}
         durableMetrics={durableMetrics}
         accumulatedUsage={accumulatedUsage}
+        conversationMessages={project.messages}
       />
       <section className="provider-section">
         <h3>{messages.conversationDetails.modelHeading}</h3>

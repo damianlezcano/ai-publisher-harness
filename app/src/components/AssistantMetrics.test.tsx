@@ -55,22 +55,19 @@ function infoButton() {
 }
 
 describe("AssistantMetrics compact line", () => {
-  it("renders a compact line with provider-actual tokens and Knowledge reduction", () => {
+  it("renders a compact line with provider-actual tokens", () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
         inputTokens: 2173,
         outputTokens: 487,
         turnDurationMs: 9900,
-        corpusEstTokens: 893108,
-        evidenceEstTokens: 2696,
-        retrievalMode: "normal",
       }),
     );
-    const segments = screen.getByText(/Knowledge −/);
-    expect(segments.textContent).toContain("2.173");
-    expect(segments.textContent).toContain("487");
-    expect(segments.textContent).toContain("9,9 s");
+    const segments = document.querySelector(".turn-metrics-segments");
+    expect(segments?.textContent).toContain("↑ 2.173");
+    expect(segments?.textContent).toContain("↓ 487");
+    expect(segments?.textContent).toContain("9,9 s");
   });
 
   it("omits input/output tokens when provider usage is not provider-actual", () => {
@@ -80,28 +77,17 @@ describe("AssistantMetrics compact line", () => {
     expect(segments?.textContent).not.toContain("↓");
   });
 
-  it("omits the Knowledge reduction segment for a non-RAG local turn", () => {
-    renderMetrics(metrics({ localMode: "inventory", source: "unavailable" }));
-    expect(document.querySelector(".turn-metrics-segments")?.textContent).not.toContain(
-      "Knowledge",
-    );
-  });
-
   it("does not show provider tokens as a fabricated estimate when absent", () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
         inputTokens: null,
         outputTokens: null,
-        corpusEstTokens: 100,
-        evidenceEstTokens: 10,
-        retrievalMode: "normal",
       }),
     );
     const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
     expect(segments).not.toContain("↑");
     expect(segments).not.toContain("↓");
-    expect(segments).toContain("Knowledge −");
   });
 
   it("never renders a Fuentes block in the assistant metrics line", () => {
@@ -110,45 +96,8 @@ describe("AssistantMetrics compact line", () => {
     );
     expect(container.textContent).not.toContain("Fuentes:");
   });
-});
 
-describe("Knowledge reduction gating", () => {
-  it("R1: omits Knowledge −100% for an inventory/local non-RAG turn with corpus>0 and evidence=0", () => {
-    renderMetrics(
-      metrics({
-        source: "unavailable",
-        localMode: "inventory",
-        retrievalMode: null,
-        corpusEstTokens: 5000,
-        evidenceEstTokens: 0,
-        contextReductionPct: 0,
-      }),
-    );
-    const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
-    expect(segments).not.toContain("Knowledge −100%");
-    expect(segments).not.toContain("Knowledge");
-  });
-
-  it("R1b: popover does not call an inventory turn a context reduction", async () => {
-    renderMetrics(
-      metrics({
-        source: "unavailable",
-        localMode: "inventory",
-        retrievalMode: null,
-        corpusEstTokens: 5000,
-        evidenceEstTokens: 0,
-        contextReductionPct: 0,
-      }),
-    );
-    await userEvent.click(infoButton());
-    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    const percentages = Array.from(panel.querySelectorAll("dd")).filter((dd) =>
-      dd.textContent?.includes("%"),
-    );
-    expect(percentages).toHaveLength(0);
-  });
-
-  it("R2: NormalSemantic with corpus > context shows the correct reduction", () => {
+  it("does not render Knowledge reduction in the compact line", () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
@@ -158,70 +107,27 @@ describe("Knowledge reduction gating", () => {
       }),
     );
     const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
-    expect(segments).toContain("Knowledge −75%");
-  });
-
-  it("R3: K6 selected_batch_aggregate with corpus present shows no reduction", () => {
-    renderMetrics(
-      metrics({
-        source: "provider_actual",
-        retrievalMode: null,
-        localMode: "selected_batch_aggregate",
-        corpusEstTokens: 5000,
-        evidenceEstTokens: 0,
-      }),
-    );
-    const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
     expect(segments).not.toContain("Knowledge");
-  });
-
-  it("R4: zero/None corpus yields no reduction and no divide-by-zero", () => {
-    renderMetrics(
-      metrics({
-        source: "provider_actual",
-        retrievalMode: "normal",
-        corpusEstTokens: 0,
-        evidenceEstTokens: 0,
-      }),
-    );
-    const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
-    expect(segments).not.toContain("Knowledge");
-    expect(segments).not.toContain("NaN");
-  });
-
-  it("R5: prefers the persisted contextReductionPct for a RAG turn", () => {
-    renderMetrics(
-      metrics({
-        source: "provider_actual",
-        retrievalMode: "normal",
-        corpusEstTokens: 1000,
-        evidenceEstTokens: 250,
-        contextReductionPct: 75,
-      }),
-    );
-    const segments = document.querySelector(".turn-metrics-segments")?.textContent ?? "";
-    expect(segments).toContain("Knowledge −75%");
   });
 });
 
 describe("AssistantMetrics popover", () => {
-  it("opens on click and lists the grounded sources for that response", async () => {
+  it("opens on click and shows response details", async () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
         inputTokens: 2173,
         outputTokens: 487,
-        retrievalMode: "normal",
-        selectedEvidenceCount: 8,
-        sourceNames: ["file-a.md", "file-b.md"],
+        provider: "opencode",
+        model: "big-pickle",
       }),
     );
     await userEvent.click(infoButton());
     const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    expect(panel).toHaveTextContent("file-a.md");
-    expect(panel).toHaveTextContent("file-b.md");
     expect(panel).toHaveTextContent("2.173 tokens");
     expect(panel).toHaveTextContent("487 tokens");
+    expect(panel).toHaveTextContent("opencode");
+    expect(panel).toHaveTextContent("big-pickle");
   });
 
   it("opens on keyboard focus", () => {
@@ -313,53 +219,80 @@ describe("AssistantMetrics popover", () => {
     expect(panel).toHaveTextContent(messages.conversationDetails.metrics.unavailable);
   });
 
-  it("treats an omitted sourceNames field as an empty source list", async () => {
-    const m = metrics({ source: "provider_actual" });
-    delete (m as Partial<TurnMetrics>).sourceNames;
-    renderMetrics(m);
-    await userEvent.click(infoButton());
-    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    expect(panel).toHaveTextContent(messages.turnMetrics.sourcesHeading);
-    expect(panel).toHaveTextContent(messages.conversationDetails.metrics.unavailable);
-  });
-
-  it("labels Knowledge reduction as context reduction, never monetary savings", async () => {
+  it("shows Knowledge used when retrievalMode is set", async () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
-        costUsd: 0.012,
-        corpusEstTokens: 893108,
-        evidenceEstTokens: 2696,
         retrievalMode: "normal",
       }),
     );
-    const line = document.querySelector(".turn-metrics-segments");
-    expect(line?.textContent).toContain("Knowledge −");
-    expect(line?.textContent).not.toMatch(/\$/);
     await userEvent.click(infoButton());
     const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    expect(panel).toHaveTextContent(messages.turnMetrics.contextReduction);
-    // The reduction value is a percentage, not a currency amount.
-    const reductionValue = Array.from(panel.querySelectorAll("dd")).find((dd) =>
-      dd.textContent?.includes("%"),
-    );
-    expect(reductionValue?.textContent).not.toMatch(/\$|USD/);
+    expect(panel).toHaveTextContent(messages.turnMetrics.knowledgeUsed);
+    expect(panel).not.toHaveTextContent(messages.turnMetrics.knowledgeNotUsed);
   });
 
-  it("shows the retrieval mode truthfully and never mislabels a K6 turn as normal", async () => {
+  it("shows Knowledge used when localMode is set", async () => {
     renderMetrics(
       metrics({
         source: "provider_actual",
-        remoteCalls: 5,
-        localMode: "selected_batch_aggregate",
-        retrievalMode: null,
+        localMode: "inventory",
       }),
     );
     await userEvent.click(infoButton());
     const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
-    expect(panel).toHaveTextContent("selected_batch_aggregate");
-    // No retrieval mode "normal" is claimed for a K6 summary turn.
-    expect(panel).not.toHaveTextContent("normal");
+    expect(panel).toHaveTextContent(messages.turnMetrics.knowledgeUsed);
+  });
+
+  it("shows Knowledge not used when no retrievalMode or localMode", async () => {
+    renderMetrics(
+      metrics({
+        source: "provider_actual",
+        retrievalMode: null,
+        localMode: null,
+      }),
+    );
+    await userEvent.click(infoButton());
+    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
+    expect(panel).toHaveTextContent(messages.turnMetrics.knowledgeNotUsed);
+    expect(panel).not.toHaveTextContent(messages.turnMetrics.knowledgeUsed);
+  });
+
+  it("does not show retrieval mode, candidates, evidence, or corpus in the popover", async () => {
+    renderMetrics(
+      metrics({
+        source: "provider_actual",
+        retrievalMode: "exhaustive",
+        retrievalCandidateCount: 10,
+        selectedEvidenceCount: 5,
+        selectedEvidenceBytes: 1000,
+        selectedEvidenceUtf8Chars: 900,
+        corpusEstTokens: 50000,
+        evidenceEstTokens: 2000,
+        contextReductionPct: 96,
+      }),
+    );
+    await userEvent.click(infoButton());
+    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
+    expect(panel).not.toHaveTextContent("Modo de recuperación");
+    expect(panel).not.toHaveTextContent("Candidatos de recuperación");
+    expect(panel).not.toHaveTextContent("Evidencias seleccionadas");
+    expect(panel).not.toHaveTextContent("Corpus estimado");
+    expect(panel).not.toHaveTextContent("Reducción estimada de contexto");
+  });
+
+  it("does not show materialCount in the popup even when present in turn metrics", async () => {
+    renderMetrics(
+      metrics({
+        source: "provider_actual",
+        materialCount: 5,
+        retrievalMode: "normal",
+      }),
+    );
+    await userEvent.click(infoButton());
+    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
+    expect(panel).not.toHaveTextContent("Materiales del proyecto");
+    expect(panel).toHaveTextContent(messages.turnMetrics.knowledgeUsed);
   });
 
   it("does not render inventory or internal-only Knowledge fields", async () => {
@@ -390,7 +323,7 @@ describe("AssistantMetrics popover", () => {
   });
 
   it("P2: stays open when the user clicks inside the panel", async () => {
-    renderMetrics(metrics({ source: "provider_actual", sourceNames: ["file-a.md"] }));
+    renderMetrics(metrics({ source: "provider_actual" }));
     await userEvent.click(infoButton());
     const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
     await userEvent.click(panel);
@@ -420,7 +353,7 @@ describe("AssistantMetrics popover", () => {
   });
 
   it("P5: stays open during text selection inside the panel", async () => {
-    renderMetrics(metrics({ source: "provider_actual", sourceNames: ["file-a.md"] }));
+    renderMetrics(metrics({ source: "provider_actual" }));
     await userEvent.click(infoButton());
     const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
     fireEvent.mouseDown(panel);

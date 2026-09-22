@@ -148,14 +148,6 @@ function compactSegments(metrics: TurnMetrics, createdAt: string): string[] {
     if (metrics.inputTokens != null) parts.push(`↑ ${formatTokens(metrics.inputTokens)}`);
     if (metrics.outputTokens != null) parts.push(`↓ ${formatTokens(metrics.outputTokens)}`);
   }
-  const reduction = contextReductionPercent(metrics);
-  if (reduction != null) {
-    parts.push(
-      messages.turnMetrics.knowledgeReduction(
-        reduction.toLocaleString("es-AR", { maximumFractionDigits: 1 }) + "%",
-      ),
-    );
-  }
   return parts;
 }
 
@@ -170,25 +162,6 @@ function formatDuration(ms: number): string {
   }
   return formatElapsed(ms);
 }
-
-function contextReductionPercent(metrics: TurnMetrics): number | null {
-  // Knowledge reduction is only meaningful for turns that actually performed a
-  // RAG retrieval mode. Inventory, local deterministic, K6 summary, and plain
-  // chat turns never carry context-reduction semantics even when a corpus
-  // estimate and a zero evidence estimate are present (e.g. `corpus > 0` with
-  // `evidence == 0` on an inventory turn must never read as "Knowledge −100%").
-  const mode = metrics.retrievalMode;
-  if (mode == null || !RAG_REDUCTION_MODES.has(mode)) return null;
-  // Prefer the backend-persisted reduction when present, keeping the meaning
-  // consistent with the durable metric rather than substituting a new one.
-  if (metrics.contextReductionPct != null) return metrics.contextReductionPct;
-  const corpus = metrics.corpusEstTokens;
-  const sent = metrics.evidenceEstTokens;
-  if (corpus == null || sent == null || corpus <= 0) return null;
-  return Math.min(100, Math.max(0, (1 - sent / corpus) * 100));
-}
-
-const RAG_REDUCTION_MODES: ReadonlySet<string> = new Set(["normal", "exhaustive", "thematic"]);
 
 function Detail({ label, value }: { label: string; value: string }) {
   return (
@@ -212,16 +185,14 @@ function TurnDetails({
 }) {
   const cdm = messages.conversationDetails.metrics;
   const actual = m.source === "provider_actual";
-  const sourceNames = m.sourceNames ?? [];
   const cost =
     actual && m.costUsd != null
       ? `USD ${m.costUsd.toLocaleString("en-US", { maximumFractionDigits: 6 })}`
       : UNAVAILABLE;
-  const reduction = contextReductionPercent(m);
-  const reductionValue =
-    reduction == null
-      ? UNAVAILABLE
-      : `${reduction.toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`;
+  const knowledgeUsed = isKnowledgeUsed(m);
+  const knowledgeLabel = knowledgeUsed
+    ? messages.turnMetrics.knowledgeUsed
+    : messages.turnMetrics.knowledgeNotUsed;
 
   return (
     <>
@@ -266,49 +237,15 @@ function TurnDetails({
       >
         <h4>{messages.turnMetrics.knowledgeHeading}</h4>
         <dl className="turn-metrics-grid">
-          <Detail label={cdm.materialCount} value={unavailable(m.materialCount ?? null)} />
-          <Detail label={cdm.retrievalMode} value={m.retrievalMode || UNAVAILABLE} />
-          {m.localMode && <Detail label={cdm.localMode} value={m.localMode} />}
-          <Detail
-            label={cdm.candidateCount}
-            value={unavailable(m.retrievalCandidateCount ?? null)}
-          />
-          <Detail
-            label={cdm.selectedEvidenceCount}
-            value={unavailable(m.selectedEvidenceCount ?? null)}
-          />
-          <Detail
-            label={cdm.selectedEvidenceBytes}
-            value={unavailable(m.selectedEvidenceBytes, " bytes")}
-          />
-          <Detail
-            label={cdm.selectedEvidenceChars}
-            value={unavailable(m.selectedEvidenceUtf8Chars, " caracteres")}
-          />
-          <Detail
-            label={cdm.naiveCorpusTokens}
-            value={unavailable(m.corpusEstTokens, " tokens estimados")}
-          />
-          <Detail
-            label={messages.turnMetrics.contextSentEstimated}
-            value={unavailable(m.evidenceEstTokens, " tokens estimados")}
-          />
-          <Detail label={messages.turnMetrics.contextReduction} value={reductionValue} />
+          <Detail label={messages.turnMetrics.knowledgeHeading} value={knowledgeLabel} />
         </dl>
-        <p className="turn-metrics-notice">{cdm.estimateNotice}</p>
-      </section>
-      <section className="turn-metrics-subsection" aria-label={messages.turnMetrics.sourcesHeading}>
-        <h4>{messages.turnMetrics.sourcesHeading}</h4>
-        {sourceNames.length === 0 ? (
-          <p className="turn-metrics-notice">{UNAVAILABLE}</p>
-        ) : (
-          <ul className="turn-metrics-sources">
-            {sourceNames.map((name) => (
-              <li key={name}>{name}</li>
-            ))}
-          </ul>
-        )}
       </section>
     </>
   );
+}
+
+function isKnowledgeUsed(m: TurnMetrics): boolean {
+  if (m.retrievalMode != null) return true;
+  if (m.localMode != null) return true;
+  return false;
 }

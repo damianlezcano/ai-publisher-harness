@@ -159,6 +159,15 @@ export const messages = {
       localMode: "Modo local",
       estimateNotice:
         "Estas son estimaciones locales de contexto de Knowledge, no tokens facturados ni un ahorro exacto.",
+      knowledgeLabel: "Knowledge",
+      knowledgeUsedInResponses(count: number): string {
+        return count === 1 ? "Usado en 1 respuesta" : `Usado en ${count} respuestas`;
+      },
+      materialsUsedLabel: "Materiales utilizados",
+      materialsUsedValue(count: number): string {
+        return `${count}`;
+      },
+      knowledgeNotUsedInConversation: "No usado en esta conversación",
     },
   },
 
@@ -259,6 +268,8 @@ export const messages = {
     responseHeading: "Respuesta",
     dateTime: "Fecha y hora",
     knowledgeHeading: "Knowledge",
+    knowledgeUsed: "Knowledge usado",
+    knowledgeNotUsed: "Knowledge no usado",
     contextSentEstimated: "Contexto enviado (estimado)",
     contextReduction: "Reducción de contexto",
     sourcesHeading: "Fuentes utilizadas",
