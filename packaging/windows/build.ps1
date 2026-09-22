@@ -6,24 +6,35 @@ $sidecars = Join-Path $root 'sidecars'
 New-Item -ItemType Directory -Force -Path $sidecars | Out-Null
 
 foreach ($component in $manifest.components | Where-Object { $_.platform -eq 'windows-x86_64' }) {
-  # Knowledge's DLL payload is pinned in the shared component manifest, but
-  # Windows K2 installer placement/DLL-resolution validation is deliberately
-  # a future native Windows gate. Do not mistake this Fedora/Linux pass for it.
-  if ($component.name -eq 'onnxruntime') { continue }
   $ext = if ($component.format -eq 'zip') { 'zip' } else { 'download' }
   $download = Join-Path $env:TEMP ("educai-" + $component.name + "." + $ext)
   Invoke-WebRequest -Uri $component.source -OutFile $download
   $actual = (Get-FileHash -Algorithm SHA256 $download).Hash.ToLowerInvariant()
   if ($actual -ne $component.sha256) { Remove-Item -Force $download; throw "checksum mismatch for $($component.name)" }
-  $destination = Join-Path $sidecars ("$($component.bundleName)-$triple.exe")
-  if ($component.format -eq 'zip') {
+  if ($null -ne $component.payloads) {
     $extract = Join-Path $env:TEMP ("educai-" + [guid]::NewGuid())
     Expand-Archive -Path $download -DestinationPath $extract -Force
-    $candidate = Get-ChildItem -Path $extract -Recurse -Filter "$($component.name).exe" | Select-Object -First 1
-    if ($null -eq $candidate) { throw "missing $($component.name).exe in archive" }
-    Copy-Item $candidate.FullName $destination -Force
+    foreach ($payload in $component.payloads) {
+      $candidate = Join-Path (Join-Path $extract $component.archiveRoot) $payload.archivePath
+      if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "missing $($payload.archivePath) in $($component.name) archive" }
+      $item = Get-Item -LiteralPath $candidate
+      if ($item.Length -ne $payload.bytes) { throw "size mismatch for $($payload.installPath)" }
+      $payloadHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate).Hash.ToLowerInvariant()
+      if ($payloadHash -ne $payload.sha256) { throw "checksum mismatch for $($payload.installPath)" }
+      Copy-Item -LiteralPath $candidate -Destination (Join-Path $sidecars $payload.installPath) -Force
+    }
     Remove-Item -Recurse -Force $extract
-  } else { Copy-Item $download $destination -Force }
+  } else {
+    $destination = Join-Path $sidecars ("$($component.bundleName)-$triple.exe")
+    if ($component.format -eq 'zip') {
+      $extract = Join-Path $env:TEMP ("educai-" + [guid]::NewGuid())
+      Expand-Archive -Path $download -DestinationPath $extract -Force
+      $candidate = Get-ChildItem -Path $extract -Recurse -Filter "$($component.name).exe" | Select-Object -First 1
+      if ($null -eq $candidate) { throw "missing $($component.name).exe in archive" }
+      Copy-Item $candidate.FullName $destination -Force
+      Remove-Item -Recurse -Force $extract
+    } else { Copy-Item $download $destination -Force }
+  }
   Remove-Item -Force $download
 }
 

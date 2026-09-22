@@ -1,7 +1,7 @@
 # REQ-WIN-001: Compilación, empaquetado y validación integral nativa en Windows
 
-- Status: `BACKLOG` — siguiente requirement, a ejecutar después de
-  `REQ-METRICS-001`.
+- Status: `ACTIVE` — all Windows gates are PASS; supported-Linux verification
+  and the Python-enabled distribution-contract gate remain before closure.
 - Planning baseline SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`.
 - Human gate: `RELEASE_HUMAN` — required on a real Windows 11 x64 PC, with
   machine and artifact evidence recorded before closure.

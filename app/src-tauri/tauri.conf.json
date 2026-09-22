@@ -36,6 +36,10 @@
       "../../sidecars/opencode",
       "../../sidecars/cloudflared"
     ],
+    "resources": {
+      "../../sidecars/onnxruntime.dll": "onnxruntime.dll",
+      "../../sidecars/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll"
+    },
     "category": "Education",
     "shortDescription": "Asistente educativo con IA para crear y compartir materiales.",
     "icon": [

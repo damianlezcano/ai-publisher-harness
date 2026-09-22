@@ -32,6 +32,16 @@ if [(s["installPath"], s["target"]) for s in linux_ort["symlinks"]] != [("libonn
 tauri = json.loads(Path("app/src-tauri/tauri.conf.json").read_text())
 if "nsis" not in tauri["bundle"]["targets"]:
     raise SystemExit("Tauri NSIS target is missing")
+windows_ort = next(c for c in components if c["platform"] == "windows-x86_64" and c["name"] == "onnxruntime")
+if {p["installPath"] for p in windows_ort["payloads"]} != {"onnxruntime.dll", "onnxruntime_providers_shared.dll"}:
+    raise SystemExit("Windows ONNX Runtime payload selection is incorrect")
+if windows_ort.get("archiveRoot") != "onnxruntime-win-x64-1.22.0":
+    raise SystemExit("Windows ONNX Runtime archive root is incorrect")
+if tauri["bundle"].get("resources") != {
+    "../../sidecars/onnxruntime.dll": "onnxruntime.dll",
+    "../../sidecars/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+}:
+    raise SystemExit("Windows ONNX Runtime files must be bundled beside educai.exe")
 frontend = json.loads(Path("app/package.json").read_text())
 if frontend.get("packageManager") != "pnpm@11.24.0":
     raise SystemExit("frontend must pin the controlled pnpm version")
@@ -113,6 +123,11 @@ rg -Fq 'linuxdeploy-$arch.AppImage' scripts/prepare-packaging-tools || fail 'pac
 rg -Fq 'AppRun-$arch' scripts/prepare-packaging-tools || fail 'packaging-tools preparation must pin AppRun'
 rg -Fq 'scripts/prepare-packaging-tools' scripts/verify || fail 'verify must syntax-check scripts/prepare-packaging-tools'
 rg -Fq 'x86_64-pc-windows-msvc' packaging/windows/build.ps1 || fail 'Windows MSVC sidecar contract missing'
+if rg -Fq "if (\$component.name -eq 'onnxruntime') { continue }" packaging/windows/build.ps1; then
+  fail 'Windows build must not skip the pinned ONNX Runtime payload'
+fi
 rg -Fq '("educai-" + $component.name + "." + $ext)' packaging/windows/build.ps1 || fail 'Windows ZIP sidecars must keep the .zip suffix on the temp path (PowerShell 5.1 Expand-Archive requires it)'
 rg -Fq 'Expand-Archive -Path $download' packaging/windows/build.ps1 || fail 'Windows ZIP extraction must consume the checksum-verified download path'
+rg -Fq 'size mismatch for $($payload.installPath)' packaging/windows/build.ps1 || fail 'Windows build must validate extracted ONNX Runtime payload sizes'
+rg -Fq 'checksum mismatch for $($payload.installPath)' packaging/windows/build.ps1 || fail 'Windows build must validate extracted ONNX Runtime payload checksums'
 echo 'test-distribution-contracts: PASS'
