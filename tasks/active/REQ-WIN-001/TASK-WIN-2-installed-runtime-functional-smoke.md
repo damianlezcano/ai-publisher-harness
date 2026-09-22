@@ -1,10 +1,10 @@
 # TASK-WIN-2: Smoke funcional del instalador Windows y persistencia
 
 - Requirement: `REQ-WIN-001`
-- Base SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`
+- Base SHA: `4eafcd7fdb90eed6d7ab44219189e80d82a4abe9`
 - Status: `PLANNED`
 - Human gate: `TARGETED_HUMAN`
-- Author / reviewer: assigned by the Orchestrator on activation / independent reviewer assigned on activation
+- Author / reviewer: assigned after TASK-WIN-1 / independent reviewer assigned before review
 
 ## Scope
 

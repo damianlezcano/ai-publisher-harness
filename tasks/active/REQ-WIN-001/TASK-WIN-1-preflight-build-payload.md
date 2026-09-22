@@ -1,10 +1,10 @@
 # TASK-WIN-1: Preflight Windows, build nativo e inventario de payload
 
 - Requirement: `REQ-WIN-001`
-- Base SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`
-- Status: `PLANNED`
+- Base SHA: `4eafcd7fdb90eed6d7ab44219189e80d82a4abe9`
+- Status: `IMPLEMENTING`
 - Human gate: `TARGETED_HUMAN`
-- Author / reviewer: assigned by the Orchestrator on activation / independent reviewer assigned on activation
+- Author / reviewer: `win1-author` / `win1-reviewer` (independent)
 
 ## Scope
 
