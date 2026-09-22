@@ -39,6 +39,22 @@ function duration(value: number | null | undefined): string {
   return unavailable(value, " ms");
 }
 
+const RAG_REDUCTION_MODES: ReadonlySet<string> = new Set(["normal", "exhaustive", "thematic"]);
+
+function knowledgeReductionPercent(knowledge: SessionKnowledgeMetrics | null): number | null {
+  // Context reduction is only meaningful for turns that performed a RAG
+  // retrieval mode. Local inventory, K6 summary, and plain chat turns do not
+  // carry reduction semantics, even when corpus/evidence estimates are present.
+  if (!knowledge || !RAG_REDUCTION_MODES.has(knowledge.retrievalMode ?? "")) {
+    return null;
+  }
+  if (knowledge.contextReductionPct != null) return knowledge.contextReductionPct;
+  const corpus = knowledge.corpusEstTokens;
+  const sent = knowledge.evidenceEstTokens;
+  if (corpus == null || sent == null || corpus <= 0) return null;
+  return Math.min(100, Math.max(0, (1 - sent / corpus) * 100));
+}
+
 function cost(value: number | null | undefined): string {
   return value == null
     ? messages.conversationDetails.metrics.unavailable
@@ -121,6 +137,7 @@ function ProviderMetrics({
 
 function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | null }) {
   const unavailableText = messages.conversationDetails.metrics.unavailable;
+  const reduction = knowledgeReductionPercent(knowledge);
   return (
     <section
       className="conversation-metrics-subsection"
@@ -166,15 +183,11 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
         />
         <Metric
           label={messages.conversationDetails.metrics.contextReduction}
-          value={unavailable(knowledge?.contextReductionPct, " %")}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.semanticState}
-          value={knowledge?.semanticProviderState || unavailableText}
-        />
-        <Metric
-          label={messages.conversationDetails.metrics.preparationDuration}
-          value={duration(knowledge?.requestPreparationMs)}
+          value={
+            reduction == null
+              ? unavailableText
+              : `${reduction.toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`
+          }
         />
         <Metric
           label={messages.conversationDetails.metrics.retrievalMode}
@@ -185,58 +198,6 @@ function KnowledgeMetrics({ knowledge }: { knowledge: SessionKnowledgeMetrics | 
             label={messages.conversationDetails.metrics.localMode}
             value={knowledge.localMode}
           />
-        )}
-        <Metric
-          label={messages.conversationDetails.metrics.exhaustiveCoverage}
-          value={knowledge?.exhaustiveCoverage || unavailableText}
-        />
-        {knowledge?.retrievalMode === "exhaustive" && (
-          <>
-            <Metric
-              label={messages.conversationDetails.metrics.eligibleMaterials}
-              value={unavailable(knowledge.eligibleMaterials ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.materialsInspected}
-              value={unavailable(knowledge.materialsInspected ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.chunksInspected}
-              value={unavailable(knowledge.chunksInspected ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.lexicalHits}
-              value={unavailable(knowledge.lexicalHits ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.semanticHits}
-              value={unavailable(knowledge.semanticHits ?? null)}
-            />
-          </>
-        )}
-        {knowledge?.retrievalMode === "thematic" && (
-          <>
-            <Metric
-              label={messages.conversationDetails.metrics.eligibleMaterials}
-              value={unavailable(knowledge.eligibleMaterials ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.thematicContributingSources}
-              value={unavailable(knowledge.materialsInspected ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.thematicCandidates}
-              value={unavailable(knowledge.retrievalCandidateCount ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.selectedEvidenceCount}
-              value={unavailable(knowledge.selectedEvidenceCount ?? null)}
-            />
-            <Metric
-              label={messages.conversationDetails.metrics.evidenceTokens}
-              value={unavailable(knowledge.evidenceEstTokens ?? null)}
-            />
-          </>
         )}
       </dl>
       <p className="muted">{messages.conversationDetails.metrics.estimateNotice}</p>

@@ -362,6 +362,33 @@ describe("AssistantMetrics popover", () => {
     expect(panel).not.toHaveTextContent("normal");
   });
 
+  it("does not render inventory or internal-only Knowledge fields", async () => {
+    renderMetrics(
+      metrics({
+        source: "provider_actual",
+        retrievalMode: "exhaustive",
+        semanticProviderState: "available",
+        requestPreparationMs: 42,
+        exhaustiveCoverage: "complete",
+        eligibleMaterials: 10,
+        materialsInspected: 10,
+        chunksInspected: 40,
+        lexicalHits: 3,
+        semanticHits: 1,
+      }),
+    );
+    await userEvent.click(infoButton());
+    const panel = screen.getByRole("region", { name: messages.turnMetrics.detailsLabel });
+    expect(panel).not.toHaveTextContent("Estado del proveedor semántico");
+    expect(panel).not.toHaveTextContent("Preparación de la solicitud");
+    expect(panel).not.toHaveTextContent("Cobertura exhaustiva");
+    expect(panel).not.toHaveTextContent("Materiales elegibles");
+    expect(panel).not.toHaveTextContent("Materiales inspeccionados");
+    expect(panel).not.toHaveTextContent("Fragmentos inspeccionados");
+    expect(panel).not.toHaveTextContent("Coincidencias léxicas");
+    expect(panel).not.toHaveTextContent("Coincidencias semánticas");
+  });
+
   it("P2: stays open when the user clicks inside the panel", async () => {
     renderMetrics(metrics({ source: "provider_actual", sourceNames: ["file-a.md"] }));
     await userEvent.click(infoButton());

@@ -164,13 +164,7 @@ describe("ConversationDetails metrics", () => {
           selectedEvidenceCount: 14,
           evidenceEstTokens: 2172,
           contextReductionPct: 91,
-          semanticProviderState: "not_requested",
-          requestPreparationMs: 9,
           retrievalMode: "thematic",
-          exhaustiveCoverage: "not_requested",
-          eligibleMaterials: 15,
-          materialsInspected: 14,
-          chunksInspected: 57,
         });
       if (command === "session_logs") return Promise.resolve([]);
       return Promise.resolve(undefined);
@@ -184,11 +178,14 @@ describe("ConversationDetails metrics", () => {
       />,
     );
     expect(await screen.findByText("thematic")).toBeVisible();
-    expect(screen.getByText("Materiales que aportan temas")).toBeVisible();
-    expect(screen.getAllByText("14").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Candidatos de temas recurrentes")).toBeVisible();
-    expect(screen.getAllByText("54").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("2.172")).toBeVisible();
+    expect(screen.getByText("166.666 tokens estimados")).toBeVisible();
+    expect(screen.getByText("2.172 tokens estimados")).toBeVisible();
+    expect(screen.getByText("91 %")).toBeVisible();
+    // Internal-only metrics from the inventory must not leak into the default
+    // user-facing surface, even for specialized retrieval modes.
+    expect(screen.queryByText("Materiales que aportan temas")).not.toBeInTheDocument();
+    expect(screen.queryByText("Candidatos de temas recurrentes")).not.toBeInTheDocument();
+    expect(screen.queryByText("Materiales elegibles")).not.toBeInTheDocument();
   });
 
   it("preserves name, model, resource rows, folder actions, and close behavior", async () => {
@@ -352,6 +349,82 @@ describe("ConversationDetails metrics", () => {
     );
     expect(screen.queryByText("0 tokens")).not.toBeInTheDocument();
     expect(screen.queryByText("31 tokens")).not.toBeInTheDocument();
+  });
+
+  it("omits internal-only Knowledge fields from the default detail surface", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "session_logs")
+        return Promise.resolve([
+          { level: "INFO", message: "structural", usage: providerUsage },
+          {
+            level: "INFO",
+            message: "structural",
+            knowledge: {
+              ...knowledge,
+              semanticProviderState: "available",
+              requestPreparationMs: 12,
+              exhaustiveCoverage: "complete",
+              eligibleMaterials: 20,
+              materialsInspected: 19,
+              chunksInspected: 80,
+              lexicalHits: 5,
+              semanticHits: 2,
+            },
+          },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    await screen.findByRole("heading", { name: /Optimización Knowledge/ });
+    expect(screen.queryByText("Estado del proveedor semántico")).not.toBeInTheDocument();
+    expect(screen.queryByText("Preparación de la solicitud")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cobertura exhaustiva")).not.toBeInTheDocument();
+    expect(screen.queryByText("Materiales elegibles")).not.toBeInTheDocument();
+    expect(screen.queryByText("Materiales inspeccionados")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fragmentos inspeccionados")).not.toBeInTheDocument();
+    expect(screen.queryByText("Coincidencias léxicas")).not.toBeInTheDocument();
+    expect(screen.queryByText("Coincidencias semánticas")).not.toBeInTheDocument();
+  });
+
+  it("does not claim a context reduction for non-RAG local turns", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "model_list" || command === "provider_list") return Promise.resolve([]);
+      if (command === "session_logs")
+        return Promise.resolve([
+          {
+            level: "INFO",
+            message: "structural",
+            usage: { ...providerUsage, source: "unavailable", remoteCalls: 0 },
+            knowledge: {
+              ...knowledge,
+              retrievalMode: null,
+              contextReductionPct: 0,
+            },
+          },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    render(
+      <ConversationDetails
+        project={project("a")}
+        active={false}
+        onClose={() => {}}
+        onRefresh={() => {}}
+      />,
+    );
+    await screen.findByRole("heading", { name: /Optimización Knowledge/ });
+    expect(screen.queryByText("0 %")).not.toBeInTheDocument();
+    const reductionLabel = screen.getByText("Reducción estimada de contexto");
+    const reductionValue = reductionLabel.closest("div")?.querySelector("dd");
+    expect(reductionValue).toHaveTextContent("No disponible");
   });
 
   it("uses the selected conversation only when switching detail instances", async () => {

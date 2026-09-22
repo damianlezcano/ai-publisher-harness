@@ -269,7 +269,6 @@ function TurnDetails({
           <Detail label={cdm.materialCount} value={unavailable(m.materialCount ?? null)} />
           <Detail label={cdm.retrievalMode} value={m.retrievalMode || UNAVAILABLE} />
           {m.localMode && <Detail label={cdm.localMode} value={m.localMode} />}
-          <Detail label={cdm.exhaustiveCoverage} value={m.exhaustiveCoverage || UNAVAILABLE} />
           <Detail
             label={cdm.candidateCount}
             value={unavailable(m.retrievalCandidateCount ?? null)}
@@ -295,11 +294,6 @@ function TurnDetails({
             value={unavailable(m.evidenceEstTokens, " tokens estimados")}
           />
           <Detail label={messages.turnMetrics.contextReduction} value={reductionValue} />
-          <Detail label={cdm.semanticState} value={m.semanticProviderState || UNAVAILABLE} />
-          <Detail
-            label={cdm.preparationDuration}
-            value={unavailable(m.requestPreparationMs, " ms")}
-          />
         </dl>
         <p className="turn-metrics-notice">{cdm.estimateNotice}</p>
       </section>
