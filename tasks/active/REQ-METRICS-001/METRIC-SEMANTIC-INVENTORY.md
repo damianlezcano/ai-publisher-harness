@@ -24,9 +24,9 @@ Las métricas se persisten en `project.json` como `turnMetrics` en cada mensaje 
 
 | Campo JSON | Tipo TS | Tipo Rust | Fuente | Unidad | Alcance | Aplicabilidad | Agregación | Indisponibilidad | Disposición | Prueba exacta |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `provider` | `string \| null` | `Option<String>` | Proveedor remoto | — | Turno | Todos los turnos con llamada al proveedor | Último no-nulo en acumulado | `null` → "No disponible" | Visible | `ConversationMetrics.test.tsx:279`, `app_facade.rs:151` |
-| `model` | `string \| null` | `Option<String>` | Proveedor remoto | — | Turno | Todos los turnos con llamada al proveedor | Último no-nulo en acumulado | `null` → "No disponible" | Visible | `ConversationMetrics.test.tsx:279`, `app_facade.rs:151` |
-| `inputTokens` | `number \| null` | `Option<u64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | Tokens | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (solo si `remoteCalls > 0` por turno; `null` si algún turno es `null`) | `null` → "Noponible" | Visible (solo `provider_actual`) | `AssistantMetrics.test.tsx:58`, `runtime_gate.rs:532` |
+| `provider` | `string \| null` | `Option<String>` | Proveedor remoto | — | Turno | Todos los turnos con llamada al proveedor | Último no-nulo en acumulado | `null` → "No disponible" | Visible | `ConversationDetails.test.tsx:279`, `app_facade.rs:151` |
+| `model` | `string \| null` | `Option<String>` | Proveedor remoto | — | Turno | Todos los turnos con llamada al proveedor | Último no-nulo en acumulado | `null` → "No disponible" | Visible | `ConversationDetails.test.tsx:279`, `app_facade.rs:151` |
+| `inputTokens` | `number \| null` | `Option<u64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | Tokens | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (solo si `remoteCalls > 0` por turno; `null` si algún turno es `null`) | `null` → "No disponible" | Visible (solo `provider_actual`) | `AssistantMetrics.test.tsx:58`, `runtime_gate.rs:532` |
 | `outputTokens` | `number \| null` | `Option<u64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | Tokens | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (mismo criterio que `inputTokens`) | `null` → "No disponible" | Visible (solo `provider_actual`) | `AssistantMetrics.test.tsx:58`, `runtime_gate.rs:532` |
 | `cacheReadTokens` | `number \| null` | `Option<u64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | Tokens | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (mismo criterio que `inputTokens`) | `null` → "No disponible" | Visible (solo `provider_actual`) | `runtime_gate.rs:356`, `app_facade.rs:151` |
 | `cacheWriteTokens` | `number \| null` | `Option<u64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | Tokens | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (mismo criterio que `inputTokens`) | `null` → "No disponible" | Visible (solo `provider_actual`) | `runtime_gate.rs:356`, `app_facade.rs:151` |
@@ -34,7 +34,7 @@ Las métricas se persisten en `project.json` como `turnMetrics` en cada mensaje 
 | `costUsd` | `number \| null` | `Option<f64>` | Proveedor remoto (`provider_actual` si `source == "provider_actual"`) | USD | Turno | Solo cuando `source == "provider_actual"` | Suma en acumulado (solo si `remoteCalls > 0` por turno; `null` si algún turno es `null`) | `null` → "No disponible" | Visible (solo `provider_actual`) | `AssistantMetrics.test.tsx:326`, `ConversationDetails.test.tsx:320` |
 | `turnDurationMs` | `number \| null` | `Option<u64>` | Backend (elapsed time del turno lógico) | Milisegundos | Turno | Todos los turnos completados | Suma TOTAL en acumulado (todos los turnos, sin condición `remoteCalls`) | `null` → "No disponible" | Visible | `AssistantMetrics.test.tsx:58`, `ConversationDetails.test.tsx:320` |
 | `remoteCalls` | `number \| null` | `Option<usize>` | Backend (conteo de llamadas ejecutadas) | Conteo | Turno | Todos los turnos | Suma TOTAL en acumulado (todos los turnos) | `null` → "No disponible" | Visible | `inventory.rs:106`, `exhaustive_rag.rs:601` |
-| `source` | `string \| null` | `Option<String>` | Backend (`"provider_actual"`, `"estimated"`, `"unavailable"`, `"local"`) | — | Turno | Todos los turnos | Derivado: `"provider_actual"` si algún turno lo tiene, sino `"unavailable"` | `null` → "No disponible" | Visible (categórico) | `runtime_gate.rs:532`, `ConversationMetrics.test.tsx:279` |
+| `source` | `string \| null` | `Option<String>` | Backend (`"provider_actual"`, `"estimated"`, `"unavailable"`, `"local"`) | — | Turno | Todos los turnos | Derivado: `"provider_actual"` si algún turno lo tiene, sino `"unavailable"` | `null` → "No disponible" | Visible (categórico) | `runtime_gate.rs:532`, `app_facade.rs:145` |
 
 ---
 
@@ -97,7 +97,19 @@ El acumulado se calcula en backend (`accumulated_conversation_usage` en `app.rs`
 | `costUsd` | Suma (f64) | Solo turnos con `remoteCalls > 0`; `null` si algún turno incluido es `null` | `app_facade.rs:151` |
 | `turnDurationMs` | Suma TOTAL | Todos los turnos (sin condición `remoteCalls`) | `app_facade.rs:151` |
 | `remoteCalls` | Suma TOTAL | Todos los turnos | `app_facade.rs:151` |
-| `source` | Derivado | `"provider_actual"` si algún turno lo tiene, sino `"unavailable"` | `ConversationMetrics.test.tsx:279` |
+| `source` | Derivado | `"provider_actual"` si algún turno lo tiene, sino `"unavailable"` | `app_facade.rs:145` (pendiente: no hay test que valide la derivación del source en acumulado) |
+
+### Propagación de `null` en acumulados
+
+Los acumuladores backend (`accumulated_conversation_usage` en `app.rs:773-849`) propagan `null` con las siguientes reglas:
+
+| Acumulador | Regla de propagación `null` |
+|---|---|
+| `sum_provider_u64` (tokens, cost) | Si `remoteCalls == Some(0)` → turno se salta. Si `remoteCalls == Some(n)` y el campo es `Some(v)` → se suma. Si el campo es `None` → el total acumulado se vuelve `None`. Si `remoteCalls == None` → el total acumulado se vuelve `None` |
+| `sum_provider_f64` (costUsd) | Misma lógica que `sum_provider_u64` |
+| `sum_all_u64` (turnDurationMs, remoteCalls) | Suma todos los turnos sin condición. Si algún campo es `None` → el total acumulado se vuelve `None` |
+
+**Consecuencia:** Si un turno tuvo `remoteCalls == Some(0)` (inventario, per-source), sus tokens/cost no se incluyen en el acumulado. Si un turno tuvo `remoteCalls == Some(n)` pero el campo del turno es `None`, el acumulado total se vuelve `None` — no se inventa un cero.
 
 **Excluido intencionalmente:** campos de Knowledge (corpus, evidencia, modo, etc.) — son snapshots por turno, no acumulables.
 
@@ -140,8 +152,8 @@ El acumulado se calcula en backend (`accumulated_conversation_usage` en `app.rs`
 - Timestamp, `turnDurationMs`, `provider`, `model`
 
 ### Visible — popover (sección "Uso real del proveedor")
-- `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`, `remoteCalls`
-- Todos condicionados a `source == "provider_actual"`
+- `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd` — condicionados a `source == "provider_actual"`
+- `remoteCalls` — visible sin condición de source; es conteo de solicitudes ejecutadas del turno lógico, no afirmación de éxito del proveedor. Cero es significativo para local/inventory/K6
 
 ### Visible — popover (sección "Knowledge")
 - `materialCount`, `retrievalMode`, `localMode`, `exhaustiveCoverage`
