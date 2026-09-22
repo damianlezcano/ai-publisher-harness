@@ -40,7 +40,7 @@
 
 ## Handoff
 
-- Implementation result: pending.
-- Verification evidence: pending.
-- Reviewer verdict: pending.
+- Implementation result: `BLOCKED` — no designated real Windows 11 x64 machine is reachable from the Fedora worktree. No product or protected-contract changes were made.
+- Verification evidence: `uname -a` reported `Linux auth.homelab 7.2.5-200.fc44.x86_64`; `git diff --check HEAD` was clean in the isolated author checkout at `a73c7f538e6538b5ee3d43cb06f2fc18ff79b4df`. Repository inspection confirmed Windows component pins for OpenCode, cloudflared, and ONNX Runtime; `packaging/windows/build.ps1` currently skips `onnxruntime`, which remains a native-validation finding rather than an authorized speculative fix.
+- Reviewer verdict: not started; there is no implementation diff to review, and native Windows evidence is unavailable.
 - Rework history: none.
