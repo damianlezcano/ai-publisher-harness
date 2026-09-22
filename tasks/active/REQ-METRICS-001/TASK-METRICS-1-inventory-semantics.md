@@ -2,9 +2,9 @@
 
 - Requirement: `REQ-METRICS-001`
 - Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
-- Status: `IMPLEMENTING`
+- Status: `PASS`
 - Human gate: `NO_HUMAN`
-- Author / reviewer: `metrics1-inventory` (Worker, low/opencode, pending launch verification) / `metrics1-review` (independent Reviewer, pending)
+- Author / reviewer: `metrics1-inventory` (Worker, low/opencode, `opencode-go/mimo-v2.5`) / `metrics1-rereview` (independent Reviewer, `opencode-go/qwen3.8-flash`)
 
 ## Scope
 
@@ -41,7 +41,7 @@
 
 ## Handoff
 
-- Implementation result: pending.
-- Verification evidence: pending.
-- Reviewer verdict: pending.
-- Rework history: none.
+- Implementation result: `METRIC-SEMANTIC-INVENTORY.md` committed in `ceb09ce`, corrected in `f7c0e7a`.
+- Verification evidence: `git diff --check` passed for both author commits; source/test citations were independently checked.
+- Reviewer verdict: `PASS` — `metrics1-rereview`; exact re-review diff `ceb09ce..f7c0e7a`.
+- Rework history: reviewer required correction of an invalid test citation, the `remoteCalls` source gate, spelling, and cumulative-null semantics; author corrected in `f7c0e7a`.
