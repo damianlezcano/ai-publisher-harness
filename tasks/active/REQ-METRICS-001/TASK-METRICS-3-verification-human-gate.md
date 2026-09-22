@@ -2,9 +2,9 @@
 
 - Requirement: `REQ-METRICS-001`
 - Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
-- Status: `PLANNED`
+- Status: `IMPLEMENTING`
 - Human gate: `TARGETED_HUMAN`
-- Author / reviewer: assigned by the Orchestrator on activation / independent reviewer assigned on activation
+- Author / reviewer: `metrics3-evidence` (Worker, low/opencode, pending launch verification) / independent Reviewer pending evidence handoff
 
 ## Scope
 
