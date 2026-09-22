@@ -1,10 +1,10 @@
 # TASK-METRICS-2: Contrato visible, binding y regresiones de métricas
 
 - Requirement: `REQ-METRICS-001`
-- Base SHA: `f3450e1ac0053dd1bd160542354d825085793c7`
-- Status: `IMPLEMENTING`
+- Base SHA: `f3450e1ac0053dd1bd160542354d8250857936c7`
+- Status: `PASS`
 - Human gate: `TARGETED_HUMAN`
-- Author / reviewer: `metrics2-visible` (Worker, high-coding/opencode, pending launch verification) / independent Reviewer pending implementation handoff
+- Author / reviewer: `metrics2-visible` (Worker, high-coding/opencode, `opencode-go/kimi-k2.7-code`) / `metrics2-review` (independent Reviewer, `opencode-go/qwen3.8-flash`)
 
 ## Scope
 
@@ -41,7 +41,7 @@
 
 ## Handoff
 
-- Implementation result: pending.
-- Verification evidence: pending.
-- Reviewer verdict: pending.
+- Implementation result: frontend visible-contract changes integrated as `dd0bb46`.
+- Verification evidence: frontend typecheck/lint/format and 376 tests passed; focused `project-app` tests passed; `./scripts/architecture-verify` passed 14 contracts; `CI=true ./scripts/verify` passed; `git diff --check` clean.
+- Reviewer verdict: `PASS` — `metrics2-review`, reviewing exact diff `516d0f1..dd0bb46`.
 - Rework history: none.
