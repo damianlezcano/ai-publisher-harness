@@ -1,7 +1,8 @@
 # REQ-WIN-001: Compilación, empaquetado y validación integral nativa en Windows
 
-- Status: `ACTIVE` — all Windows gates are PASS; supported-Linux verification
-  and the Python-enabled distribution-contract gate remain before closure.
+- Status: `DONE` — all Windows, supported-Linux, and Python-enabled
+  distribution-contract gates are PASS; final independent closure review is
+  PASS.
 - Planning baseline SHA: `4ba4ad3139cd61ac993dfc6fe7980651b95db165`.
 - Human gate: `RELEASE_HUMAN` — required on a real Windows 11 x64 PC, with
   machine and artifact evidence recorded before closure.
@@ -177,6 +178,19 @@ On the supported Linux development/CI environment: run the repository’s
 applicable formatting, architecture, distribution-contract, and
 `CI=true ./scripts/verify` gates against the integrated source. Do not run the
 Linux Bash/WebKit gate on Windows as if it certified Windows.
+
+## Closure record
+
+- Windows human gates: `PASS`, including the installed ONNX Runtime semantic
+  Knowledge flow and post-restart persistence, as recorded in TASK-WIN-1A,
+  TASK-WIN-2, and TASK-WIN-3.
+- Supported-Linux gates: `./scripts/test-distribution-contracts` — `PASS`;
+  `CI=true ./scripts/verify` — `PASS`.
+- Final independent closure review: `PASS` by an independent frontier Reviewer
+  in a separate read-only checkout. It confirmed AC-013 preservation, all
+  acceptance criteria, and no remaining real blocker. Its observations are
+  non-blocking closure-record hygiene and a future Linux packaging watch item.
+- `RELEASE_HUMAN`: `PASS`.
 
 ## Planned task contracts and sequence
 
